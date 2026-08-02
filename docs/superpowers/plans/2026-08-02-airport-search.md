@@ -550,13 +550,20 @@ def test_an_accented_name_is_reachable_without_the_accent(airports):
 
 
 def test_large_airports_outrank_medium_ones_on_an_equal_match():
+    """The ICAO tiebreak deliberately opposes size here.
+
+    Naming these XBIG and XMED would be a hollow test: alphabetical order
+    agrees with size order, so it passes with size ranking removed
+    entirely. XZZZ-large before XAAA-medium can only be true if _order
+    really does rank on size first.
+    """
     fixture = [
-        Airport("XMED", "", "Springfield Regional", "Springfield", "XX", "US",
+        Airport("XAAA", "", "Springfield Regional", "Springfield", "XX", "US",
                 0.0, 0.0, "medium"),
-        Airport("XBIG", "", "Springfield International", "Springfield", "XX", "US",
+        Airport("XZZZ", "", "Springfield International", "Springfield", "XX", "US",
                 0.0, 0.0, "large"),
     ]
-    assert [a.icao for a in search("springfield", fixture)] == ["XBIG", "XMED"]
+    assert [a.icao for a in search("springfield", fixture)] == ["XZZZ", "XAAA"]
 
 
 def test_no_match_returns_empty(airports):
