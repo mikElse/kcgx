@@ -106,6 +106,18 @@ class SquelchApp(App):
     def _refresh_header(self) -> None:
         left = f" {self._feed_label}  {self._frequency}".rstrip()
         right = f"● {self._state} "
+        if len(right) >= 48:
+            # The state text alone can consume the whole budget or more.
+            # When it does, there is no room left for the label or even the
+            # separator column reserved below, so `content_room` would go to
+            # 0 while `right` itself is still >=48 chars -- the old code
+            # then emitted `" " + right`, 49+ cells. Truncate `right` itself
+            # to the full width and stop; this is unreachable with today's
+            # only two state strings ("LIVE", "RECONNECTING") but the
+            # 48-cell invariant must hold for any state string structurally,
+            # not by luck of the two values currently in use.
+            self.query_one("#header", Static).update(right[:48], layout=False)
+            return
         # Hard-truncate rather than pad-and-hope: the 48-column budget is the
         # premise of the layout, and the state text changes width at runtime.
         room = 48 - len(right)
@@ -174,13 +186,22 @@ class SquelchApp(App):
     def mark_pending(self) -> None:
         if self._pending is not None:
             return
-        self._pending = Static("░ transcribing…", classes="block", markup=False)
+        # "block block-text": the same two classes add_block's text widget
+        # gets -- "block" for the margin between entries, "block-text" for
+        # the padding-left that keeps wrapped continuation lines indented
+        # (see add_block's comment). A single-Static message like this one
+        # has no separate stamp widget to carry the indent, so it must carry
+        # both classes itself, or a message long enough to wrap reads
+        # flush-left and ragged instead of matching the blocks around it.
+        self._pending = Static(
+            "░ transcribing…", classes="block block-text", markup=False
+        )
         self.query_one("#transcript", VerticalScroll).mount(self._pending)
 
     def mark_dropped(self) -> None:
         self._clear_pending()
         self.query_one("#transcript", VerticalScroll).mount(
-            Static("⚠ transmission lost", classes="block", markup=False)
+            Static("⚠ transmission lost", classes="block block-text", markup=False)
         )
 
     def _clear_pending(self) -> None:
@@ -229,7 +250,7 @@ class SquelchApp(App):
         outside the 48-column budget.
         """
         self.query_one("#transcript", VerticalScroll).mount(
-            Static(f"⚠ {message}", classes="block", markup=False)
+            Static(f"⚠ {message}", classes="block block-text", markup=False)
         )
 
 
