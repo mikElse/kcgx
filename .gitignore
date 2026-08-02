@@ -4,3 +4,11 @@ __pycache__/
 
 # subagent-driven-development scratch (ledger, briefs, review packages)
 .superpowers/
+
+# Ambience stems: 3.4 MB of binaries that would sit in history forever.
+# The manifest beside them (ambience.json) and ATTRIBUTION.md ARE tracked --
+# they carry the fader positions, the per-channel credits, the licence, and
+# each stem's source URL, which is what makes a checkout without the audio
+# recoverable. Restore them with:
+#     uv run --project . python tools/fetch_ambience.py
+src/squelch/assets/audio/*.mp3

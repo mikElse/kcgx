@@ -11,6 +11,7 @@
   "channels": [
     {
       "file": "1-ticking-clock.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/9/9/4/994dbe4592538b66237e3139a3309878.mp3",
       "name": "Ticking clock",
       "duration_s": 19.383,
       "gain": 0.08,
@@ -21,6 +22,7 @@
     },
     {
       "file": "2-neon-lights-hum.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/e/1/f/e1f9b83f97397826a736df162856a679.mp3",
       "name": "Neon Lights Hum",
       "duration_s": 5.407,
       "gain": 1.0,
@@ -31,6 +33,7 @@
     },
     {
       "file": "3-distant-jet-3.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/5/5/f/55fa2bcd2719d7bd015e9ce51658a0d9.mp3",
       "name": "Distant Jet 3",
       "duration_s": 28.447,
       "gain": 0.24,
@@ -41,6 +44,7 @@
     },
     {
       "file": "4-server-room-computer-lab.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/8/5/5/8550ce3f31ef5d4a811b17e21d84f69b.mp3",
       "name": "Server Room \\ Computer Lab",
       "duration_s": 45.087,
       "gain": 1.0,
@@ -51,6 +55,7 @@
     },
     {
       "file": "5-water-pump-engine.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/3/c/8/3c8a0096908f2ae7c1def3554cc99de6.mp3",
       "name": "water pump engine",
       "duration_s": 3.918,
       "gain": 0.03,
@@ -61,6 +66,7 @@
     },
     {
       "file": "6-huge-slow-metal-fan.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/c/9/2/c92ab7899601bdd88c257e87024e2851.mp3",
       "name": "Huge slow metal fan",
       "duration_s": 56.869,
       "gain": 0.17,
@@ -71,6 +77,7 @@
     },
     {
       "file": "7-distant-jet-2.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/6/c/b/6cb6a2ae08ad13a166a8999792fc0e62.mp3",
       "name": "Distant Jet 2",
       "duration_s": 26.41,
       "gain": 0.55,
@@ -81,6 +88,7 @@
     },
     {
       "file": "8-distant-jet-1.mp3",
+      "url": "https://xml.ambient-mixer.com/audio/2/8/7/2877b3d72c4f9e2cdabf862657db4d8d.mp3",
       "name": "Distant Jet 1",
       "duration_s": 32.078,
       "gain": 0.52,
