@@ -38,7 +38,9 @@ def sessions(n=3, **kwargs):
     out = []
     for i in range(n):
         ident, label = names[i % len(names)]
-        out.append(FakeSession(f"{ident}_{i}" if i >= len(names) else ident, label))
+        if i >= len(names):
+            ident, label = f"{ident}_{i}", f"{label} #{i}"
+        out.append(FakeSession(ident, label))
     if out:
         out[0].muted = kwargs.get("first_muted", False)
     return out
@@ -107,9 +109,10 @@ async def test_layout_fits_48_columns_at_any_feed_count(count):
 
 
 @pytest.mark.asyncio
-async def test_long_names_and_idents_truncate_visibly():
+async def test_long_names_truncate_visibly():
     session = FakeSession(
-        "kpdx3_twr_118700_extra_long", "KPDX Tower (Rwy 10L/28R 118.7 and more)"
+        "kpdx3_twr_118700_extra_long",
+        "KPDX Tower (Rwy 10L/28R 118.7 and quite a lot more)",
     )
     app = SquelchApp(Config(icao="KPDX"), [session])
     async with app.run_test(size=SIZE):
@@ -117,16 +120,6 @@ async def test_long_names_and_idents_truncate_visibly():
         assert overflowing(app) == []
         joined = "\n".join(text)
         assert "…" in joined, "a real cut must be marked, not silently clipped"
-
-
-@pytest.mark.asyncio
-async def test_each_feed_shows_its_ident():
-    """The ident is the string you would pass to --feed."""
-    app = make_app(3)
-    async with app.run_test(size=SIZE):
-        joined = "\n".join(rendered(app)[0])
-        assert "kpdx3_twr" in joined
-        assert "kpdx3_gnd" in joined
 
 
 @pytest.mark.asyncio
@@ -237,7 +230,7 @@ async def test_selection_scrolls_a_feed_past_the_viewport_into_view():
     app = make_app(20)
     async with app.run_test(size=SIZE) as pilot:
         last = app._sessions[-1]
-        assert last.feed.ident not in "\n".join(rendered(app)[0]), (
+        assert last.name not in "\n".join(rendered(app)[0]), (
             "the last feed should start below the fold, or this proves nothing"
         )
         for _ in range(19):
@@ -246,7 +239,7 @@ async def test_selection_scrolls_a_feed_past_the_viewport_into_view():
 
         assert app._selected == 19
         joined = "\n".join(rendered(app)[0])
-        assert last.feed.ident in joined, (
+        assert last.name in joined, (
             "the selection moved to a feed that was never scrolled into view"
         )
         assert overflowing(app) == []

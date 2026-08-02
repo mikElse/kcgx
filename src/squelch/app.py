@@ -24,7 +24,6 @@ from squelch.feeds import Feed
 from squelch.rows import (
     BLOCKS,
     FLOOR_DBFS,
-    IDENT_WIDTH,
     METER_WIDTH,
     NAME_WIDTH,
     ROW_WIDTH,
