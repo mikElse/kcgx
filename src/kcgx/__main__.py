@@ -37,14 +37,37 @@ def format_record(airport: Airport) -> str:
     label = airport.name
     if airport.where:
         label = f"{label}, {airport.where}"
+    # icao/lat/lon are structurally safe; label is the only free-text
+    # field. bin/kcgx splits this record on tabs (IFS=$'\t'), so a stray
+    # tab here -- however unlikely in today's dataset -- would shift
+    # every field after it, feeding a name fragment to a --site-lat flag.
+    # Collapsing all whitespace, not just tabs, keeps the record one line.
+    label = " ".join(label.split())
     return f"{airport.icao}\t{airport.lat}\t{airport.lon}\t{label}"
 
 
-def emit(record: str, out: str | None) -> None:
+def emit(record: str, out: str | None) -> bool:
+    """Write `record`. Returns False instead of raising if `out` can't be
+    written (bad permissions, missing parent) so the caller can report a
+    real error -- never let a write failure surface as a bare traceback or
+    collide with exit 1, which the CLI contract reserves for 'cancelled'."""
     if out is None:
         print(record)
-        return
-    Path(out).write_text(record + "\n")
+        return True
+    try:
+        Path(out).write_text(record + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def _write_record(record: str, out: str | None) -> int:
+    """Emit `record`, returning the exit code for it: 0 on success, or 2
+    (with a stderr message naming the path) if `out` couldn't be written."""
+    if emit(record, out):
+        return 0
+    print(f"kcgx-airport: could not write to {out}", file=sys.stderr)
+    return 2
 
 
 def main(
@@ -66,8 +89,7 @@ def main(
                 file=sys.stderr,
             )
             return 2
-        emit(format_record(airport), args.out)
-        return 0
+        return _write_record(format_record(airport), args.out)
 
     # pick: an exact code is an answer, not a search.
     chosen = find(args.query, airports) if args.query else None
@@ -77,8 +99,7 @@ def main(
         return 1
 
     state_writer(chosen.icao)
-    emit(format_record(chosen), args.out)
-    return 0
+    return _write_record(format_record(chosen), args.out)
 
 
 if __name__ == "__main__":

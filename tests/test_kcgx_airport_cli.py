@@ -63,6 +63,17 @@ def test_a_record_contains_no_tabs_inside_its_label():
     assert format_record(ORD).count("\t") == 3
 
 
+def test_whitespace_in_the_label_cannot_shift_fields():
+    """A literal tab or newline in a future dataset regeneration must not
+    shift lat/lon into a name fragment -- bin/kcgx reads this with
+    IFS=$'\\t' and feeds the lat field straight to `adsb-tui --site-lat`."""
+    weird = Airport("KWEI", "WEI", "Weird\tName\nWith\tWhitespace", "Somewhere",
+                     "OR", "US", 1.0, 2.0, "small")
+    record = format_record(weird)
+    assert record.count("\t") == 3
+    assert len(record.split("\t")) == 4
+
+
 # -- resolve ---------------------------------------------------------------
 
 
@@ -124,6 +135,21 @@ def test_cancelling_the_picker_exits_1_and_writes_nothing(tmp_path):
     out = tmp_path / "record"
     assert run(["pick", "--out", str(out)], picker=lambda a, initial="": None) == 1
     assert not out.exists(), "a cancelled pick must leave no record to act on"
+
+
+def test_an_unwritable_out_exits_2_not_1(tmp_path, capsys):
+    """A write failure must report as an error (2), never as a cancelled
+    pick (1) -- bin/kcgx treats exit 1 as 'stay quiet', which would
+    swallow a genuine failure -- and never as a bare traceback."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("i am a file, not a directory")
+    out = blocker / "record"
+
+    assert run(["pick", "KORD", "--out", str(out)]) == 2
+
+    err = capsys.readouterr().err
+    assert str(out) in err
+    assert "Traceback" not in err
 
 
 def test_a_successful_pick_is_remembered(tmp_path):
