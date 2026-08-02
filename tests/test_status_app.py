@@ -162,6 +162,48 @@ async def test_a_failing_resolver_keeps_the_last_known_airport_and_the_clock_sti
 
 
 @pytest.mark.asyncio
+async def test_a_failing_clock_keeps_the_last_known_time_and_the_airport_still_updates():
+    """The mirror of the resolver test: tick() must be symmetric.
+
+    A `now` that raises (never happens with the real now_pair(), but
+    tick() must not depend on that) must not skip the airport update, and
+    must not kill the pane either -- the last-known clock stays on screen.
+    """
+    icaos = ["KPDX", "KORD"]
+
+    def resolver():
+        return icaos[0] if len(icaos) == 1 else icaos.pop(0)
+
+    calls = {"n": 0}
+
+    def flaky_now():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return T1, T1.astimezone(PDT)
+        raise RuntimeError("clock unavailable")
+
+    app = StatusPane(
+        resolver=resolver,
+        airports_loader=lambda: AIRPORTS,
+        now=flaky_now,
+        opener=lambda: None,
+    )
+    async with app.run_test(size=SIZE) as pilot:
+        joined = "\n".join(rendered(app)[0])
+        assert "KPDX" in joined
+        assert "1955Z" in joined
+
+        app.tick()
+        await pilot.pause()
+
+        assert app.is_running
+        joined = "\n".join(rendered(app)[0])
+        assert "KORD" in joined
+        assert "Chicago O'Hare International Airport" in joined
+        assert "1955Z" in joined
+
+
+@pytest.mark.asyncio
 async def test_clicking_the_affordance_opens_the_picker():
     clicks = []
     app = make(clicks=clicks)
