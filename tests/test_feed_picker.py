@@ -70,6 +70,16 @@ async def test_escape_dismisses_without_selecting():
 
 @pytest.mark.asyncio
 async def test_selecting_a_feed_invokes_hook():
+    """Selecting must map to the row actually navigated to, not just *a* row.
+
+    Regression guard: asserting only `chosen[0].ident in {f.ident for f in
+    FEEDS}` (membership in the whole set) would pass even if selection
+    always returned the first feed regardless of navigation -- it can't
+    distinguish "picked the right row" from "picked any row". The list
+    starts with index 0 highlighted, so two "down" presses land on index 2;
+    this asserts the hook receives exactly FEEDS[2], not merely something
+    from FEEDS.
+    """
     app = make_app()
     chosen = []
     app.on_feed_selected = chosen.append
@@ -77,10 +87,64 @@ async def test_selecting_a_feed_invokes_hook():
         await pilot.press("f")
         await pilot.pause()
         await pilot.press("down")
+        await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
-        assert len(chosen) == 1
-        assert chosen[0].ident in {f.ident for f in FEEDS}
+        assert chosen == [FEEDS[2]]
+
+
+@pytest.mark.asyncio
+async def test_long_label_and_ident_truncate_visibly_within_row_width():
+    """A pathologically long label/ident must fit the row, and any cut must
+    be marked -- not silently clipped by the container border.
+
+    Regression test: FeedPicker > ListView is `width: 44` with a `solid`
+    border (squelch.tcss), leaving exactly 42 content columns. The row
+    format used to be `label[:26]` + " " + `ident[:17]` = 44 characters --
+    2 over the container's actual content width -- so an already-truncated
+    ident silently lost two more characters with no ellipsis or any
+    indication truncation had happened twice. This asserts the rendered row
+    both fits (all strips still 48 cells) and shows a visible "…" for a
+    label/ident long enough to need cutting, with the exact expected
+    truncation (computed independently here, not by calling the
+    production helper) so a regression that silently drops extra
+    characters would be caught rather than passing by coincidence.
+    """
+    long_feed = Feed(
+        ident="kpdx_extremely_long_ident_value_that_overflows",
+        label="KPDX Extremely Long Feed Label That Overflows The Row",
+    )
+    app = SquelchApp(
+        Config(),
+        feed_label="Portland Tower",
+        frequency="118.10",
+        feed_loader=lambda: [long_feed],
+    )
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("f")
+        await pilot.pause()
+        text, strips = rendered(app)
+        assert all(s.cell_length == 48 for s in strips)
+
+        row = next(line for line in text if "KPDX Extremely" in line)
+        assert "…" in row, (
+            "a row long enough to need truncation must show an ellipsis, "
+            "not silently drop characters"
+        )
+        # Independently-computed expected truncation (26-wide label field,
+        # 15-wide ident field -- the exact widths that fit 42 content
+        # columns), not derived from the production `_fit` helper.
+        expected_label = "KPDX Extremely Long Feed …"
+        expected_ident = "kpdx_extremely…"
+        assert expected_label in row
+        assert expected_ident in row
+        # And the ident must show its OWN ellipsis -- if the row were still
+        # silently clipped by the container border, the ident's tail would
+        # just vanish with no "…" of its own, even though `row` (a full,
+        # unclipped compositor line) would still contain the raw
+        # `_fit(ident, 15)` text next to it.
+        ident_pos = row.index(expected_ident)
+        assert row[ident_pos + len(expected_ident) - 1] == "…"
 
 
 @pytest.mark.asyncio

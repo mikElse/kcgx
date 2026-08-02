@@ -233,6 +233,30 @@ class SquelchApp(App):
         )
 
 
+_PICKER_LABEL_WIDTH = 26
+_PICKER_IDENT_WIDTH = 15
+# FeedPicker > ListView is `width: 44` with a `solid` border (squelch.tcss),
+# leaving exactly 42 content columns -- _PICKER_LABEL_WIDTH + 1 (separator)
+# + _PICKER_IDENT_WIDTH must never exceed that, or a row silently clips
+# inside the border with no indication anything was lost.
+
+
+def _fit(text: str, width: int) -> str:
+    """Fit `text` into exactly `width` cells, marking truncation visibly.
+
+    Mirrors the header's truncation convention (see _refresh_header): a
+    bare slice reads as silent data loss -- a real cut here gets a trailing
+    ellipsis instead, same principle applied to the same failure mode.
+    """
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text.ljust(width)
+    if width == 1:
+        return "…"
+    return text[: width - 1] + "…"
+
+
 class FeedPicker(ModalScreen):
     """Overlay listing the feeds available at an airport."""
 
@@ -246,7 +270,11 @@ class FeedPicker(ModalScreen):
         yield ListView(
             *[
                 ListItem(
-                    Label(f"{f.label[:26]:26} {f.ident[:17]}", markup=False)
+                    Label(
+                        f"{_fit(f.label, _PICKER_LABEL_WIDTH)} "
+                        f"{_fit(f.ident, _PICKER_IDENT_WIDTH)}",
+                        markup=False,
+                    )
                 )
                 for f in self._feeds
             ],
