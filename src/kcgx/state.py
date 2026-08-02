@@ -7,6 +7,7 @@ never leave the cockpit pointing at stale coordinates.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,8 +17,24 @@ STATE_PATH = Path.home() / ".local" / "state" / "kcgx" / "airport"
 FALLBACK_ICAO = "KPDX"
 
 
+def default_path() -> Path:
+    """Where the ICAO is remembered, unless a caller says otherwise.
+
+    KCGX_STATE_PATH relocates it. That seam exists so a test can drive the
+    *real* `kcgx-airport pick` -- through bin/kcgx, through uv, all the way
+    to a written record -- without any of it landing in the developer's own
+    ~/.local/state/kcgx. Read at call time, not import time, so a subprocess
+    inheriting the variable is enough.
+
+    The `path=` keyword on read_airport/write_airport stays the more
+    specific override: an explicit argument always beats the environment.
+    """
+    override = os.environ.get("KCGX_STATE_PATH")
+    return Path(override) if override else STATE_PATH
+
+
 def read_airport(*, path: Path | None = None) -> str | None:
-    path = STATE_PATH if path is None else path
+    path = default_path() if path is None else path
     try:
         value = path.read_text().strip().upper()
     except OSError:
@@ -27,7 +44,7 @@ def read_airport(*, path: Path | None = None) -> str | None:
 
 def write_airport(icao: str, *, path: Path | None = None) -> None:
     """Remember `icao`. Failing to is a lost convenience, not an error."""
-    path = STATE_PATH if path is None else path
+    path = default_path() if path is None else path
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{icao.strip().upper()}\n")
