@@ -1,0 +1,52 @@
+<!--
+  This is a HAND-AUTHORED ADVERSARIAL fixture, not a capture of any real
+  LiveATC page. It exercises markup shapes that do not appear in
+  kpdx.html but that a real page could plausibly contain, added after a
+  code review found that kpdx.html's uniform structure gave zero coverage
+  of these cases:
+
+    1. kpdx_nested_table_test -- an ad-like <table> (its own <strong>
+       "Sponsored") is injected between the feed's real label and its
+       /play/ link. Regression test for a "nearest preceding <table>"
+       heuristic that would latch onto the ad's table instead of the
+       feed's own.
+    2. kpdx_attr_strong_test -- the label is wrapped in
+       <strong class="feedname"> rather than a bare <strong>, proving the
+       strong-tag pattern tolerates attributes.
+    3. kpdx_no_strong_test -- no <strong> at all near the link, proving
+       the title-cased-ident fallback path actually triggers.
+-->
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<title>Adversarial fixture (hand-authored, not a capture)</title>
+</head>
+<body>
+<div class="col1">
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Nested Table Test</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 0</td>
+</tr><tr><td>
+  <table class="ad-slot"><tbody><tr><td><strong>Sponsored</strong></td></tr></tbody></table>
+</td>
+</tr><tr><td><a href="/play/kpdx_nested_table_test.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong class="feedname">KPDX Attr Strong Test</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 0</td>
+</tr><tr><td><a href="/play/kpdx_attr_strong_test.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td>No heading markup here at all, just plain text.</td>
+</tr><tr><td><a href="/play/kpdx_no_strong_test.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr></tbody></table>
+<br>
+
+</div>
+</body>
+</html>
