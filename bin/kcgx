@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# kcgx — open the cockpit: live traffic, ATC audio with transcription, a shell.
+# kcgx — open the cockpit: live traffic, ATC audio with transcription, a status
+# line.
 #
-#   adsb-tui        │  squelch
+#   adsb-tui        │  status
 #                   ├──────────
-#                   │  $SHELL
+#                   │  squelch
 #
 # Every splitter is drag-resizable; the sizes below are starting positions.
 # Run it again from anywhere to reattach to a running cockpit.
@@ -21,7 +22,8 @@
 #                      setting it here reaches kcgx-airport three processes
 #                      down (default: ~/.local/state/kcgx/airport)
 #   KCGX_SQUELCH_COLS  width of the right column       (default: 48)
-#   KCGX_SHELL_ROWS    height of the shell pane        (default: 12)
+#   KCGX_STATUS_ROWS   height of the status pane       (default: 4)
+#   KCGX_STATUS_CMD    command for the status pane
 #   KCGX_MIN_COLS      refuse to build below this      (default: 100)
 
 set -euo pipefail
@@ -45,7 +47,7 @@ REPO="$(cd -P "$(dirname "$self")/.." && pwd)"
 CONF="$REPO/kcgx.tmux.conf"
 
 SQUELCH_COLS="${KCGX_SQUELCH_COLS:-48}"
-SHELL_ROWS="${KCGX_SHELL_ROWS:-12}"
+STATUS_ROWS="${KCGX_STATUS_ROWS:-4}"
 MIN_COLS="${KCGX_MIN_COLS:-100}"
 
 die() { printf 'kcgx: %s\n' "$*" >&2; exit 1; }
@@ -86,6 +88,7 @@ ADSB_CMD="${KCGX_ADSB_CMD:-adsb-tui}"
 # tmux runs the pane command through a shell, so quote the path: a repo cloned
 # somewhere with a space in it would otherwise word-split.
 SQUELCH_CMD="${KCGX_SQUELCH_CMD:-uv run --project '$REPO' squelch}"
+STATUS_CMD="${KCGX_STATUS_CMD:-uv run --project '$REPO' kcgx-status}"
 
 # The Python side is reached only through this one command, so bin/kcgx
 # never parses the airport dataset and src/kcgx/ never runs a tmux command.
@@ -161,14 +164,26 @@ squelch_cmd() {  # $1=icao
     fi
 }
 
+status_cmd() {
+    printf '%s' "$STATUS_CMD"
+}
+
+# Panes are found by role, not by index. Inserting the status pane renumbers
+# squelch from 1 to 2 while its pane id stays the same, and retargeting the
+# wrong pane fails silently -- the cockpit looks fine and points elsewhere.
+pane_for_role() {  # $1=adsb|status|squelch
+    tm list-panes -t "=$SESSION:cockpit" -F '#{@kcgx_role} #{pane_id}' |
+        awk -v role="$1" '$1 == role { print $2; exit }'
+}
+
 retarget() {  # $1=icao $2=lat $3=lon
-    tm respawn-pane -k -t "=$SESSION:cockpit.0" "$(adsb_cmd "$2" "$3")"
-    tm respawn-pane -k -t "=$SESSION:cockpit.1" "$(squelch_cmd "$1")"
+    tm respawn-pane -k -t "$(pane_for_role adsb)" "$(adsb_cmd "$2" "$3")"
+    tm respawn-pane -k -t "$(pane_for_role squelch)" "$(squelch_cmd "$1")"
 }
 
 usage() {
     cat <<'USAGE'
-kcgx — open the cockpit: live traffic, ATC audio, a shell.
+kcgx — open the cockpit: live traffic, ATC audio, a status line.
 
   kcgx             open the cockpit, or reattach to a running one
   kcgx go [query]  search for an airport and point both panes at it
@@ -176,7 +191,8 @@ kcgx — open the cockpit: live traffic, ATC audio, a shell.
   kcgx --help      this
 
 Drag any pane border with the mouse to resize. Ctrl-b then a opens the
-airport search; Ctrl-b then r respawns a pane that has died.
+airport search, as does clicking the status pane; Ctrl-b then r respawns a
+pane that has died.
 USAGE
 }
 
@@ -206,6 +222,10 @@ case "${1:-}" in
         [ "$status" -eq 0 ] ||
             die "airport search failed (exit $status); nothing was changed."
         retarget "$ICAO" "$LAT" "$LON"
+        # Clicking the status pane makes it tmux's active pane, so without
+        # this the arrow keys would drive the status pane instead of
+        # squelch's feed list. Also fixes `Ctrl-b a` pressed from adsb-tui.
+        tm select-pane -t "$(pane_for_role squelch)"
         printf 'kcgx: %s — %s\n' "$ICAO" "$LABEL"
         exit 0
         ;;
@@ -272,13 +292,23 @@ if ! airport_record resolve; then
     ICAO="" LAT="" LON=""
 fi
 
-tm new-session -d -s "$SESSION" -n cockpit -x "$cols" -y "$rows" "$(adsb_cmd "$LAT" "$LON")"
+# -P -F prints the new pane's id, so each pane is identified at the moment
+# it is created rather than inferred from an index afterwards.
+adsb_pane="$(tm new-session -d -s "$SESSION" -n cockpit -x "$cols" -y "$rows" \
+    -P -F '#{pane_id}' "$(adsb_cmd "$LAT" "$LON")")"
 apply_config
-tm split-window -h -l "$SQUELCH_COLS" -t "=$SESSION:cockpit.0" "$(squelch_cmd "$ICAO")"
-tm split-window -v -l "$SHELL_ROWS" -t "=$SESSION:cockpit.1"
+squelch_pane="$(tm split-window -h -l "$SQUELCH_COLS" -t "$adsb_pane" \
+    -P -F '#{pane_id}' "$(squelch_cmd "$ICAO")")"
+# -b puts the new pane *above* the one it splits.
+status_pane="$(tm split-window -v -b -l "$STATUS_ROWS" -t "$squelch_pane" \
+    -P -F '#{pane_id}' "$(status_cmd)")"
 
-# Land on squelch rather than the shell — it's the pane you read.
-tm select-pane -t "=$SESSION:cockpit.1"
+tm set -p -t "$adsb_pane" @kcgx_role adsb
+tm set -p -t "$squelch_pane" @kcgx_role squelch
+tm set -p -t "$status_pane" @kcgx_role status
+
+# Land on squelch — it's the pane you read, and the only one that takes keys.
+tm select-pane -t "$squelch_pane"
 
 if [ -n "${KCGX_DETACHED:-}" ]; then
     exit 0

@@ -74,6 +74,7 @@ def cockpit(tmp_path):
             "KCGX_SIZE": size,
             "KCGX_ADSB_CMD": FAKE_ADSB,
             "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+            "KCGX_STATUS_CMD": FAKE_STATUS,
             "KCGX_AIRPORT_CMD": str(resolver),
         }
         if size is None:  # exercise the real size-detection path
@@ -122,6 +123,22 @@ def pane_field(tmux, session, field):
     return out
 
 
+def role_field(tmux, session, field):
+    """Map @kcgx_role -> field value.
+
+    The index-keyed version above is no longer enough to say *which* pane a
+    value belongs to: inserting the status pane moved squelch from index 1
+    to index 2 while its pane id stayed put, so an assertion keyed on 1 now
+    silently describes a different pane.
+    """
+    out = {}
+    for line in panes(tmux, session, "#{@kcgx_role}\t#{" + field + "}"):
+        role, _, value = line.partition("\t")
+        if role.strip():
+            out[role.strip()] = value.strip()
+    return out
+
+
 def test_launcher_is_executable():
     assert os.access(LAUNCHER, os.X_OK), "bin/kcgx must be executable"
 
@@ -136,28 +153,35 @@ def test_squelch_column_is_exactly_48_wide(cockpit):
     """48 is squelch's design width; narrower and its header truncates."""
     run, tmux, session = cockpit
     run()
-    widths = {i: int(v) for i, v in pane_field(tmux, session, "pane_width").items()}
-    assert widths[1] == 48, f"squelch pane is {widths[1]} columns, want 48"
-    assert widths[2] == 48, f"shell pane is {widths[2]} columns, want 48"
-    assert widths[0] > 48, "adsb-tui should get the remaining width"
+    widths = {r: int(v) for r, v in role_field(tmux, session, "pane_width").items()}
+    assert widths["squelch"] == 48, f"squelch pane is {widths['squelch']} columns"
+    assert widths["status"] == 48, f"status pane is {widths['status']} columns"
+    assert widths["adsb"] > 48, "adsb-tui should get the remaining width"
 
 
-def test_shell_pane_is_short_so_squelch_keeps_the_column(cockpit):
+def test_status_pane_is_short_so_squelch_keeps_the_column(cockpit):
+    """The status pane shares squelch's column, so it must stay out of the way.
+
+    Was the shell pane at 12 rows; the status line needs four and everything
+    left over belongs to squelch's feed list and transcript.
+    """
     run, tmux, session = cockpit
     run()
-    heights = {i: int(v) for i, v in pane_field(tmux, session, "pane_height").items()}
-    assert heights[2] == 12, f"shell pane is {heights[2]} rows, want 12"
-    assert heights[1] > heights[2], "squelch should get more height than the shell"
+    heights = {r: int(v) for r, v in role_field(tmux, session, "pane_height").items()}
+    assert heights["squelch"] > 4 * heights["status"], (
+        f"status took {heights['status']} rows and left squelch "
+        f"{heights['squelch']}; squelch should keep the column"
+    )
 
 
 def test_commands_land_in_the_right_panes(cockpit):
     run, tmux, session = cockpit
     run()
-    commands = pane_field(tmux, session, "pane_start_command")
+    commands = role_field(tmux, session, "pane_start_command")
     # tmux reports the start command quoted.
-    assert FAKE_ADSB in commands[0]
-    assert FAKE_SQUELCH in commands[1]
-    assert commands[2] == "", "pane 2 should be a plain shell, not a command"
+    assert FAKE_ADSB in commands["adsb"]
+    assert FAKE_SQUELCH in commands["squelch"]
+    assert FAKE_STATUS in commands["status"]
 
 
 def test_second_invocation_attaches_instead_of_duplicating(cockpit):
@@ -272,6 +296,7 @@ def test_accepts_a_real_wide_terminal(cockpit):
         "KCGX_DETACHED": "1",
         "KCGX_ADSB_CMD": FAKE_ADSB,
         "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "KCGX_STATUS_CMD": FAKE_STATUS,
         "KCGX_AIRPORT_CMD": run.resolver,
         "TERM": "xterm-256color",
     }
@@ -309,9 +334,11 @@ def test_accepts_a_real_wide_terminal(cockpit):
 
     assert os.waitstatus_to_exitcode(status) == 0, text
     assert "80 columns" not in text
-    widths = {i: int(v) for i, v in pane_field(tmux, session, "pane_width").items()}
-    assert widths[0] + widths[1] + 1 == 222, f"session not sized to the pty: {widths}"
-    assert widths[1] == 48
+    widths = {r: int(v) for r, v in role_field(tmux, session, "pane_width").items()}
+    assert widths["adsb"] + widths["squelch"] + 1 == 222, (
+        f"session not sized to the pty: {widths}"
+    )
+    assert widths["squelch"] == 48
 
 
 def test_attach_path_runs_tmux_rather_than_a_shell_function(cockpit):
@@ -473,11 +500,14 @@ def airport_stub(tmp_path):
     return path
 
 
-def pane_command(tmux, session, index):
-    return tmux(
-        "display-message", "-p", "-t", f"={session}:cockpit.{index}",
-        "#{pane_start_command}",
-    ).stdout.strip()
+def pane_command(tmux, session, role):
+    """The start command of the pane tagged `role`.
+
+    Keyed by role rather than by index, for the same reason bin/kcgx is:
+    `cockpit.1` used to mean squelch and now means status, so an index-keyed
+    assertion would go on passing while describing the wrong pane.
+    """
+    return role_field(tmux, session, "pane_start_command")[role]
 
 
 def test_launch_points_both_panes_at_the_resolved_airport(
@@ -488,8 +518,8 @@ def test_launch_points_both_panes_at_the_resolved_airport(
         KCGX_AIRPORT_CMD=str(airport_stub),
         KCGX_TEST_RECORD="KORD\t41.9786\t-87.9048\tChicago O'Hare",
     )
-    adsb = pane_command(tmux, session, 0)
-    squelch = pane_command(tmux, session, 1)
+    adsb = pane_command(tmux, session, "adsb")
+    squelch = pane_command(tmux, session, "squelch")
     assert "--site-lat 41.9786" in adsb
     assert "--site-lon -87.9048" in adsb
     assert "--icao KORD" in squelch
@@ -501,7 +531,7 @@ def test_go_moves_both_panes_to_the_new_airport(cockpit, airport_stub):
         KCGX_AIRPORT_CMD=str(airport_stub),
         KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
     )
-    assert "--site-lat 45.5887" in pane_command(tmux, session, 0)
+    assert "--site-lat 45.5887" in pane_command(tmux, session, "adsb")
 
     result = run(
         args=("go",),
@@ -510,8 +540,8 @@ def test_go_moves_both_panes_to_the_new_airport(cockpit, airport_stub):
     )
     assert result.returncode == 0, result.stderr
 
-    adsb = pane_command(tmux, session, 0)
-    squelch = pane_command(tmux, session, 1)
+    adsb = pane_command(tmux, session, "adsb")
+    squelch = pane_command(tmux, session, "squelch")
     assert "--site-lat 47.4479" in adsb and "--site-lon -122.3102" in adsb
     assert "--icao KSEA" in squelch
     assert "45.5887" not in adsb, "the old airport is still on screen"
@@ -522,10 +552,10 @@ def test_launch_and_go_build_the_same_command(cockpit, airport_stub):
     run, tmux, session = cockpit
     record = "KSEA\t47.4479\t-122.3102\tSeattle-Tacoma"
     run(KCGX_AIRPORT_CMD=str(airport_stub), KCGX_TEST_RECORD=record)
-    at_launch = (pane_command(tmux, session, 0), pane_command(tmux, session, 1))
+    at_launch = (pane_command(tmux, session, "adsb"), pane_command(tmux, session, "squelch"))
 
     run(args=("go",), KCGX_AIRPORT_CMD=str(airport_stub), KCGX_TEST_RECORD=record)
-    after_go = (pane_command(tmux, session, 0), pane_command(tmux, session, 1))
+    after_go = (pane_command(tmux, session, "adsb"), pane_command(tmux, session, "squelch"))
 
     assert at_launch == after_go
 
@@ -536,7 +566,7 @@ def test_a_cancelled_pick_leaves_the_cockpit_alone(cockpit, airport_stub):
         KCGX_AIRPORT_CMD=str(airport_stub),
         KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
     )
-    before = pane_command(tmux, session, 0)
+    before = pane_command(tmux, session, "adsb")
 
     result = run(
         args=("go",),
@@ -545,7 +575,7 @@ def test_a_cancelled_pick_leaves_the_cockpit_alone(cockpit, airport_stub):
         KCGX_TEST_FAIL="1",
     )
     assert result.returncode == 0, "cancelling is not an error"
-    assert pane_command(tmux, session, 0) == before
+    assert pane_command(tmux, session, "adsb") == before
 
 
 def test_go_reports_a_failed_search_instead_of_calling_it_a_cancel(
@@ -562,7 +592,7 @@ def test_go_reports_a_failed_search_instead_of_calling_it_a_cancel(
         KCGX_AIRPORT_CMD=str(airport_stub),
         KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
     )
-    before = pane_command(tmux, session, 0)
+    before = pane_command(tmux, session, "adsb")
 
     result = run(
         args=("go",),
@@ -572,7 +602,7 @@ def test_go_reports_a_failed_search_instead_of_calling_it_a_cancel(
     )
     assert result.returncode != 0
     assert result.stderr.strip(), "a silent failure reads exactly like a cancel"
-    assert pane_command(tmux, session, 0) == before, "and still change nothing"
+    assert pane_command(tmux, session, "adsb") == before, "and still change nothing"
 
 
 def test_a_truncated_record_is_a_failure_not_a_cancel(cockpit, airport_stub):
@@ -586,7 +616,7 @@ def test_a_truncated_record_is_a_failure_not_a_cancel(cockpit, airport_stub):
         KCGX_AIRPORT_CMD=str(airport_stub),
         KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
     )
-    before = pane_command(tmux, session, 0)
+    before = pane_command(tmux, session, "adsb")
 
     result = run(
         args=("go",),
@@ -595,7 +625,7 @@ def test_a_truncated_record_is_a_failure_not_a_cancel(cockpit, airport_stub):
     )
     assert result.returncode != 0, "a short record is not a cancelled pick"
     assert result.stderr.strip(), "and it must say so"
-    assert pane_command(tmux, session, 0) == before
+    assert pane_command(tmux, session, "adsb") == before
 
 
 def test_a_failed_mktemp_is_an_error_not_a_cancel(cockpit, airport_stub, tmp_path):
@@ -610,7 +640,7 @@ def test_a_failed_mktemp_is_an_error_not_a_cancel(cockpit, airport_stub, tmp_pat
     """
     run, tmux, session = cockpit
     assert run().returncode == 0
-    before = pane_command(tmux, session, 0)
+    before = pane_command(tmux, session, "adsb")
 
     stub_bin = tmp_path / "mktemp-fails"
     stub_bin.mkdir()
@@ -635,7 +665,7 @@ def test_a_failed_mktemp_is_an_error_not_a_cancel(cockpit, airport_stub, tmp_pat
     # non-empty stderr, and would satisfy a vaguer assertion for the wrong
     # reason. Exit 2 is the code this test exists to pin down.
     assert "airport search failed (exit 2)" in result.stderr, result.stderr
-    assert pane_command(tmux, session, 0) == before
+    assert pane_command(tmux, session, "adsb") == before
 
 
 def test_the_popup_binding_actually_runs_the_airport_search(cockpit):
@@ -675,8 +705,8 @@ def test_the_default_resolver_really_works(cockpit, tmp_path):
 
     assert run(KCGX_AIRPORT_CMD="", KCGX_STATE_PATH=str(state)).returncode == 0
 
-    adsb = pane_command(tmux, session, 0)
-    squelch = pane_command(tmux, session, 1)
+    adsb = pane_command(tmux, session, "adsb")
+    squelch = pane_command(tmux, session, "squelch")
     assert "--site-lat 41.9786" in adsb, (
         "the real resolver produced no coordinates: " + adsb
     )
@@ -704,8 +734,8 @@ def test_an_unknown_remembered_icao_falls_back_instead_of_failing(cockpit, tmp_p
     result = run(KCGX_AIRPORT_CMD="", KCGX_STATE_PATH=str(state))
     assert result.returncode == 0, result.stderr
 
-    adsb = pane_command(tmux, session, 0)
-    squelch = pane_command(tmux, session, 1)
+    adsb = pane_command(tmux, session, "adsb")
+    squelch = pane_command(tmux, session, "squelch")
     assert "--site-lat 45.588699" in adsb, (
         "an unknown remembered airport cost the cockpit its coordinates: " + adsb
     )
@@ -741,8 +771,8 @@ def test_a_real_pick_moves_the_cockpit_and_is_remembered(cockpit, tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    adsb = pane_command(tmux, session, 0)
-    squelch = pane_command(tmux, session, 1)
+    adsb = pane_command(tmux, session, "adsb")
+    squelch = pane_command(tmux, session, "squelch")
     assert "--site-lat 41.9786" in adsb, adsb
     assert "--site-lon -87.9048" in adsb, adsb
     assert "--icao KORD" in squelch, squelch
@@ -877,6 +907,7 @@ def test_the_picker_can_draw_on_the_terminal(cockpit, tmp_path):
         "KCGX_DETACHED": "1",
         "KCGX_ADSB_CMD": FAKE_ADSB,
         "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "KCGX_STATUS_CMD": FAKE_STATUS,
         "KCGX_AIRPORT_CMD": str(stub),
         "TERM": "xterm-256color",
     }
@@ -893,7 +924,7 @@ def test_the_picker_can_draw_on_the_terminal(cockpit, tmp_path):
     )
     # And the record still arrived, i.e. the retarget was not paid for by
     # letting the record leak into the popup.
-    assert "--icao KSEA" in pane_command(tmux, session, 1)
+    assert "--icao KSEA" in pane_command(tmux, session, "squelch")
 
 
 def test_the_real_picker_fills_the_popup_it_was_given(cockpit, tmp_path):
@@ -926,6 +957,7 @@ def test_the_real_picker_fills_the_popup_it_was_given(cockpit, tmp_path):
         "KCGX_SESSION": session,
         "KCGX_ADSB_CMD": FAKE_ADSB,
         "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "KCGX_STATUS_CMD": FAKE_STATUS,
         "KCGX_AIRPORT_CMD": "",  # empty -> the real kcgx-airport
         "KCGX_STATE_PATH": str(state),
         "TERM": "xterm-256color",
@@ -972,6 +1004,120 @@ def test_a_broken_resolver_still_opens_the_cockpit(cockpit, airport_stub):
         KCGX_TEST_FAIL="2",
     )
     assert result.returncode == 0
-    adsb = pane_command(tmux, session, 0)
+    adsb = pane_command(tmux, session, "adsb")
     assert "--site-lat" not in adsb, "no coordinates means fall back to its config"
     assert "sleep 300" in adsb
+
+
+# -- the status pane -------------------------------------------------------
+
+FAKE_STATUS = "sh -c 'sleep 300'"
+
+
+def roles(tmux, session):
+    """Map role -> pane id, the same lookup bin/kcgx does."""
+    out = {}
+    for line in panes(tmux, session, "#{@kcgx_role}\t#{pane_id}"):
+        role, _, pane_id = line.partition("\t")
+        if role.strip():
+            out[role.strip()] = pane_id.strip()
+    return out
+
+
+def test_the_cockpit_has_three_panes_and_no_shell(cockpit):
+    run, tmux, session = cockpit
+    run(KCGX_STATUS_CMD=FAKE_STATUS)
+    commands = panes(tmux, session, "#{pane_start_command}")
+    assert len(commands) == 3
+    assert not any(c.strip() == "" for c in commands), (
+        "an empty pane command is the shell pane that should be gone"
+    )
+
+
+def test_every_pane_carries_its_role(cockpit):
+    run, tmux, session = cockpit
+    run(KCGX_STATUS_CMD=FAKE_STATUS)
+    assert set(roles(tmux, session)) == {"adsb", "status", "squelch"}
+
+
+def test_the_status_pane_sits_above_squelch_and_is_four_rows(cockpit):
+    run, tmux, session = cockpit
+    run(KCGX_STATUS_CMD=FAKE_STATUS)
+    by_id = {}
+    for line in panes(tmux, session, "#{pane_id}\t#{pane_top}\t#{pane_height}"):
+        pane_id, top, height = line.split("\t")
+        by_id[pane_id] = (int(top), int(height))
+    r = roles(tmux, session)
+    assert by_id[r["status"]][1] == 4, "status pane should be four rows"
+    assert by_id[r["status"]][0] < by_id[r["squelch"]][0], "status sits above"
+
+
+def test_retarget_still_finds_both_panes_after_the_layout_change(cockpit, airport_stub):
+    """The whole point of the role tags."""
+    run, tmux, session = cockpit
+    run(
+        KCGX_STATUS_CMD=FAKE_STATUS,
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    result = run(
+        args=("go",),
+        KCGX_STATUS_CMD=FAKE_STATUS,
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KSEA\t47.4479\t-122.3102\tSeattle-Tacoma",
+    )
+    assert result.returncode == 0, result.stderr
+
+    by_id = {}
+    for line in panes(tmux, session, "#{pane_id}\t#{pane_start_command}"):
+        pane_id, _, cmd = line.partition("\t")
+        by_id[pane_id] = cmd
+    r = roles(tmux, session)
+    assert "--site-lat 47.4479" in by_id[r["adsb"]]
+    assert "--icao KSEA" in by_id[r["squelch"]]
+    assert "--icao" not in by_id[r["status"]], "the status pane is not retargeted"
+
+
+def test_go_leaves_squelch_selected(cockpit, airport_stub):
+    """After a switch, the keys must drive squelch's feed list.
+
+    The active pane has to be moved off squelch first, or this test proves
+    nothing: the launch already lands on squelch, so `go` can omit its
+    select-pane entirely and the assertion still passes. Selecting the
+    status pane is what a *click* on it does, and clicking it is the
+    documented way to open the search -- so this is the real path, not a
+    contrivance to make the test bite.
+    """
+    run, tmux, session = cockpit
+    run(
+        KCGX_STATUS_CMD=FAKE_STATUS,
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    tmux("select-pane", "-t", roles(tmux, session)["status"])
+    assert (
+        tmux(
+            "display-message", "-p", "-t", f"={session}:cockpit", "#{pane_id}"
+        ).stdout.strip()
+        == roles(tmux, session)["status"]
+    ), "the click did not take, so the rest of this test would prove nothing"
+
+    run(
+        args=("go",),
+        KCGX_STATUS_CMD=FAKE_STATUS,
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KSEA\t47.4479\t-122.3102\tSeattle-Tacoma",
+    )
+    active = tmux(
+        "display-message", "-p", "-t", f"={session}:cockpit", "#{pane_id}"
+    ).stdout.strip()
+    assert active == roles(tmux, session)["squelch"]
+
+
+def test_launch_leaves_squelch_selected(cockpit):
+    run, tmux, session = cockpit
+    run(KCGX_STATUS_CMD=FAKE_STATUS)
+    active = tmux(
+        "display-message", "-p", "-t", f"={session}:cockpit", "#{pane_id}"
+    ).stdout.strip()
+    assert active == roles(tmux, session)["squelch"]
