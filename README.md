@@ -12,8 +12,9 @@ Two pieces live here:
   into one mouse-resizable tmux session.
 
 ```
-kcgx          # open the cockpit (or reattach to a running one)
-kcgx stop     # shut it down
+kcgx              # open the cockpit (or reattach to a running one)
+kcgx go [query]   # search for an airport and point both panes at it
+kcgx stop         # shut it down
 kcgx --help
 ```
 
@@ -62,6 +63,33 @@ something that isn't running is not an error.
 `squelch` does, so its feed picker stays clickable. `adsb-tui` most likely
 does not, so scrolling over it enters tmux's copy-mode, which gives you
 scrollback over the traffic table.
+
+**Picking an airport.** `Ctrl-b` then `a` opens an airport search in a
+popup over the cockpit; `kcgx go [query]` does the same from the shell
+pane. Typing matches ICAO, IATA, airport name, city, region and country;
+accents and separators are folded on both sides, so `seattle-tacoma`
+finds Seattle–Tacoma (the dataset spells it with an en dash) and `ohare`
+finds O'Hare. Short query words have to match the start of a word rather
+than any substring, which is what lets `portland or` mean Oregon instead
+of matching the "or" buried in "portland". `kcgx go KORD` skips the
+picker outright — an exact four-letter ICAO is an answer, not a search.
+The choice is remembered in `~/.local/state/kcgx/airport` (just the ICAO;
+coordinates are looked up again from the dataset on every launch, so a
+dataset update can't leave a stale one behind) and the cockpit reopens
+there. With nothing ever picked, it falls back to `icao` in
+`squelch.toml`, then to `KPDX`.
+
+Neither `squelch.toml` nor `~/.config/ads-b-tui/adsb-tui.toml` is
+modified — adsb-tui rewrites its own config with defaults on exit, so an
+edit made to it by hand would not survive the next launch. Instead
+adsb-tui is retargeted with `--site-lat`/`--site-lon`, which also moves
+its airplanes.live query. Airports LiveATC doesn't cover still get a
+working radar; squelch just shows an empty pane with a message instead —
+it will never fall back to playing a different airport's feed under the
+wrong header. The search dataset is `src/kcgx/data/airports.csv`, 4,737
+large and medium airports with ICAO codes, committed to the repo so
+search needs no network and no API key; regenerate it with
+`uv run --project . python tools/build_airports.py`.
 
 **When something dies**, its pane stays visible with its final output and
 exit status instead of silently collapsing the layout. `Ctrl-b` then `r`
