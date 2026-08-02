@@ -115,3 +115,94 @@ def test_memory_is_bounded_by_the_bucket_count():
         t.push(LOUD)
         clock.advance(1.0)
     assert len(t._buckets) == BUCKET_COUNT
+
+
+from squelch.activity import SETTLE_ROUNDS, Resorter, rank
+
+
+def test_rank_puts_the_busiest_first():
+    busy = {"a": 0.1, "b": 0.9, "c": 0.5}
+    assert rank(["a", "b", "c"], busy.__getitem__) == ["b", "c", "a"]
+
+
+def test_rank_breaks_ties_by_discovery_order():
+    """Two equally idle feeds must not swap places every five seconds."""
+    busy = {"a": 0.0, "b": 0.0, "c": 0.0}
+    assert rank(["a", "b", "c"], busy.__getitem__) == ["a", "b", "c"]
+    assert rank(["c", "b", "a"], busy.__getitem__) == ["c", "b", "a"]
+
+
+def test_rank_leaves_an_empty_list_alone():
+    assert rank([], lambda item: 0.0) == []
+
+
+def resorter(clock):
+    return Resorter(clock=clock)
+
+
+def test_a_new_order_is_held_until_it_settles():
+    clock = FakeClock(100.0)
+    r = resorter(clock)
+    for _ in range(SETTLE_ROUNDS - 1):
+        assert r.propose(["b", "a"]) is None
+    assert r.propose(["b", "a"]) == ["b", "a"]
+
+
+def test_a_changing_order_never_settles():
+    clock = FakeClock(100.0)
+    r = resorter(clock)
+    assert r.propose(["b", "a"]) is None
+    assert r.propose(["a", "b"]) is None
+    assert r.propose(["b", "a"]) is None
+
+
+def test_recent_input_defers_an_otherwise_ready_resort():
+    """A row that moves between the decision to click and the click itself
+    mutes the wrong frequency."""
+    clock = FakeClock(100.0)
+    r = resorter(clock)
+    for _ in range(SETTLE_ROUNDS - 1):
+        r.propose(["b", "a"])
+    r.note_input()
+    assert r.propose(["b", "a"]) is None, "deferred by the keypress"
+    clock.advance(2.5)
+    assert r.propose(["b", "a"]) == ["b", "a"]
+
+
+def test_input_does_not_reset_the_settle_count():
+    """After the quiet period, exactly one more proposal applies it.
+
+    SETTLE_ROUNDS - 1, not SETTLE_ROUNDS: a full run would *apply* the
+    order, after which every later proposal returns None because it already
+    is the applied order -- and the assertion below could never pass.
+
+    The discriminating assertion is that a single propose suffices once the
+    pane goes quiet. If the deferral had reset the count, it would take
+    SETTLE_ROUNDS more.
+    """
+    clock = FakeClock(100.0)
+    r = resorter(clock)
+    for _ in range(SETTLE_ROUNDS - 1):
+        r.propose(["b", "a"])
+    r.note_input()
+    assert r.propose(["b", "a"]) is None
+    clock.advance(2.5)
+    assert r.propose(["b", "a"]) == ["b", "a"], "still settled, just delayed"
+
+
+def test_applying_an_order_does_not_immediately_reapply_it():
+    clock = FakeClock(100.0)
+    r = resorter(clock)
+    for _ in range(SETTLE_ROUNDS - 1):
+        r.propose(["b", "a"])
+    assert r.propose(["b", "a"]) == ["b", "a"]
+    assert r.propose(["b", "a"]) is None, "already the applied order"
+
+
+def test_reverting_to_the_applied_order_is_not_a_change():
+    clock = FakeClock(100.0)
+    r = resorter(clock)
+    for _ in range(SETTLE_ROUNDS):
+        r.propose(["b", "a"])
+    r.propose(["a", "b"])
+    assert r.propose(["b", "a"]) is None

@@ -7,7 +7,7 @@ level readings and a clock, and it is the cheapest possible thing to test.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 WINDOW_SECONDS = 300.0
 BUCKET_SECONDS = 5.0
@@ -62,3 +62,74 @@ class ActivityTracker:
     def _slot(self) -> tuple[int, int]:
         index = int(self._clock() // BUCKET_SECONDS)
         return index, index % BUCKET_COUNT
+
+
+SETTLE_ROUNDS = 3
+QUIET_SECONDS = 2.0
+
+
+def rank(items: Sequence, activity_of: Callable[[object], float]) -> list:
+    """Busiest first, ties broken by the order they were discovered in.
+
+    The tie-break is what stops two equally idle feeds trading places every
+    time the ranking is recomputed.
+    """
+    return [
+        item
+        for _key, item in sorted(
+            ((-activity_of(item), index), item)
+            for index, item in enumerate(items)
+        )
+    ]
+
+
+class Resorter:
+    """Decides when a proposed order is safe to apply.
+
+    Two guards, for two different problems. The settle count stops the stack
+    twitching on a ranking that has not stabilised. The quiet period stops a
+    row moving between the moment the user decides to click it and the
+    moment they do -- which matters because a click on a row body toggles
+    its mute, so a row that moves silences the wrong frequency.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        settle: int = SETTLE_ROUNDS,
+        quiet: float = QUIET_SECONDS,
+    ) -> None:
+        self._clock = clock
+        self._settle = settle
+        self._quiet = quiet
+        self._applied: list | None = None
+        self._candidate: list | None = None
+        self._held = 0
+        self._last_input: float | None = None
+
+    def note_input(self) -> None:
+        self._last_input = self._clock()
+
+    def propose(self, order: Sequence) -> list | None:
+        proposed = list(order)
+        if proposed == self._applied:
+            self._candidate = None
+            self._held = 0
+            return None
+        if proposed != self._candidate:
+            self._candidate = proposed
+            self._held = 1
+            return None
+        self._held += 1
+        if self._held < self._settle:
+            return None
+        if self._last_input is not None:
+            if self._clock() - self._last_input < self._quiet:
+                # Settled, but the user's hand is on the stack. Hold the
+                # count so this applies as soon as they stop.
+                return None
+        self._applied = proposed
+        self._candidate = None
+        self._held = 0
+        return proposed
