@@ -4,15 +4,20 @@ Two modes, both emitting one tab-separated record:
 
     icao<TAB>lat<TAB>lon<TAB>label
 
-The record goes to --out when given, stdout otherwise. Textual draws on
-*stderr* (its driver writes to sys.__stderr__), so bin/kcgx can safely
-send our stdout to /dev/null to keep a printed record out of the popup --
-but it must leave stderr alone or the picker renders into nothing. That is
-also why bin/kcgx always passes --out: capturing the record with $(...)
-would work for the drawing, but a record on stdout and a UI on stderr
-sharing one terminal is not a contract worth having. stdout stays
-available for the modes that draw nothing, which keeps this usable by
-hand.
+The record goes to --out when given, stdout otherwise.
+
+The picker needs *both* standard streams left alone. Textual's driver
+writes its frames to sys.__stderr__, and it measures the terminal with
+shutil.get_terminal_size(), which reads sys.__stdout__. Redirect stderr
+and the popup is blank; redirect stdout and it draws in the right place at
+the wrong size -- 80x24, the fallback -- spilling out of a 64x20 popup
+until the airport rows have scrolled off. Either way the search still
+answers a keypress, so it moves the cockpit somewhere nobody saw.
+
+Keeping the record off the terminal is --out's job, not a redirection's:
+bin/kcgx always passes it, so nothing is printed to stdout there at all.
+stdout stays available for the modes that draw nothing, which keeps this
+usable by hand.
 """
 
 from __future__ import annotations

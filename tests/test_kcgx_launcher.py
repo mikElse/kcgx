@@ -771,19 +771,41 @@ printf 'KSEA\t47.4479\t-122.3102\tSeattle-Tacoma\\n' > "$out"
 """
 
 
-def run_on_a_pty(launcher, args, env):
-    """Run `launcher` with a real terminal on all three standard fds.
+# The popup the prefix+a binding opens: `display-popup -w 64 -h 20`.
+POPUP_COLS, POPUP_ROWS = 64, 20
 
-    Returns everything the terminal saw. A pipe would not do: the question
-    is what a user sitting in `tmux display-popup` sees, and stdout and
-    stderr are only distinguishable from the launcher's side.
+# Every "move the cursor to row N" the app emitted. A frame laid out for a
+# terminal taller than the one it was given addresses rows that do not exist.
+_CURSOR_ROW = re.compile(r"\x1b\[(\d+);\d+H")
+
+
+def rows_addressed(seen):
+    return {int(match.group(1)) for match in _CURSOR_ROW.finditer(seen)}
+
+
+def drive_on_a_pty(launcher, args, env, *, rows, cols, until=None, timeout=45):
+    """Run `launcher` with a real terminal on all three standard fds, and
+    return (exit code, everything the terminal saw).
+
+    A pipe would not do, and neither would redirecting one stream. On a
+    terminal stdout and stderr are one device, and the picker needs both:
+    Textual's driver writes its frames to sys.__stderr__ and *measures* the
+    terminal with shutil.get_terminal_size(), which reads sys.__stdout__.
+    Only a real tty puts both in play at once, which is the situation the
+    popup has to survive.
+
+    `until` waits for that text to appear and then sends escape, so an
+    interactive picker gets dismissed instead of hanging until `timeout`.
     """
     import fcntl
+    import select
+    import signal
     import struct
     import termios
+    import time
 
     controller, follower = os.openpty()
-    fcntl.ioctl(follower, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 64, 0, 0))
+    fcntl.ioctl(follower, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
     pid = os.fork()
     if pid == 0:  # pragma: no cover - child process
@@ -797,15 +819,33 @@ def run_on_a_pty(launcher, args, env):
     os.close(follower)
 
     output = b""
-    try:
-        while True:
-            chunk = os.read(controller, 4096)
+    deadline = time.monotonic() + timeout
+    dismissed = until is None
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([controller], [], [], 0.25)
+        if ready:
+            try:
+                chunk = os.read(controller, 65536)
+            except OSError:  # EIO: the child let go of the pty
+                break
             if not chunk:
                 break
             output += chunk
-    except OSError:
-        pass
-    _, status = os.waitpid(pid, 0)
+        if not dismissed and until.encode() in output:
+            os.write(controller, b"\x1b")
+            dismissed = True
+
+    status = None
+    for _ in range(60):
+        reaped, reaped_status = os.waitpid(pid, os.WNOHANG)
+        if reaped:
+            status = reaped_status
+            break
+        time.sleep(0.05)
+    if status is None:  # pragma: no cover - only on a hang
+        os.kill(pid, signal.SIGKILL)
+        _, status = os.waitpid(pid, 0)
+    os.close(controller)
     return os.waitstatus_to_exitcode(status), output.decode(errors="replace")
 
 
@@ -843,7 +883,9 @@ def test_the_picker_can_draw_on_the_terminal(cockpit, tmp_path):
     env.pop("KCGX_SIZE", None)
     env.pop("TMUX", None)
 
-    code, seen = run_on_a_pty(LAUNCHER, ("go",), env)
+    code, seen = drive_on_a_pty(
+        LAUNCHER, ("go",), env, rows=POPUP_ROWS, cols=POPUP_COLS
+    )
     assert code == 0, seen
     assert STDERR_SENTINEL in seen, (
         "the picker's rendering never reached the terminal, so the popup is "
@@ -852,6 +894,65 @@ def test_the_picker_can_draw_on_the_terminal(cockpit, tmp_path):
     # And the record still arrived, i.e. the retarget was not paid for by
     # letting the record leak into the popup.
     assert "--icao KSEA" in pane_command(tmux, session, 1)
+
+
+def test_the_real_picker_fills_the_popup_it_was_given(cockpit, tmp_path):
+    """The end-to-end assertion, and the one that would have caught both
+    halves of the blank-popup bug: run the *real* picker through
+    `bin/kcgx go` on a pty the size of the popup, and require it to draw
+    airport rows that fit.
+
+    The stub-and-sentinel test above pins stderr, and that was only half of
+    it. Textual writes its frames to sys.__stderr__ but measures the
+    terminal with shutil.get_terminal_size(), which reads sys.__stdout__ --
+    so `>/dev/null` on stdout left the driver drawing to the right place at
+    the wrong size. It fell back to 80x24, painted a frame taller and wider
+    than the popup, the terminal scrolled, and what stayed on screen was the
+    blank bottom of an over-tall frame. Selection still worked blind, which
+    is what made it dangerous: the cockpit moved somewhere the user could
+    not see.
+
+    So "KSEA appears" is not enough on its own -- the rows were emitted in
+    the broken case too, just laid out for a terminal nobody had. The
+    geometry is what discriminates.
+    """
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+
+    state = tmp_path / "picker-state" / "airport"
+    env = {
+        **os.environ,
+        "KCGX_SOCKET": run.socket,
+        "KCGX_SESSION": session,
+        "KCGX_ADSB_CMD": FAKE_ADSB,
+        "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "KCGX_AIRPORT_CMD": "",  # empty -> the real kcgx-airport
+        "KCGX_STATE_PATH": str(state),
+        "TERM": "xterm-256color",
+    }
+    for leftover in ("KCGX_SIZE", "KCGX_DETACHED", "TMUX", "COLUMNS", "LINES"):
+        env.pop(leftover, None)
+    # COLUMNS/LINES go too: shutil.get_terminal_size() consults them before it
+    # measures stdout, so inheriting them from the developer's shell would let
+    # the picker size itself correctly for the wrong reason.
+
+    code, seen = drive_on_a_pty(
+        LAUNCHER, ("go", "seattle"), env,
+        rows=POPUP_ROWS, cols=POPUP_COLS, until="KSEA",
+    )
+
+    assert "KSEA" in seen, (
+        "the picker drew no airport rows at all, so the popup is blank and "
+        "any keypress is blind: " + repr(seen[-2000:])
+    )
+    overflowing_rows = sorted(row for row in rows_addressed(seen) if row > POPUP_ROWS)
+    assert overflowing_rows == [], (
+        f"the picker laid itself out for a terminal taller than the "
+        f"{POPUP_ROWS}-row popup and addressed rows {overflowing_rows}; the "
+        "excess scrolls the airport rows off screen and leaves it looking blank"
+    )
+    assert code == 0, f"escape should cancel cleanly, got {code}: {seen[-2000:]}"
+    assert not state.exists(), "a cancelled pick must not be remembered"
 
 
 def test_go_without_a_running_cockpit_says_so(cockpit, airport_stub):
