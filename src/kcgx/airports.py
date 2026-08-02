@@ -6,12 +6,11 @@ of the committed CSV.
 
 from __future__ import annotations
 
+import csv
+from dataclasses import dataclass
 from pathlib import Path
 
 DATA_PATH = Path(__file__).parent / "data" / "airports.csv"
-
-import csv
-from dataclasses import dataclass
 
 # The state is what a US or Canadian pilot says; elsewhere the ISO region is
 # an opaque code ("PT-13"), so the country reads better.
