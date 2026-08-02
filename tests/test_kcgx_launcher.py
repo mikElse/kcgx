@@ -33,7 +33,7 @@ def cockpit():
     socket = f"kcgx-test-{uuid.uuid4().hex[:8]}"
     session = f"kcgx-test-{uuid.uuid4().hex[:8]}"
 
-    def run(size="200x50", detached=True, **overrides):
+    def run(size="200x50", detached=True, launcher=LAUNCHER, **overrides):
         env = {
             **os.environ,
             "KCGX_SOCKET": socket,
@@ -50,7 +50,7 @@ def cockpit():
         env.pop("TMUX", None)
         env.update({k: str(v) for k, v in overrides.items()})
         return subprocess.run(
-            [str(LAUNCHER)], env=env, capture_output=True, text=True, timeout=30
+            [str(launcher)], env=env, capture_output=True, text=True, timeout=30
         )
 
     def tmux(*args):
@@ -281,6 +281,31 @@ def test_switch_client_path_runs_tmux_rather_than_a_shell_function(cockpit):
     result = cockpit(detached=False, TMUX="/tmp/fake-tmux-socket,1234,0")
     assert "not found" not in result.stderr, result.stderr
     assert "tm:" not in result.stderr, result.stderr
+
+
+def test_works_when_invoked_through_a_symlink(cockpit, tmp_path):
+    """Regression: the intended install is a symlink in ~/bin, but
+    ${BASH_SOURCE[0]} reports the *invocation* path, not the link target. So
+    dirname/.. resolved to ~ instead of the repo, and it died looking for
+    ~/kcgx.tmux.conf. Every other test invokes the launcher by its real path,
+    which is precisely why the suite missed it.
+    """
+    link = tmp_path / "kcgx"
+    link.symlink_to(LAUNCHER)
+
+    result = cockpit(launcher=link)
+    assert result.returncode == 0, result.stderr
+    assert "No such file" not in result.stderr, result.stderr
+    assert len(panes(cockpit, "#{pane_index}")) == 3
+
+
+def test_symlinked_invocation_still_applies_the_config(cockpit, tmp_path):
+    """The config path is derived from the same resolution, so prove it too."""
+    link = tmp_path / "kcgx"
+    link.symlink_to(LAUNCHER)
+
+    assert cockpit(launcher=link).returncode == 0
+    assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
 
 
 def test_reports_missing_tmux_with_an_actionable_message(tmp_path):
