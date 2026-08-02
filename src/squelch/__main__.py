@@ -111,6 +111,29 @@ def load_feeds(
     return feeds
 
 
+def picker_feeds(
+    config: Config,
+    *,
+    fetch: Callable[[str], list[Feed]] = fetch_feeds,
+    cache_dir: Path | None = None,
+) -> list[Feed]:
+    """The feed list for the `f` overlay.
+
+    Pressing `f` is an explicit request to look, so this refreshes rather
+    than serving the cache outright -- but the listing is refused roughly
+    three times in four, and a picker that usually reports "could not load
+    feeds" is useless. A stale list is a far better answer than an error.
+    """
+    try:
+        feeds = fetch(config.icao)
+    except Exception:
+        return read_cached_feeds(config.icao, directory=cache_dir) or []
+    if feeds:
+        write_cached_feeds(config.icao, feeds, directory=cache_dir)
+        return feeds
+    return read_cached_feeds(config.icao, directory=cache_dir) or []
+
+
 def build_sessions(
     feeds: list[Feed],
     config: Config,
@@ -184,7 +207,7 @@ def main(
     app = app_factory(
         config,
         sessions,
-        feed_loader=lambda: fetch_feeds(config.icao),
+        feed_loader=lambda: picker_feeds(config),
     )
     app.on_feed_selected = lambda feed: app.warn(feed_selection_hint(feed))
 
