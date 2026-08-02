@@ -1,0 +1,161 @@
+<!--
+  NOTE: this is a structurally faithful RECONSTRUCTION, not a raw byte
+  capture, of https://www.liveatc.net/search/?icao=kpdx.
+
+  `curl` cannot fetch this page (it sits behind a Cloudflare Managed
+  Challenge that requires JS execution), and the browser-automation tool
+  used to load the page in a real session blocked returning the full raw
+  HTML (a content filter rejects output resembling cookie/query-string
+  data, which this ad-heavy page is full of). So the markup below was
+  hand-built to mirror the real page's verified structure: each feed is a
+  `<table class="body">` block whose first <strong> is the feed name,
+  followed by "Feed Status:"/"UP"/"Listeners:"/"Archive Access:" rows (also
+  <strong>-wrapped) and then the /play/<ident>.pls link.
+
+  All 12 (ident, label) pairs below were verified directly against the live
+  DOM on 2026-08-02 and are real, not invented:
+    kpdx_app_124350   -> KPDX App/Dep (North)
+    kpdx_app_118100   -> KPDX App/Dep (South)
+    kpdx_app_final    -> KPDX Approach (Final) #1
+    kpdx3_app_final   -> KPDX Approach (Final) #2
+    kpdx3_atis        -> KPDX ATIS
+    kpdx3_del         -> KPDX Clearance Delivery
+    kpdx3_del_gnd     -> KPDX Del/Gnd
+    kpdx3_gnd         -> KPDX Ground
+    kpdx3_twr         -> KPDX Tower (Both)
+    kpdx3_twr_123775  -> KPDX Tower (Primary)
+    kpdx3_twr_118700  -> KPDX Tower (Rwy 10L/28R 118.7)
+    kpdx_zse          -> ZSE Seattle Center (PDX Area)
+
+  Do not treat this file as a raw capture when reusing or refreshing it.
+-->
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<title>Airport Detail: KPDX | LiveATC.net</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+</head>
+<body>
+<div class="col1">
+<!-- Column 1 start -->
+
+<!-- AirportSearch-728x90 -->
+
+<br>
+<br>
+<table class="body" border="0" rules="none" frame="box" style="background-color:#F8F9F9;">
+<tbody><tr><td><strong>ICAO:</strong> KPDX &nbsp; <strong>Airport:</strong> Portland International Airport &nbsp; <strong>Location:</strong> Portland, OR</td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX App/Dep (North)</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 4</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx_app_124350.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx_app_124350">KPDX App/Dep (North)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX App/Dep (South)</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 2</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx_app_118100.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx_app_118100">KPDX App/Dep (South)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Approach (Final) #1</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 1</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx_app_final.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx_app_final">KPDX Approach (Final) #1</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Approach (Final) #2</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 0</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_app_final.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_app_final">KPDX Approach (Final) #2</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX ATIS</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 3</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_atis.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_atis">KPDX ATIS</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Clearance Delivery</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 0</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_del.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_del">KPDX Clearance Delivery</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Del/Gnd</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 1</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_del_gnd.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_del_gnd">KPDX Del/Gnd</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Ground</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 2</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_gnd.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_gnd">KPDX Ground</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Tower (Both)</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 0</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_twr.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_twr">KPDX Tower (Both)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Tower (Primary)</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 3</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_twr_123775.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_twr_123775">KPDX Tower (Primary)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>KPDX Tower (Rwy 10L/28R 118.7)</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 1</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx3_twr_118700.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx3_twr_118700">KPDX Tower (Rwy 10L/28R 118.7)</a></td>
+</tr></tbody></table>
+<br>
+
+<table class="body" border="0">
+<tbody><tr><td bgcolor="lightblue"><strong>ZSE Seattle Center (PDX Area)</strong></td>
+</tr><tr><td><strong>Feed Status:</strong> <font color="green"><strong>UP</strong></font>&nbsp;&nbsp; <strong>Listeners:</strong> 2</td>
+</tr><tr><td><a href="#"><img src="/img/headphones.gif" alt="">&nbsp;(in browser, HTML5)</a></td>
+</tr><tr><td><a href="/play/kpdx_zse.pls"><img src="/img/mp3.gif" alt="">&nbsp;(launches your MP3 player)</a></td>
+</tr><tr><td><strong>Archive Access:</strong> <a href="/archive.php?m=kpdx_zse">ZSE Seattle Center (PDX Area)</a></td>
+</tr></tbody></table>
+<br>
+
+</div>
+</body>
+</html>
