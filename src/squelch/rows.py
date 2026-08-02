@@ -138,7 +138,13 @@ def _fit(text: str, width: int) -> str:
 
 
 class FeedRow(Vertical):
-    """One feed: a name row and a meter row, ruled off from its neighbours."""
+    """One feed. Compact when muted, expanded when audible.
+
+    Expansion follows audibility rather than selection so the pane gives its
+    height to what you can actually hear -- and so the tall meter and its
+    redraw cost scale with the number of audible feeds, not the number of
+    feeds that exist.
+    """
 
     def __init__(self, session, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -146,16 +152,23 @@ class FeedRow(Vertical):
         self._history: deque[float] = deque(maxlen=METER_WIDTH)
         self._name_widget: Static | None = None
         self._meter_widget: Static | None = None
+        self._controls_widget: Static | None = None
+
+    @property
+    def expanded(self) -> bool:
+        return not self.session.muted
 
     def compose(self) -> ComposeResult:
         # markup=False: feed labels are arbitrary third-party text and must
         # never be parsed as Rich console markup.
-        yield Static(id=None, classes="feed-name", markup=False)
-        yield Static(id=None, classes="feed-meter", markup=False)
+        yield Static(classes="feed-name", markup=False)
+        yield Static(classes="feed-meter", markup=False)
+        yield Static(classes="feed-controls", markup=False)
 
     def on_mount(self) -> None:
         self._name_widget = self.query_one(".feed-name", Static)
         self._meter_widget = self.query_one(".feed-meter", Static)
+        self._controls_widget = self.query_one(".feed-controls", Static)
         self.refresh_all()
 
     def push_level(self, dbfs: float) -> None:
@@ -167,24 +180,47 @@ class FeedRow(Vertical):
         self.refresh_meter()
 
     def refresh_name(self) -> None:
-        if self._name_widget is None:
+        if self._name_widget is None or self._controls_widget is None:
             return
         session = self.session
-        self._name_widget.update(
-            compact_line(
-                session.name,
-                muted=session.muted,
-                ambient=bool(getattr(session, "ambient", False)),
-                state=session.state,
-            ),
-            layout=False,
-        )
+        expanded = self.expanded
+        self.set_class(expanded, "expanded")
+        self.set_class(not expanded, "compact")
         # Dimming is a class, not a colour written into the string: the
         # meter must keep its full contrast relationship while the whole row
         # reads as inactive.
         self.set_class(session.muted, "muted")
+        self.set_class(bool(getattr(session, "ambient", False)), "ambient")
+        self.set_class(bool(getattr(session, "soloed", False)), "soloed")
+
+        if expanded:
+            self._name_widget.update(
+                expanded_name_line(session.name, state=session.state),
+                layout=False,
+            )
+            self._controls_widget.update(
+                control_line(
+                    muted=session.muted,
+                    ambient=bool(getattr(session, "ambient", False)),
+                    soloed=bool(getattr(session, "soloed", False)),
+                    activity=getattr(session, "activity", None),
+                ),
+                layout=False,
+            )
+        else:
+            self._name_widget.update(
+                compact_line(
+                    session.name,
+                    muted=session.muted,
+                    ambient=bool(getattr(session, "ambient", False)),
+                    state=session.state,
+                ),
+                layout=False,
+            )
+        self._meter_widget.display = expanded
+        self._controls_widget.display = expanded
 
     def refresh_meter(self) -> None:
-        if self._meter_widget is None:
+        if self._meter_widget is None or not self.expanded:
             return
         self._meter_widget.update("\n".join(meter_rows(self._history)), layout=False)

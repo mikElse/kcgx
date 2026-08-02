@@ -12,9 +12,19 @@ Screen {
 }
 
 .feed {
-    height: 5;
     padding: 0 1;
     border-top: solid $primary;
+}
+
+/* Compact is one line plus its rule; expanded adds a three-row meter and a
+   control strip. Heights are fixed rather than auto so a row cannot change
+   height between a level update and a click. */
+.feed.compact {
+    height: 2;
+}
+
+.feed.expanded {
+    height: 6;
 }
 
 /* Muted feeds dim, but their meters keep running -- muting is an audio
@@ -33,6 +43,10 @@ Screen {
 
 .feed-meter {
     height: 3;
+}
+
+.feed-controls {
+    height: 1;
 }
 
 /* Takes no rows until something has actually been logged. With a dozen
