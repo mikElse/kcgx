@@ -95,3 +95,7 @@ FeedPicker > ListView {
 .feed.ambient .feed-controls {
     color: $secondary;
 }
+
+FeedPicker ListItem .picker-ident {
+    color: $text-muted;
+}

@@ -53,15 +53,6 @@ def safe_call(app: Any, func: Callable[..., None], *args: Any) -> None:
         pass
 
 
-def feed_selection_hint(feed: Feed) -> str:
-    """What to tell the user when they pick a feed from the overlay.
-
-    The picker lists the same feeds already on screen; selecting one is a
-    way to find its ident, not a way to change what is playing.
-    """
-    return f"{feed.ident} — already open; use [space] on its row to unmute"
-
-
 def _no_feeds(
     config: Config,
     warn: Callable[[str], None],
@@ -280,7 +271,6 @@ def main(
         sessions,
         feed_loader=lambda: picker_feeds(config),
     )
-    app.on_feed_selected = lambda feed: app.warn(feed_selection_hint(feed))
 
     def start_everything() -> None:
         for message in pending:
