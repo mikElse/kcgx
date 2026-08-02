@@ -152,3 +152,23 @@ def test_the_textual_background_matches_the_pane_fill():
     """squelch sitting beside the radar pane must not be a different shade."""
     theme = textual_theme("matrix")
     assert theme.background.lower() == "#001000"  # rgb(0,16,0)
+
+
+def test_every_theme_colour_is_one_textual_can_parse():
+    """Regression guard: Rich and Textual spell ANSI colours differently.
+
+    Rich says `bright_black`; Textual says `ansi_bright_black`. Handing a
+    palette stop straight to Theme raises ColorParseError for `color` and
+    `mono`, the two themes that use ANSI names on purpose -- and inside a
+    running app it surfaces as an unrelated ReprError from Textual's own
+    crash handler, which makes it very hard to read.
+    """
+    from textual.color import Color
+
+    for name in THEME_NAMES:
+        theme = textual_theme(name)
+        for role in ("primary", "secondary", "warning", "error", "success",
+                     "accent", "foreground", "background", "surface", "panel"):
+            value = getattr(theme, role)
+            if value is not None:
+                Color.parse(value)

@@ -22,6 +22,8 @@ from textual.worker import NoActiveWorker, get_current_worker
 from squelch.config import Config
 from squelch.feeds import Feed
 from squelch.activity import Resorter, rank
+from squelch.radar_theme import POLL_SECONDS, RadarTheme
+from squelch.themes import METER_PALETTES, TEXTUAL_THEME_PREFIX, textual_theme
 from squelch.solo import Solo
 from squelch.rows import (
     BLOCKS,
@@ -115,6 +117,7 @@ class SquelchApp(App):
         sessions: Sequence,
         *,
         feed_loader: Callable[[], list[Feed]] | None = None,
+        radar_theme: RadarTheme | None = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -124,6 +127,8 @@ class SquelchApp(App):
         self._solo = Solo()
         self._resorter = Resorter()
         self._resort_timer = None
+        self._radar_theme = radar_theme
+        self._theme_timer = None
         for session in self._sessions:
             session.soloed = False
         self._clock_text = datetime.now().strftime("%H:%M:%S")
@@ -162,6 +167,11 @@ class SquelchApp(App):
         self._resort_timer = self.set_interval(
             self.RESORT_INTERVAL, self._tick_resort
         )
+        for name in METER_PALETTES:
+            self.register_theme(textual_theme(name))
+        if self._radar_theme is not None:
+            self.apply_theme(self._radar_theme.initial())
+            self._theme_timer = self.set_interval(POLL_SECONDS, self._poll_theme)
         self.on_start()
 
     def on_unmount(self) -> None:
@@ -175,6 +185,9 @@ class SquelchApp(App):
         if self._resort_timer is not None:
             self._resort_timer.stop()
             self._resort_timer = None
+        if self._theme_timer is not None:
+            self._theme_timer.stop()
+            self._theme_timer = None
         self._header = self._footer = None
         self._messages = None
         self._feed_list = None
@@ -224,6 +237,35 @@ class SquelchApp(App):
             # Keep the selection on screen when it moves past the viewport --
             # the whole point of a scrollable stack.
             self._feed_list.scroll_to_widget(row, animate=False)
+
+    def apply_theme(self, name: str) -> None:
+        """Adopt one of adsb-tui's themes, repainting the meters with it."""
+        palette = METER_PALETTES.get(name)
+        if palette is None:
+            return
+        self.theme = f"{TEXTUAL_THEME_PREFIX}{name}"
+        for row in self._rows.values():
+            row.palette = palette
+            row.refresh_meter()
+
+    @work(thread=True, exclusive=True, group="theme")
+    def _poll_theme(self) -> None:
+        """Sample the radar pane off the event loop.
+
+        `capture-pane` is a subprocess. Called straight from the timer it
+        would block Textual's loop for its whole timeout -- and because the
+        audio threads reach the UI through call_from_thread, which waits on
+        that same loop, playback would stop too.
+        """
+        assert self._radar_theme is not None
+        name = self._radar_theme.poll()
+        if name is None:
+            return
+        try:
+            self.call_from_thread(self.apply_theme, name)
+        except Exception:
+            # The app quit while the capture was in flight.
+            pass
 
     def on_key(self, event) -> None:
         # A row that moves between the decision to press a key and the press

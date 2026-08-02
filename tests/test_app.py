@@ -645,3 +645,60 @@ async def test_offline_feeds_sink_to_the_bottom():
             app._tick_resort()
         await pilot.pause()
         assert app._sessions[-1] is original[0]
+
+
+# -- theme -----------------------------------------------------------------
+
+from squelch.themes import METER_PALETTES, TEXTUAL_THEME_PREFIX
+
+
+@pytest.mark.asyncio
+async def test_applying_a_theme_switches_the_textual_theme():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.apply_theme("matrix")
+        await pilot.pause()
+        assert app.theme == f"{TEXTUAL_THEME_PREFIX}matrix"
+
+
+@pytest.mark.asyncio
+async def test_applying_a_theme_repaints_every_meter():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.apply_theme("amber")
+        await pilot.pause()
+        for row in app.query(FeedRow):
+            assert row.palette is METER_PALETTES["amber"]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_theme_is_ignored():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.apply_theme("ocean")
+        await pilot.pause()
+        before = app.theme
+        app.apply_theme("chartreuse")
+        await pilot.pause()
+        assert app.theme == before
+
+
+@pytest.mark.asyncio
+async def test_the_pane_still_fits_48_columns_under_every_theme():
+    # Not `cell_length == 48`: render_strips clips every strip to the screen
+    # width, so that assertion only restates run_test(size=...). Overflow
+    # shows up in a widget's own size. See overflowing().
+    for name in METER_PALETTES:
+        app = make_app(6)
+        async with app.run_test(size=SIZE) as pilot:
+            app.apply_theme(name)
+            await pilot.pause()
+            assert overflowing(app) == [], name
+
+
+@pytest.mark.asyncio
+async def test_no_radar_theme_leaves_the_app_on_its_default():
+    """Standalone squelch must not require tmux to start."""
+    app = make_app(3)
+    async with app.run_test(size=SIZE):
+        assert app._radar_theme is None

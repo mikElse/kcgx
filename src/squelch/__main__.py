@@ -21,6 +21,7 @@ from squelch.feeds import (
     read_cached_feeds,
     write_cached_feeds,
 )
+from squelch.radar_theme import RadarTheme
 from squelch.session import FeedSession, SessionEvents
 
 FFMPEG_MISSING = (
@@ -271,6 +272,10 @@ def main(
         config,
         sessions,
         feed_loader=lambda: picker_feeds(config),
+        # Defaults to the real os.environ and subprocess.run, and does
+        # nothing at all when KCGX_RADAR_PANE is unset -- so this is safe
+        # outside the cockpit.
+        radar_theme=RadarTheme(),
     )
 
     def start_everything() -> None:
