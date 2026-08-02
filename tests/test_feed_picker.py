@@ -4,7 +4,7 @@ import pytest
 from textual.geometry import Size
 
 from squelch.__main__ import feed_selection_hint
-from squelch.app import SquelchApp
+from squelch.app import FeedPicker, SquelchApp
 from squelch.config import Config
 from squelch.feeds import Feed
 
@@ -211,6 +211,52 @@ async def test_pressing_f_does_not_block_the_event_loop():
             await pilot.pause()
             assert "Portland Ground" in "\n".join(rendered(app)[0]), (
                 "the picker must still open once the load completes"
+            )
+    finally:
+        gate.set()
+
+
+@pytest.mark.asyncio
+async def test_pressing_f_three_times_stacks_only_one_picker():
+    """Three quick presses of `f` against a slow loader must yield one picker.
+
+    Regression test: `exclusive=True, group="feeds"` marks superseded
+    workers cancelled, but Textual cannot interrupt a running thread --
+    each worker's thread body kept running regardless and marshalled its
+    own result back via `call_from_thread`, so three presses against a
+    slow feed fetch produced three stacked `FeedPicker` screens (three
+    escapes needed to get back to the main screen), not one. The loader
+    is gated on a `threading.Event` under this test's control -- never
+    `time.sleep()` -- with its own timeout so a regression fails the
+    assertion rather than hanging the suite.
+    """
+    gate = threading.Event()
+    calls: list[int] = []
+
+    def slow_loader():
+        calls.append(1)
+        gate.wait(timeout=2.0)
+        return FEEDS
+
+    app = SquelchApp(
+        Config(), feed_label="Portland Tower", frequency="118.10",
+        feed_loader=slow_loader,
+    )
+    try:
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.press("f")
+            await pilot.pause()
+            await pilot.press("f")
+            await pilot.pause()
+            await pilot.press("f")
+            await pilot.pause()
+            gate.set()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert len(calls) == 3, "all three presses must reach the loader"
+            pickers = [s for s in app.screen_stack if isinstance(s, FeedPicker)]
+            assert len(pickers) == 1, (
+                f"expected exactly one stacked picker, found {len(pickers)}"
             )
     finally:
         gate.set()
