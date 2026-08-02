@@ -43,6 +43,8 @@ def cockpit():
             "KCGX_ADSB_CMD": FAKE_ADSB,
             "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
         }
+        if size is None:  # exercise the real size-detection path
+            del env["KCGX_SIZE"]
         env.update({k: str(v) for k, v in overrides.items()})
         return subprocess.run(
             [str(LAUNCHER)], env=env, capture_output=True, text=True, timeout=30
@@ -58,6 +60,7 @@ def cockpit():
 
     run.tmux = tmux
     run.session = session
+    run.socket = socket
     yield run
 
     subprocess.run(
@@ -151,6 +154,80 @@ def test_session_config_keeps_dead_panes_visible(cockpit):
     assert result_setup.returncode == 0
     result = cockpit.tmux("show-options", "-g", "remain-on-exit")
     assert "on" in result.stdout, result.stdout
+
+
+def test_says_there_is_no_terminal_rather_than_inventing_a_width(cockpit):
+    """Regression: `tput cols` does not fail without a tty — it silently
+    returns terminfo's default (80 for xterm-256color), which looks like a
+    real measurement. That produced "terminal is 80 columns" for a user whose
+    window was 222 wide. Without a terminal there is also nothing to attach
+    to, so the honest answer is to say that.
+    """
+    result = cockpit(size=None)
+    assert result.returncode != 0
+    assert "80 columns" not in result.stderr, (
+        "reported a fabricated width instead of admitting there is no terminal: "
+        + result.stderr
+    )
+    assert "terminal" in result.stderr.lower()
+
+
+def test_accepts_a_real_wide_terminal(cockpit):
+    """The user's actual case: a 222x48 terminal must not be refused.
+
+    Runs the launcher under a genuine pty sized 222x48, so the size-detection
+    path is exercised for real rather than via KCGX_SIZE.
+    """
+    import fcntl
+    import struct
+    import termios
+
+    env = {
+        **os.environ,
+        "KCGX_SOCKET": cockpit.socket,
+        "KCGX_SESSION": cockpit.session,
+        "KCGX_DETACHED": "1",
+        "KCGX_ADSB_CMD": FAKE_ADSB,
+        "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "TERM": "xterm-256color",
+    }
+    env.pop("KCGX_SIZE", None)
+
+    # Size the pty BEFORE the child execs. Setting it afterwards races the
+    # child, which then reads an unset size and falls back to 80 — that would
+    # make this test pass for the wrong reason.
+    controller, follower = os.openpty()
+    fcntl.ioctl(follower, termios.TIOCSWINSZ, struct.pack("HHHH", 48, 222, 0, 0))
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child process
+        os.setsid()
+        fcntl.ioctl(follower, termios.TIOCSCTTY, 0)
+        for target in (0, 1, 2):
+            os.dup2(follower, target)
+        os.close(controller)
+        os.close(follower)
+        os.execve(str(LAUNCHER), [str(LAUNCHER)], env)
+    os.close(follower)
+    fd = controller
+
+    output = b""
+    try:
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            output += chunk
+    except OSError:
+        pass
+    _, status = os.waitpid(pid, 0)
+    text = output.decode(errors="replace")
+
+    assert os.waitstatus_to_exitcode(status) == 0, text
+    assert "80 columns" not in text
+    widths = {i: int(v) for i, v in pane_field(cockpit, "pane_width").items()}
+    assert widths[0] + widths[1] + 1 == 222, f"session not sized to the pty: {widths}"
+    assert widths[1] == 48
 
 
 def test_reports_missing_tmux_with_an_actionable_message(tmp_path):

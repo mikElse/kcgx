@@ -62,12 +62,25 @@ if tm has-session -t "=$SESSION" 2>/dev/null; then
     exec tm attach-session -t "=$SESSION"
 fi
 
+# Measure with stty, not tput. `tput cols` does not fail when it cannot see a
+# terminal — it silently returns terminfo's default (80 for xterm-256color),
+# which looks exactly like a real measurement. Worse, inside a command
+# substitution its stdout is a pipe, so it cannot ioctl the real terminal even
+# when there is one, and reports 80 for a 222-column window. `stty size` reads
+# the tty directly and fails loudly when there is none.
 if [ -n "${KCGX_SIZE:-}" ]; then
     cols="${KCGX_SIZE%%x*}"
     rows="${KCGX_SIZE##*x}"
+elif winsize="$(stty size 2>/dev/null </dev/tty)"; then
+    rows="${winsize%% *}"
+    cols="${winsize##* }"
+elif [ -n "${COLUMNS:-}" ] && [ -n "${LINES:-}" ]; then
+    cols="$COLUMNS"
+    rows="$LINES"
 else
-    cols="$(tput cols 2>/dev/null || echo 0)"
-    rows="$(tput lines 2>/dev/null || echo 0)"
+    die "not running in a terminal, so there is nothing to attach to." \
+        "Run kcgx from a terminal, or set KCGX_SIZE=WIDTHxHEIGHT to build a" \
+        "detached session."
 fi
 
 case "$cols$rows" in
