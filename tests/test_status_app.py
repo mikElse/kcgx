@@ -302,15 +302,29 @@ async def test_no_widget_is_wider_than_the_pane():
 
 
 def test_the_click_and_the_keybinding_run_the_same_popup():
-    """One spelling, or the hint text drifts from what the key does."""
+    """One spelling, or the hint text drifts from what the key does.
+
+    Token lists, not substrings. `token in bind` asked only whether each
+    character sequence appeared *somewhere* in the line, which every digit
+    and short flag does by accident: a 6x2 popup passed, because "6" and
+    "2" are inside "64" and "20", and so did running bare `kcgx` instead of
+    `kcgx go`, because "kcgx" is a prefix of it. Either one leaves the hint
+    reading "^b a" while the click does something else, or nothing usable
+    -- exactly what this test exists to rule out. shlex, not .split(), so
+    the quoted "kcgx go" stays one argument on both sides.
+    """
+    import shlex
     from pathlib import Path
 
     conf = (Path(__file__).resolve().parent.parent / "kcgx.tmux.conf").read_text()
     bind = next(
         line for line in conf.splitlines() if line.strip().startswith("bind a ")
     )
-    for token in PICKER_POPUP:
-        assert token in bind, f"{token!r} missing from: {bind}"
+    tokens = shlex.split(bind)
+    assert tokens[:2] == ["bind", "a"], bind
+    assert tokens[2:] == list(PICKER_POPUP), (
+        f"kcgx.tmux.conf runs {tokens[2:]}, the click runs {list(PICKER_POPUP)}"
+    )
 
 
 def test_open_picker_shells_out_to_tmux():
