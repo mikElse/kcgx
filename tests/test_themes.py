@@ -89,3 +89,66 @@ def test_all_six_adsb_tui_themes_are_covered():
         "mono",
     }
     assert set(THEME_BACKGROUNDS) == set(THEME_NAMES)
+
+
+from squelch.themes import METER_PALETTES, TEXTUAL_THEME_PREFIX, textual_theme
+
+
+def test_every_theme_has_a_meter_palette():
+    assert set(METER_PALETTES) == set(THEME_NAMES)
+
+
+def test_every_palette_defines_all_four_stops():
+    for name, palette in METER_PALETTES.items():
+        for stop in ("dim", "text", "accent", "peak"):
+            assert getattr(palette, stop), f"{name}.{stop} is empty"
+
+
+def test_palette_stops_are_distinct_within_a_theme():
+    """A gradient whose stops collide is not a gradient."""
+    for name, palette in METER_PALETTES.items():
+        stops = [palette.dim, palette.text, palette.accent, palette.peak]
+        assert len(set(stops)) == 4, f"{name} has duplicate stops"
+
+
+def test_color_and_mono_use_ansi_names_not_hex():
+    """Neither emits truecolor foregrounds; they draw with the terminal's
+    own palette, so matching them means doing the same."""
+    for name in ("color", "mono"):
+        assert not METER_PALETTES[name].accent.startswith("#")
+
+
+def test_the_other_themes_use_harvested_hex():
+    for name in ("default", "amber", "ocean", "matrix"):
+        assert METER_PALETTES[name].accent.startswith("#")
+
+
+def test_every_palette_stop_is_a_style_rich_can_resolve():
+    """The meter is coloured per cell through rich.Text, which resolves
+    style strings itself. A stop Rich cannot parse raises at render time."""
+    from rich.style import Style
+
+    for name, palette in METER_PALETTES.items():
+        for stop in ("dim", "text", "accent", "peak"):
+            Style.parse(getattr(palette, stop))
+
+
+def test_textual_themes_are_built_for_every_name():
+    for name in THEME_NAMES:
+        theme = textual_theme(name)
+        assert theme.name == f"{TEXTUAL_THEME_PREFIX}{name}"
+        assert theme.background
+        assert theme.primary
+
+
+def test_an_unknown_theme_name_raises():
+    import pytest
+
+    with pytest.raises(KeyError):
+        textual_theme("chartreuse")
+
+
+def test_the_textual_background_matches_the_pane_fill():
+    """squelch sitting beside the radar pane must not be a different shade."""
+    theme = textual_theme("matrix")
+    assert theme.background.lower() == "#001000"  # rgb(0,16,0)
