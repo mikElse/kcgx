@@ -194,6 +194,28 @@ async def test_reconnecting_state_is_visible():
 
 
 @pytest.mark.asyncio
+async def test_offline_state_does_not_claim_live():
+    """The header must not keep reading "● LIVE" once nothing is playing.
+
+    Regression guard for Task 9's feed-resolution-failure path: when
+    `resolve_stream()` fails, `__main__.py` calls `set_state("offline")` so
+    the header shows the truth alongside the warning already printed to
+    the transcript. Before this, any unrecognized state string silently
+    fell back to "LIVE" -- the app would look alive while dead, exactly
+    the failure mode error handling exists to prevent.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        app.set_state("offline")
+        await pilot.pause()
+        text, strips = rendered(app)
+        joined = "\n".join(text)
+        assert "OFFLINE" in joined
+        assert "LIVE" not in joined
+        assert all(s.cell_length == 48 for s in strips)
+
+
+@pytest.mark.asyncio
 async def test_header_never_exceeds_48_cells_for_pathological_state():
     """_refresh_header's 48-cell invariant must hold structurally, not just
     for the two state strings ("LIVE", "RECONNECTING") that the app itself
@@ -206,55 +228,133 @@ async def test_header_never_exceeds_48_cells_for_pathological_state():
     layout's core invariant. There is no public way to make set_state()
     produce such a string today, so this reaches into the private `_state`
     attribute directly to exercise the boundary the fix targets.
+
+    This asserts on the literal string _refresh_header passes to
+    `Static.update()`, captured by wrapping the header widget's own
+    `update` method, rather than on the compositor-rendered strip. An
+    earlier version of this test asserted `strips[0].cell_length == 48`
+    and passed even with the fix fully reverted: Textual's test harness
+    always renders to the fixed `Size(48, 42)` requested by `run_test`, so
+    the compositor pads/clips whatever `_refresh_header` produced back to
+    exactly 48 cells regardless of whether the composition itself was
+    correct -- with the fix reverted, the actual (unclipped) string was
+    `' ●' + 'X' * 199` (201 cells), silently truncated by the framework
+    rather than composed correctly by us. Capturing the raw argument to
+    `update()` is the only way to see what `_refresh_header` itself
+    computed.
     """
     app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
     async with app.run_test(size=SIZE) as pilot:
+        header = app.query_one("#header", Static)
+        composed: list[str] = []
+        original_update = header.update
+
+        def capture(content, **kwargs):
+            composed.append(content)
+            return original_update(content, **kwargs)
+
+        header.update = capture
+
         app._state = "X" * 200
         app._refresh_header()
         await pilot.pause()
-        _text, strips = rendered(app)
-        assert strips[0].cell_length == 48
+
+        assert composed, "_refresh_header must call Static.update()"
+        assert len(composed[-1]) == 48, (
+            f"_refresh_header composed a {len(composed[-1])}-cell string "
+            f"({composed[-1]!r}), not 48 -- the compositor's own fixed-size "
+            "rendering cannot be trusted to catch this; the composed "
+            "string itself must be exactly 48 cells"
+        )
 
 
 @pytest.mark.asyncio
-async def test_warn_message_keeps_indent_on_continuation_lines():
-    """warn() (and mark_pending/mark_dropped, same code path) must get the
-    same indent treatment as a transcript block's text -- see add_block's
-    "block-text" comment above. Regression test: these three used to mount
-    a bare `classes="block"` Static with no `block-text` padding-left, so a
-    message long enough to wrap read flush-left and ragged, unlike every
-    transcript block around it. This matters concretely for Task 9's warn
-    messages, e.g. "could not resolve feed kpdx3_twr".
+async def test_warn_message_matches_transcript_block_indent():
+    """warn() (and mark_pending/mark_dropped, same code path) must use
+    *the same* left-indent as a transcript block's text -- see add_block's
+    "block-text" comment above -- not merely be self-consistent at some
+    indent of its own.
+
+    Regression test: these three used to mount a bare `classes="block"`
+    Static with no `block-text` padding-left, so a message long enough to
+    wrap read flush-left and ragged, unlike every transcript block around
+    it. This matters concretely for Task 9's warn messages, e.g. "could
+    not resolve feed kpdx3_twr".
+
+    An earlier version of this test only asserted that warn()'s own
+    wrapped lines shared one indent with each other, and passed even with
+    `block-text` reverted off warn() -- an indent of 1 (transcript padding
+    only) is just as internally consistent as an indent of 3 (transcript
+    padding + block-text's padding-left), so self-consistency alone can't
+    tell the two apart. This instead measures add_block's real wrapped
+    body indent independently, in a separate app instance, and asserts
+    warn() reproduces that exact number, so the two indents cannot
+    silently drift apart.
     """
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        app.warn(
+    block_app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with block_app.run_test(size=SIZE) as pilot:
+        block_app.add_block(
+            Block(
+                started_at=datetime(2026, 8, 2, 14, 31, 42),
+                text=(
+                    "Alaska four twelve heavy Portland tower wind two eight "
+                    "zero at one two runway two eight left cleared to land "
+                    "traffic is a Dash Eight on a three mile final"
+                ),
+            )
+        )
+        await pilot.pause()
+        text, strips = rendered(block_app)
+        assert all(s.cell_length == 48 for s in strips)
+
+        stamp_idx = next(i for i, line in enumerate(text) if "14:31:42" in line)
+        block_body = []
+        for line in text[stamp_idx + 1 :]:
+            if not line.strip():
+                break
+            block_body.append(line)
+        assert len(block_body) >= 3, (
+            "test text must be long enough to wrap onto several "
+            "continuation lines"
+        )
+        block_indents = [len(line) - len(line.lstrip(" ")) for line in block_body]
+        assert len(set(block_indents)) == 1, (
+            "add_block's own wrapped lines must share one indent -- if "
+            f"not, this test's baseline is broken: {block_indents!r}"
+        )
+        block_indent = block_indents[0]
+
+    warn_app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with warn_app.run_test(size=SIZE) as pilot:
+        warn_app.warn(
             "could not resolve feed kpdx3_twr because the upstream "
             "playlist request timed out after fifteen seconds and no "
             "cached stream URL was available to fall back on"
         )
         await pilot.pause()
-        text, strips = rendered(app)
+        text, strips = rendered(warn_app)
         assert all(s.cell_length == 48 for s in strips)
 
         stamp_idx = next(i for i, line in enumerate(text) if "⚠" in line)
-        body_lines = [text[stamp_idx]]
+        warn_body = [text[stamp_idx]]
         for line in text[stamp_idx + 1 :]:
             if not line.strip():
                 break
-            body_lines.append(line)
-        assert len(body_lines) >= 2, (
+            warn_body.append(line)
+        assert len(warn_body) >= 2, (
             "test message must be long enough to actually wrap onto a "
             "continuation line"
         )
-        indents = [len(line) - len(line.lstrip(" ")) for line in body_lines]
-        assert all(indent > 0 for indent in indents), (
-            "every wrapped line of a warn message -- including the first --"
-            f" must be indented, not flush at the left margin: {body_lines!r}"
-        )
-        assert len(set(indents)) == 1, (
+        warn_indents = [len(line) - len(line.lstrip(" ")) for line in warn_body]
+        assert len(set(warn_indents)) == 1, (
             "all wrapped lines of one warn message must share the same "
-            f"indent, got {indents!r} for lines {body_lines!r}"
+            f"indent, got {warn_indents!r} for lines {warn_body!r}"
+        )
+        assert warn_indents[0] == block_indent, (
+            f"warn()'s wrapped lines are indented {warn_indents[0]} cells, "
+            f"but transcript block bodies are indented {block_indent} "
+            "cells -- warn() must match add_block's indent exactly, not "
+            "merely be self-consistent at some indent of its own"
         )
 
 

@@ -73,14 +73,46 @@ def main(argv: list[str] | None = None) -> int:
         on_dropped=lambda: app.call_from_thread(app.mark_dropped),
     )
 
+    def _safe_call(func: Callable[..., None], *call_args) -> None:
+        """Marshal onto the UI thread without ever raising back onto ours.
+
+        Unlike the five `Events` callbacks above -- which route through
+        `Pipeline._emit`'s own exception-swallowing wrapper -- calls made
+        directly from this module (`warn()`, and the offline-state signal
+        below) have no such guard. If the app has already quit by the time
+        one of these fires (e.g. `try_start`'s `on_error`, or feed
+        resolution failing right as the user hits `q`), `call_from_thread`
+        raises `RuntimeError("App is not running")`. That's harmless --
+        there is nobody left to warn -- but left uncaught it would kill
+        this background thread with a stray traceback: the same hazard
+        class hardened against in the Pipeline itself (Task 6).
+        """
+        try:
+            app.call_from_thread(func, *call_args)
+        except Exception:
+            pass
+
     def warn(message: str) -> None:
-        app.call_from_thread(app.warn, message)
+        _safe_call(app.warn, message)
 
     def run_pipeline() -> None:
+        # The model load below is synchronous and blocking: nothing else in
+        # this function -- including player.start(), so audio itself --
+        # runs until it returns. On a first run that's a ~1.5 GB download
+        # plus load, i.e. several minutes of an apparently dead pane if the
+        # user isn't told why. Surfacing that expectation, and its outcome,
+        # is deliberately the only change made here: backgrounding the load
+        # and hot-swapping the transcriber once ready would be the better
+        # long-term fix, but is more machinery than this final task should
+        # introduce (see README's "Known limitations").
+        warn(
+            "loading transcription model — first run downloads roughly "
+            "1.5 GB and can take several minutes"
+        )
         active = transcriber
-        if not try_start(
-            transcriber.load, warn, "model unavailable — audio only"
-        ):
+        if try_start(transcriber.load, warn, "model unavailable — audio only"):
+            warn("transcription model ready")
+        else:
             active = _NullTranscriber()
         try_start(player.start, warn, "no audio device — transcribing only")
 
@@ -88,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
             url = resolve_stream(config.feed)
         except Exception:
             warn(f"could not resolve feed {config.feed}")
+            # The header must not keep claiming "● LIVE" once nothing is
+            # actually playing -- see set_state's "offline" entry.
+            _safe_call(app.set_state, "offline")
             return
 
         Pipeline(
