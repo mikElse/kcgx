@@ -152,6 +152,19 @@ def test_an_unwritable_out_exits_2_not_1(tmp_path, capsys):
     assert "Traceback" not in err
 
 
+def test_a_failed_record_write_does_not_remember_the_airport(tmp_path):
+    """Exit 2 says nothing happened; the state file must agree."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("i am a file, not a directory")
+    remembered = []
+    code = run(
+        ["pick", "KORD", "--out", str(blocker / "record")],
+        state_writer=remembered.append,
+    )
+    assert code == 2
+    assert remembered == [], "persisted an airport it then reported as a failure"
+
+
 def test_a_successful_pick_is_remembered(tmp_path):
     remembered = []
     run(

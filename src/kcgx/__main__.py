@@ -98,8 +98,13 @@ def main(
     if chosen is None:
         return 1
 
-    state_writer(chosen.icao)
-    return _write_record(format_record(chosen), args.out)
+    # Report first, remember second: an unwritable --out must not leave a
+    # persisted ICAO behind that the caller was just told nothing happened
+    # to. Remembering is a convenience; delivering the record is the job.
+    code = _write_record(format_record(chosen), args.out)
+    if code == 0:
+        state_writer(chosen.icao)
+    return code
 
 
 if __name__ == "__main__":
