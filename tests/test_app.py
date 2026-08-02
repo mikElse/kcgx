@@ -194,6 +194,71 @@ async def test_reconnecting_state_is_visible():
 
 
 @pytest.mark.asyncio
+async def test_header_never_exceeds_48_cells_for_pathological_state():
+    """_refresh_header's 48-cell invariant must hold structurally, not just
+    for the two state strings ("LIVE", "RECONNECTING") that the app itself
+    ever produces via set_state().
+
+    Regression test: at the boundary where `right` (the state glyph plus
+    text) reaches or exceeds 48 characters, `content_room` collapses to 0
+    but the old code still emitted `" " + right` unconditionally -- 49+
+    cells for a `right` that is itself >=48 chars, silently violating the
+    layout's core invariant. There is no public way to make set_state()
+    produce such a string today, so this reaches into the private `_state`
+    attribute directly to exercise the boundary the fix targets.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        app._state = "X" * 200
+        app._refresh_header()
+        await pilot.pause()
+        _text, strips = rendered(app)
+        assert strips[0].cell_length == 48
+
+
+@pytest.mark.asyncio
+async def test_warn_message_keeps_indent_on_continuation_lines():
+    """warn() (and mark_pending/mark_dropped, same code path) must get the
+    same indent treatment as a transcript block's text -- see add_block's
+    "block-text" comment above. Regression test: these three used to mount
+    a bare `classes="block"` Static with no `block-text` padding-left, so a
+    message long enough to wrap read flush-left and ragged, unlike every
+    transcript block around it. This matters concretely for Task 9's warn
+    messages, e.g. "could not resolve feed kpdx3_twr".
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        app.warn(
+            "could not resolve feed kpdx3_twr because the upstream "
+            "playlist request timed out after fifteen seconds and no "
+            "cached stream URL was available to fall back on"
+        )
+        await pilot.pause()
+        text, strips = rendered(app)
+        assert all(s.cell_length == 48 for s in strips)
+
+        stamp_idx = next(i for i, line in enumerate(text) if "⚠" in line)
+        body_lines = [text[stamp_idx]]
+        for line in text[stamp_idx + 1 :]:
+            if not line.strip():
+                break
+            body_lines.append(line)
+        assert len(body_lines) >= 2, (
+            "test message must be long enough to actually wrap onto a "
+            "continuation line"
+        )
+        indents = [len(line) - len(line.lstrip(" ")) for line in body_lines]
+        assert all(indent > 0 for indent in indents), (
+            "every wrapped line of a warn message -- including the first --"
+            f" must be indented, not flush at the left margin: {body_lines!r}"
+        )
+        assert len(set(indents)) == 1, (
+            "all wrapped lines of one warn message must share the same "
+            f"indent, got {indents!r} for lines {body_lines!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_mute_toggles_footer_hint():
     app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
     async with app.run_test(size=SIZE) as pilot:
