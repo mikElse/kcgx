@@ -221,3 +221,71 @@ def test_silence_stays_silent():
     out = np.zeros(BLOCK, dtype=np.float32)
     comp.process(np.zeros(BLOCK, dtype=np.float32), out)
     assert not out.any()
+
+
+from squelch.dsp import pan_gains, pan_positions
+
+
+def test_no_ambient_feeds_means_no_positions():
+    assert pan_positions(0) == []
+
+
+def test_a_single_feed_sits_in_the_centre():
+    """Guards the division by floor(N/2), which is zero here."""
+    assert pan_positions(1) == [0.0]
+
+
+def test_two_feeds_go_hard_to_each_side():
+    assert pan_positions(2) == [-0.5, 0.5]
+
+
+def test_four_feeds_reproduce_the_specified_spread():
+    """50%L, 25%L, 25%R, 50%R."""
+    assert pan_positions(4) == [-0.5, -0.25, 0.25, 0.5]
+
+
+def test_an_odd_count_puts_one_feed_in_the_centre():
+    assert pan_positions(3) == [-0.5, 0.0, 0.5]
+    assert pan_positions(5) == [-0.5, -0.25, 0.0, 0.25, 0.5]
+
+
+def test_six_feeds_spread_evenly():
+    positions = pan_positions(6)
+    assert positions[0] == -0.5 and positions[-1] == 0.5
+    assert len(positions) == 6
+    assert positions == sorted(positions)
+
+
+def test_positions_never_exceed_half():
+    for n in range(1, 13):
+        assert all(-0.5 <= p <= 0.5 for p in pan_positions(n))
+
+
+def test_positions_are_symmetric():
+    for n in range(1, 13):
+        positions = pan_positions(n)
+        assert positions == [-p for p in reversed(positions)]
+
+
+def test_panning_is_equal_power():
+    for position in (-0.5, -0.25, 0.25, 0.5):
+        left, right = pan_gains(position)
+        assert left**2 + right**2 == pytest.approx(1.0, abs=1e-6)
+
+
+def test_hard_left_favours_the_left():
+    left, right = pan_gains(-0.5)
+    assert left > right
+
+
+def test_hard_right_favours_the_right():
+    left, right = pan_gains(0.5)
+    assert right > left
+
+
+def test_the_centre_is_inverted_and_attenuated():
+    left, right = pan_gains(0.0)
+    assert left < 0 and right < 0, "phase inverted"
+    assert left == pytest.approx(right)
+    magnitude = math.sqrt(left**2 + right**2)
+    assert 20 * math.log10(magnitude) == pytest.approx(-6.0, abs=0.01)
