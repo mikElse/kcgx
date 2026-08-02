@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from kcgx.airports import DATA_PATH, Airport, find, load_airports
+from kcgx.airports import DATA_PATH, Airport, find, load_airports, normalize, search, squash
 
 
 def test_the_committed_dataset_is_present_and_substantial():
@@ -66,3 +66,93 @@ def test_where_survives_a_missing_city():
     """125 rows in the dataset have no municipality."""
     a = Airport("XXXX", "", "Somewhere Field", "", "", "GB", 0.0, 0.0, "medium")
     assert a.where == "GB"
+
+
+def test_normalize_folds_accents_dashes_and_case():
+    assert normalize("Seattle–Tacoma International") == "seattle tacoma international"
+    assert normalize("Francisco Sá Carneiro") == "francisco sa carneiro"
+    assert normalize("Chicago O'Hare") == "chicago o hare"
+    assert normalize("   KPDX  ") == "kpdx"
+
+
+def test_squash_removes_the_separators_normalize_leaves():
+    assert squash("Chicago O'Hare") == "chicagoohare"
+    assert squash("Seattle–Tacoma") == "seattletacoma"
+
+
+def test_an_exact_icao_always_ranks_first(airports):
+    assert search("KORD", airports)[0].icao == "KORD"
+    assert search("kord", airports)[0].icao == "KORD"
+
+
+def test_an_exact_iata_ranks_first(airports):
+    assert search("PDX", airports)[0].icao == "KPDX"
+
+
+def test_a_prefix_matches_before_a_name_match(airports):
+    results = search("KPD", airports)
+    assert results[0].icao.startswith("KPD")
+
+
+def test_a_city_name_finds_the_airport(airports):
+    icaos = [a.icao for a in search("portland", airports)]
+    assert "KPDX" in icaos
+    assert "KPWM" in icaos, "Portland, Maine is a real answer to 'portland'"
+
+
+def test_multiple_tokens_are_anded(airports):
+    """'portland or' should separate Oregon from Maine."""
+    icaos = [a.icao for a in search("portland or", airports)]
+    assert "KPDX" in icaos
+    assert "KPWM" not in icaos
+
+
+def test_a_short_token_matches_a_word_not_a_fragment(airports):
+    """The trap under the previous test.
+
+    'or' is a substring of 'portland', so plain substring matching lets
+    Portland, Maine satisfy the token 'or' and the AND above becomes
+    meaningless. Tokens must match the *start of a word*.
+    """
+    icaos = [a.icao for a in search("or", airports)]
+    assert "KPWM" not in icaos, "'or' matched inside the word 'Portland'"
+    assert "KPDX" in icaos, "'or' should still match the region OR"
+
+
+def test_a_dash_in_the_query_matches_an_en_dash_in_the_data(airports):
+    assert "KSEA" in [a.icao for a in search("seattle-tacoma", airports)]
+
+
+def test_a_squashed_query_matches_a_separated_name(airports):
+    """Nobody types the space in O'Hare."""
+    assert "KORD" in [a.icao for a in search("ohare", airports)]
+
+
+def test_an_accented_name_is_reachable_without_the_accent(airports):
+    assert "LPPR" in [a.icao for a in search("sa carneiro", airports)]
+
+
+def test_large_airports_outrank_medium_ones_on_an_equal_match():
+    fixture = [
+        Airport("XMED", "", "Springfield Regional", "Springfield", "XX", "US",
+                0.0, 0.0, "medium"),
+        Airport("XBIG", "", "Springfield International", "Springfield", "XX", "US",
+                0.0, 0.0, "large"),
+    ]
+    assert [a.icao for a in search("springfield", fixture)] == ["XBIG", "XMED"]
+
+
+def test_no_match_returns_empty(airports):
+    assert search("qqqqzzzz", airports) == []
+
+
+def test_an_empty_query_lists_everything_large_first(airports):
+    results = search("", airports, limit=10)
+    assert len(results) == 10
+    assert all(a.size == "large" for a in results), (
+        "an empty picker should open on somewhere worth looking at"
+    )
+
+
+def test_limit_is_respected(airports):
+    assert len(search("a", airports, limit=5)) == 5
