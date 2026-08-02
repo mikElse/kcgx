@@ -549,6 +549,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
+    { name = "numpy" },
     { name = "sounddevice" },
     { name = "textual" },
     { name = "webrtcvad-wheels" },
@@ -563,6 +564,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.1" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "sounddevice", specifier = ">=0.5.5" },
     { name = "textual", specifier = ">=8.2.8" },
     { name = "webrtcvad-wheels", specifier = ">=2.0.14" },
