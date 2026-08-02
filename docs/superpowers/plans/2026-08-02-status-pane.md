@@ -36,6 +36,22 @@ bash, tmux 3.7b, uv / `uv_build`.
   restore with `git checkout --`, confirm `git diff` empty. Never document a
   transcript you have not literally just observed. Nine tests on the previous
   branch turned out to pass with the behaviour they named removed.
+- **Purge bytecode around every break and every restore:**
+  `find . -name __pycache__ -not -path './.venv/*' -exec rm -rf {} +`
+
+  Python invalidates a `.pyc` by comparing **mtime and size**. A mutation
+  that keeps the file the same size, applied within the same second, leaves
+  the cached bytecode valid — so `uv run` keeps executing the *old* code
+  while `git diff` reports the tree clean. Several breaks this project
+  prescribes are same-size by nature (`padding: 1`→`0`, `-w 64`→`-w 80`,
+  `%H%M`→`%H:%M`). A reviewer lost three live captures to this before
+  spotting it.
+
+  If a break does not produce the failure you predicted, purge and re-run
+  before concluding anything. The error direction is benign but misleading:
+  it makes a *sound* test look vacuous. Some of this project's "vacuous
+  test" diagnoses may have been this instead, which makes that count an
+  upper bound rather than a fact.
 - **No test may write to `~/.local/state/kcgx/` or `~/.cache/squelch/`.**
   `tests/conftest.py` has an autouse backstop; do not rely on it alone.
 - **The repo owner may have a live cockpit running.** Never run bare `kcgx`,
