@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from kcgx.airports import DATA_PATH, Airport, find, load_airports, normalize, search, squash
+from kcgx.airports import DATA_PATH, Airport, find, load_airports, normalize, search
 
 
 def test_the_committed_dataset_is_present_and_substantial():
@@ -73,11 +73,6 @@ def test_normalize_folds_accents_dashes_and_case():
     assert normalize("Francisco Sá Carneiro") == "francisco sa carneiro"
     assert normalize("Chicago O'Hare") == "chicago o hare"
     assert normalize("   KPDX  ") == "kpdx"
-
-
-def test_squash_removes_the_separators_normalize_leaves():
-    assert squash("Chicago O'Hare") == "chicagoohare"
-    assert squash("Seattle–Tacoma") == "seattletacoma"
 
 
 def test_an_exact_icao_always_ranks_first(airports):

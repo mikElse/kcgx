@@ -91,10 +91,6 @@ def normalize(text: str) -> str:
     return " ".join(spaced.split())
 
 
-def squash(text: str) -> str:
-    return normalize(text).replace(" ", "")
-
-
 # Below this length, a token must match the start of a word. "or" is a
 # substring of "portland", so allowing short fragments to match anywhere
 # would let Portland, Maine answer the query "portland or" -- which makes
