@@ -18,7 +18,7 @@ ORD = Airport("KORD", "ORD", "Chicago O'Hare International Airport", "Chicago",
 AIRPORTS = [PDX, ORD]
 
 
-def run(argv, *, picker=None, state_writer=None, **kwargs):
+def run(argv, *, picker=None, state_writer=None, airports_loader=None, **kwargs):
     """Never let a test reach the real write_airport: default state_writer
     to a no-op unless a test explicitly wants to observe it. A test that
     monkeypatches kcgx.__main__.write_airport instead of going through this
@@ -27,11 +27,67 @@ def run(argv, *, picker=None, state_writer=None, **kwargs):
     convention callers have to remember."""
     return main(
         argv,
-        airports_loader=lambda: AIRPORTS,
+        airports_loader=airports_loader or (lambda: AIRPORTS),
         picker=picker or (lambda airports, initial="": None),
         state_writer=state_writer or (lambda icao: None),
         **kwargs,
     )
+
+
+# -- unexpected failures ----------------------------------------------------
+
+
+def test_an_unexpected_exception_exits_2_not_1(capsys):
+    """Python's default exit code for an unhandled exception is 1 -- the code
+    this CLI's contract reserves for "the user declined". bin/kcgx reads 1 as
+    a cancel and exits 0 in silence, so a crash anywhere in here would leave
+    `kcgx go portland` printing nothing, changing nothing, and reporting
+    success. That is exactly the failure
+    test_go_reports_a_failed_search_instead_of_calling_it_a_cancel exists to
+    prevent, reached by a route that test cannot see.
+    """
+    def boom():
+        raise RuntimeError("the dataset caught fire")
+
+    assert run(["pick", "portland"], airports_loader=boom) == 2
+
+    err = capsys.readouterr().err
+    assert "the dataset caught fire" in err, "a silent failure reads as a cancel"
+    assert "RuntimeError" in err, "name the failure, or it cannot be diagnosed"
+
+
+def test_an_unexpected_exception_does_not_surface_as_a_traceback(capsys):
+    """The popup is 20 rows and disappears when the command exits; a
+    traceback there is unreadable. Type and message are what survive."""
+    def boom():
+        raise ValueError("nope")
+
+    assert run(["resolve"], airports_loader=boom) == 2
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_argparse_still_gets_to_exit_on_its_own_terms(capsys):
+    """`--help` and a bad mode raise SystemExit. Swallowing those would turn
+    the usage text into "ValueError: 0"."""
+    import pytest
+
+    with pytest.raises(SystemExit) as exit_info:
+        run(["--help"])
+    assert exit_info.value.code == 0
+
+    with pytest.raises(SystemExit) as exit_info:
+        run(["frobnicate"])
+    assert exit_info.value.code == 2
+
+
+def test_an_interrupt_is_a_decline_not_a_crash(capsys):
+    """Ctrl-C is the user saying no. Exit 1 is what says that; the default
+    KeyboardInterrupt handling would say it with a traceback and exit 130."""
+    def boom():
+        raise KeyboardInterrupt
+
+    assert run(["pick"], airports_loader=boom) == 1
+    assert capsys.readouterr().err == ""
 
 
 # -- the state_writer seam --------------------------------------------------
