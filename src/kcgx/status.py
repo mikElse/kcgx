@@ -120,6 +120,18 @@ def open_picker(run: Callable[..., object] = subprocess.run) -> None:
 
 
 class StatusPane(App[None]):
+    """The four-row pane itself.
+
+    `resolver` must accept a `known` keyword -- tick() always passes one,
+    because the pane owns the dataset the resolver validates against (see
+    _known). A zero-argument resolver raises TypeError on every tick,
+    including on_mount's first one, so line 1 is never painted at all and
+    the pane shows a permanently blank airport line rather than a stale
+    one. The guard in tick() catches it, by design: its whole job is that
+    this pane never dies. Only the tests pass anything but the default
+    here, so the contract is documented rather than enforced.
+    """
+
     CSS = """
     Screen { background: $surface; }
     #body { padding: 1; }
