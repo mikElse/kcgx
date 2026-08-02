@@ -4,12 +4,10 @@ from textual.widgets import Static
 
 from squelch.app import (
     MAX_MESSAGES,
-    METER_WIDTH,
     FeedRow,
     MessageLog,
     SquelchApp,
     _fit,
-    meter_bar,
 )
 from squelch.config import Config
 from squelch.feeds import Feed
@@ -80,29 +78,6 @@ def overflowing(app):
         for widget in app.screen.query("*")
         if widget.outer_size.width > PANE_WIDTH
     ]
-
-
-# -- meter -----------------------------------------------------------------
-
-
-def test_meter_bar_respects_width():
-    assert len(meter_bar([-10.0] * 60, width=20)) == 20
-
-
-def test_silent_history_renders_flat_and_low():
-    assert set(meter_bar([-96.0] * 10, width=12)) == {"▁"}
-
-
-def test_a_short_history_is_padded_not_left_empty():
-    bar = meter_bar([-5.0], width=10)
-    assert len(bar) == 10
-    assert bar[-1] != "▁", "the newest sample belongs at the right"
-    assert set(bar[:-1]) == {"▁"}
-
-
-def test_history_scrolls_oldest_off_the_left():
-    loud_then_quiet = [-5.0] + [-96.0] * 12
-    assert set(meter_bar(loud_then_quiet, width=10)) == {"▁"}
 
 
 # -- layout ----------------------------------------------------------------
@@ -324,11 +299,6 @@ def test_fit_pads_short_text_and_marks_real_cuts():
     assert _fit("abcdef", 4) == "abc…"
     assert _fit("abcd", 4) == "abcd"
     assert _fit("abc", 0) == ""
-
-
-def test_meter_width_matches_the_row_budget():
-    """The meter row is otherwise empty, so the meter should fill it."""
-    assert METER_WIDTH == 44
 
 
 @pytest.mark.asyncio

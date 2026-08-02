@@ -22,9 +22,13 @@ ROW_WIDTH = 46
 # Name row: marker + space + name + space + ident + space + dot.
 NAME_WIDTH = 24
 IDENT_WIDTH = 16
-# Meter row is otherwise empty, so the meter gets nearly the whole width --
-# roughly double the history the single-feed layout could show.
-METER_WIDTH = 44
+METER_ROWS = 3
+# One glyph per row of vertical resolution, so a sample spans 3 x 8 steps.
+# At a single row a colour gradient has too few cells to read as a gradient,
+# which is the whole reason the expanded meter is worth its height.
+METER_STEPS = METER_ROWS * len(BLOCKS)  # 24
+# The meter row carries nothing else, so it gets the full content width.
+METER_WIDTH = 46
 
 _STATE_DOTS = {
     "live": "●",
@@ -34,25 +38,49 @@ _STATE_DOTS = {
 }
 
 
-def _glyph_for(dbfs: float) -> str:
-    """Quantise one level reading to a single block glyph."""
+def level_step(dbfs: float) -> int:
+    """Quantise one level reading to 0..METER_STEPS-1."""
     fraction = max(0.0, min(1.0, (dbfs - FLOOR_DBFS) / -FLOOR_DBFS))
-    index = max(0, min(len(BLOCKS) - 1, int(fraction * len(BLOCKS))))
-    return BLOCKS[index]
+    return max(0, min(METER_STEPS - 1, int(fraction * METER_STEPS)))
 
 
-def meter_bar(history: Sequence[float], width: int = METER_WIDTH) -> str:
-    """Render a rolling history of levels as one glyph per sample.
+def _column(step: int) -> tuple[str, str, str]:
+    """Top, middle, and bottom glyphs for one sample.
 
-    Oldest sample at the left, newest at the right -- meant to be read as a
-    scrolling waveform, not a single quantised value. Only the most recent
-    `width` samples are shown; if fewer exist yet, the left is padded with
-    the idle glyph so a fresh or silent meter reads as a flat low line
-    rather than a partial bar or an empty gap.
+    Rows below the level read as full blocks, the row containing it gets a
+    partial glyph, and rows above it are blank -- so the three rows compose
+    into one tall bar rather than three independent meters.
+    """
+    glyphs = []
+    for row in range(METER_ROWS):  # 0 = bottom
+        base = row * len(BLOCKS)
+        if step >= base + len(BLOCKS) - 1:
+            glyphs.append(BLOCKS[-1])
+        elif step < base:
+            glyphs.append(" ")
+        else:
+            glyphs.append(BLOCKS[step - base])
+    glyphs.reverse()  # top first
+    return glyphs[0], glyphs[1], glyphs[2]
+
+
+def meter_rows(
+    history: Sequence[float], width: int = METER_WIDTH
+) -> tuple[str, str, str]:
+    """Render a rolling history of levels as one bar per sample.
+
+    Oldest sample at the left, newest at the right. Only the most recent
+    `width` samples are shown; if fewer exist, the left is padded with the
+    idle column so a fresh meter reads as a flat low line rather than a gap.
     """
     recent = list(history)[-width:]
-    pad = width - len(recent)
-    return BLOCKS[0] * pad + "".join(_glyph_for(level) for level in recent)
+    columns = [_column(0)] * (width - len(recent))
+    columns += [_column(level_step(level)) for level in recent]
+    return (
+        "".join(c[0] for c in columns),
+        "".join(c[1] for c in columns),
+        "".join(c[2] for c in columns),
+    )
 
 
 def _fit(text: str, width: int) -> str:
@@ -118,7 +146,4 @@ class FeedRow(Vertical):
     def refresh_meter(self) -> None:
         if self._meter_widget is None:
             return
-        self._meter_widget.update(
-            _fit(meter_bar(self._history, width=METER_WIDTH), ROW_WIDTH),
-            layout=False,
-        )
+        self._meter_widget.update("\n".join(meter_rows(self._history)), layout=False)
