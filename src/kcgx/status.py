@@ -143,11 +143,12 @@ class StatusPane(App[None]):
         and it is right even if the remembered airport changes by some other
         route.
 
-        The airport half is wrapped on its own: a resolver that raises (an
-        unreadable or undecodable state file, say) must leave the
-        last-known airport on screen rather than taking the clock down with
-        it -- the clock does not depend on the resolver at all and has no
-        reason to stop just because this one read failed.
+        The two halves are wrapped independently: a resolver that raises (an
+        unreadable or undecodable state file, say) must not skip the clock
+        update, and a clock that raises must not skip the airport update.
+        Either way `tick()` itself must never raise -- that is the one
+        guarantee the pane exists to make -- so each half leaves its own
+        last-known value on screen rather than propagating.
         """
         try:
             icao = self._resolver()
@@ -159,12 +160,16 @@ class StatusPane(App[None]):
                 airport_line(airport, icao, CONTENT_WIDTH), layout=False
             )
 
-        utc, local = self._now()
-        clocks = clock_text(utc, local)
-        self.query_one("#clock", Static).update(clocks, layout=False)
-        self.query_one("#hint", Static).update(
-            hint_for_width(CONTENT_WIDTH - len(clocks) - 1), layout=False
-        )
+        try:
+            utc, local = self._now()
+            clocks = clock_text(utc, local)
+        except Exception:
+            pass
+        else:
+            self.query_one("#clock", Static).update(clocks, layout=False)
+            self.query_one("#hint", Static).update(
+                hint_for_width(CONTENT_WIDTH - len(clocks) - 1), layout=False
+            )
 
     def on_click(self, event: Click) -> None:
         widget = getattr(event, "widget", None)
