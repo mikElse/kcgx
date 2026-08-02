@@ -126,16 +126,23 @@ async def test_a_changed_airport_is_picked_up_on_the_next_tick():
         assert "Chicago O'Hare International Airport" in joined
 
 
+# The longest the timer test below will ever wait, however TICK_SECONDS is
+# edited. The bound has to live in the sleep itself, not in the test above:
+# a failing test does not stop the run, so `TICK_SECONDS = 3600.0` failed
+# that assertion in 0.24s and then sat in a 5400-second sleep regardless.
+TICK_WAIT_CEILING = 5.0
+
+
 def test_the_tick_is_fast_enough_to_be_a_clock():
     """Pins the period, which the timer test below cannot.
 
-    The test below sleeps `TICK_SECONDS * 1.5`, so a period stretched to an
-    hour would not fail it -- it would *hang* it, for 90 minutes, which is
-    not a test result. This bound is what turns that mutation into a
-    failure, and it is the real requirement anyway: a clock showing minutes
-    has to repaint well inside a minute.
+    That test sleeps for a multiple of TICK_SECONDS, so a period stretched
+    to an hour would not fail it -- capped, it would merely stop proving
+    anything. This is what turns that mutation into a failure, and it is
+    the real requirement anyway: a clock showing minutes has to repaint
+    well inside a minute.
     """
-    assert 0 < TICK_SECONDS <= 5
+    assert 0 < TICK_SECONDS <= TICK_WAIT_CEILING
 
 
 @pytest.mark.asyncio
@@ -152,12 +159,17 @@ async def test_the_pane_ticks_by_itself_with_nobody_driving_it():
     Real wall-clock time, deliberately: Textual's timers run on the event
     loop this test shares, so a scripted clock would prove nothing about
     whether anything is scheduled.
+
+    Capped at TICK_WAIT_CEILING so that editing TICK_SECONDS can never hang
+    the suite -- past that the wait stops being long enough to prove
+    anything, but test_the_tick_is_fast_enough_to_be_a_clock has already
+    failed by then and says why.
     """
     app = make(icaos=("KPDX", "KORD"))
     async with app.run_test(size=SIZE) as pilot:
         assert "KPDX" in "\n".join(rendered(app)[0])
 
-        await asyncio.sleep(TICK_SECONDS * 1.5)
+        await asyncio.sleep(min(TICK_SECONDS, TICK_WAIT_CEILING) * 1.5)
         await pilot.pause()
 
         joined = "\n".join(rendered(app)[0])
