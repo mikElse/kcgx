@@ -151,6 +151,37 @@ async def test_enter_on_no_matches_does_not_select_anything():
 
 
 @pytest.mark.asyncio
+async def test_the_highlight_stops_at_both_ends_instead_of_falling_off():
+    """Two guards stand between an arrow key and an out-of-range index: the
+    clamp in action_move and the bounds check in _choose. They mask each
+    other -- either one can be deleted with the whole suite still green, and
+    nothing here ever walked off an end to find out. Do both, and require
+    enter to still answer with the edge airport.
+    """
+    app = AirportPicker(AIRPORTS)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        for _ in range(3):  # already on the first row
+            await pilot.press("up")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app.return_value is not None, "walking off the top lost the selection"
+    assert app.return_value.icao == "KORD"
+
+    app = AirportPicker(AIRPORTS)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        for _ in range(len(AIRPORTS) + 3):
+            await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app.return_value is not None, "walking off the bottom lost the selection"
+    assert app.return_value.icao == "KTTD"
+
+
+@pytest.mark.asyncio
 async def test_an_initial_query_prefilters():
     app = AirportPicker(AIRPORTS, initial="seattle")
     async with app.run_test(size=SIZE) as pilot:
