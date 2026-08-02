@@ -11,18 +11,38 @@ from squelch.pipeline import Block
 SIZE = (48, 42)
 
 
-def test_meter_bar_silence_is_all_low():
-    bar = meter_bar(-96.0, width=20)
-    assert len(bar) == 20
-    assert set(bar) == {"▁"}
-
-
-def test_meter_bar_loud_reaches_top():
-    assert "█" in meter_bar(-1.0, width=20)
+# meter_bar's shape changed from "repeat one quantised glyph across the
+# whole width" to "one glyph per recent sample, oldest at the left, newest
+# at the right, scrolling as new samples are pushed" -- a rolling level
+# history rather than a uniform block. These three tests replace the three
+# that pinned the old uniform-fill behaviour (in particular
+# `assert set(bar) == {"▁"}` for a single value, which no longer applies to
+# a per-sample history). No other test in this file was changed.
 
 
 def test_meter_bar_respects_width():
-    assert len(meter_bar(-30.0, width=26)) == 26
+    assert len(meter_bar([-30.0], width=26)) == 26
+
+
+def test_meter_bar_silence_is_all_low():
+    """No samples yet, or an all-silent history: a flat low line, not a gap."""
+    assert meter_bar([], width=20) == "▁" * 20
+    assert meter_bar([-96.0] * 20, width=20) == "▁" * 20
+
+
+def test_meter_bar_loud_sample_appears_at_newest_end():
+    history = [-96.0] * 19 + [-1.0]
+    bar = meter_bar(history, width=20)
+    assert bar[-1] == "█"
+    assert bar[:-1] == "▁" * 19
+
+
+def test_meter_bar_scrolls_oldest_sample_off():
+    """Once more than `width` samples have been pushed, the oldest is gone."""
+    history = [-1.0] + [-96.0] * 20  # 21 samples into a width-20 window
+    bar = meter_bar(history, width=20)
+    assert "█" not in bar
+    assert bar == "▁" * 20
 
 
 def rendered(app):
@@ -126,3 +146,31 @@ async def test_mute_toggles_footer_hint():
         await pilot.press("space")
         text, _ = rendered(app)
         assert "MUTED" in "\n".join(text)
+
+
+@pytest.mark.asyncio
+async def test_long_label_truncates_with_ellipsis_not_collision():
+    """A long feed label must not run straight into the state glyph.
+
+    Regression test: truncation used to be a bare slice, so a long enough
+    label produced e.g. "...Approach Eas● RECONNECTING" -- text glued
+    directly onto "●" with no separator, reading like a rendering bug rather
+    than deliberate truncation. There must be a visible ellipsis and at
+    least one space before the state indicator, and the header must still
+    be exactly 48 cells for both state widths.
+    """
+    long_label = "Seattle Approach East Sector Combined Frequency Two"
+    for state in ("live", "reconnecting"):
+        app = SquelchApp(Config(), feed_label=long_label, frequency="118.10")
+        async with app.run_test(size=SIZE) as pilot:
+            app.set_state(state)
+            await pilot.pause()
+            text, strips = rendered(app)
+            header = text[0]
+            assert strips[0].cell_length == 48
+            assert "…" in header
+            ellipsis_pos = header.index("…")
+            assert header[ellipsis_pos + 1] == " ", (
+                "ellipsis must be followed by a separating space, not glued "
+                "straight into the state glyph"
+            )
