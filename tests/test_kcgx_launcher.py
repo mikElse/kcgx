@@ -26,8 +26,14 @@ pytestmark = pytest.mark.skipif(
 # Stand-ins that sit still and exit cleanly when killed. `sh -c` is what
 # makes them tolerate the flags kcgx now appends: the extra words land in
 # $0/$1/... and are ignored.
-FAKE_ADSB = "sh -c 'sleep 300'"
-FAKE_SQUELCH = "sh -c 'sleep 300'"
+#
+# The three carry different markers on purpose. They used to be the identical
+# string, which meant a pane running the wrong role's command was invisible
+# unless that command also happened to carry a distinguishing flag -- and the
+# status pane's never does, so "the status pane was not retargeted" could not
+# be told apart from "the status pane was handed the status command again".
+FAKE_ADSB = "sh -c 'sleep 300' kcgx-fake-adsb"
+FAKE_SQUELCH = "sh -c 'sleep 300' kcgx-fake-squelch"
 
 # Every test gets a stand-in resolver by default. Without one, each launch
 # would shell out to the real `uv run ... kcgx-airport resolve`, which reads
@@ -111,7 +117,12 @@ def cockpit(tmp_path):
 def panes(tmux, session, fmt):
     result = tmux("list-panes", "-t", f"={session}:cockpit", "-F", fmt)
     assert result.returncode == 0, result.stderr
-    return result.stdout.strip().splitlines()
+    # splitlines() alone, not strip().splitlines(): when the *first* field of
+    # the format is empty -- an untagged pane under "#{@kcgx_role}\t..." --
+    # strip() eats that line's leading tab, so the second field slides into
+    # the first and an absent role reads back as a role named "%0". That made
+    # a correctly stripped session look like a tagged one.
+    return result.stdout.splitlines()
 
 
 def pane_field(tmux, session, field):
@@ -1011,7 +1022,7 @@ def test_a_broken_resolver_still_opens_the_cockpit(cockpit, airport_stub):
 
 # -- the status pane -------------------------------------------------------
 
-FAKE_STATUS = "sh -c 'sleep 300'"
+FAKE_STATUS = "sh -c 'sleep 300' kcgx-fake-status"
 
 
 def roles(tmux, session):
@@ -1060,6 +1071,13 @@ def test_retarget_still_finds_both_panes_after_the_layout_change(cockpit, airpor
         KCGX_AIRPORT_CMD=str(airport_stub),
         KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
     )
+    # The status pane's pid, before. Its *command* cannot show a redundant
+    # respawn -- respawning it with status_cmd() reproduces the same string --
+    # so the process identity is what discriminates "left alone" from "killed
+    # and rebuilt with the same thing", and only the first of those is
+    # flicker-free, which is the reason the status pane is skipped at all.
+    status_pid_before = role_field(tmux, session, "pane_pid")["status"]
+
     result = run(
         args=("go",),
         KCGX_STATUS_CMD=FAKE_STATUS,
@@ -1076,6 +1094,14 @@ def test_retarget_still_finds_both_panes_after_the_layout_change(cockpit, airpor
     assert "--site-lat 47.4479" in by_id[r["adsb"]]
     assert "--icao KSEA" in by_id[r["squelch"]]
     assert "--icao" not in by_id[r["status"]], "the status pane is not retargeted"
+    # Named markers, so a pane handed another role's command is caught even
+    # when that command carries no flag to give it away.
+    assert "kcgx-fake-status" in by_id[r["status"]], by_id[r["status"]]
+    assert "kcgx-fake-squelch" not in by_id[r["status"]], by_id[r["status"]]
+    assert role_field(tmux, session, "pane_pid")["status"] == status_pid_before, (
+        "the status pane was respawned; it re-reads the airport on its own "
+        "tick and respawning it only costs a flicker"
+    )
 
 
 def test_go_leaves_squelch_selected(cockpit, airport_stub):
@@ -1121,3 +1147,63 @@ def test_launch_leaves_squelch_selected(cockpit):
         "display-message", "-p", "-t", f"={session}:cockpit", "#{pane_id}"
     ).stdout.strip()
     assert active == roles(tmux, session)["squelch"]
+
+
+def test_go_refuses_a_cockpit_whose_panes_carry_no_roles(cockpit, airport_stub):
+    """A cockpit built before the role tags existed must fail loudly.
+
+    tmux does not treat an empty target as an error: `respawn-pane -t ""`
+    resolves to the *active* pane and exits 0. So when `pane_for_role` found
+    nothing, `kcgx go` rebuilt whichever pane the user last clicked -- twice,
+    once per respawn, the second overwriting the first -- while both real
+    panes kept the old airport, and still printed the new one and exited 0.
+    Reproduced end to end against a session built by the previous bin/kcgx:
+    the radar and the audio both stayed in Portland, a third pane quietly
+    became a second squelch on Seattle, and the launcher reported success.
+
+    Every other test builds its session with the current launcher, so every
+    pane always carries a role and this branch is unreachable from the suite
+    by construction. Stripping the tags is what makes it reachable -- and an
+    upgrade over a running cockpit is not hypothetical, it is what happens to
+    anyone who has one open when they pull.
+    """
+    run, tmux, session = cockpit
+    run(
+        KCGX_STATUS_CMD=FAKE_STATUS,
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    before = dict(
+        line.partition("\t")[::2]
+        for line in panes(tmux, session, "#{pane_id}\t#{pane_start_command}")
+    )
+    assert len(before) == 3
+
+    for pane_id in before:
+        assert tmux("set", "-pu", "-t", pane_id, "@kcgx_role").returncode == 0
+    assert roles(tmux, session) == {}, "the tags were not actually stripped"
+
+    result = run(
+        args=("go",),
+        KCGX_STATUS_CMD=FAKE_STATUS,
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KSEA\t47.4479\t-122.3102\tSeattle-Tacoma",
+    )
+    assert result.returncode != 0, (
+        "reported success against a cockpit it could not address: "
+        + repr(result.stdout)
+    )
+    assert "kcgx stop" in result.stderr, (
+        "the message must say how to fix it, not just that something failed: "
+        + repr(result.stderr)
+    )
+    assert "KSEA" not in result.stdout, "it must not claim the move happened"
+
+    after = dict(
+        line.partition("\t")[::2]
+        for line in panes(tmux, session, "#{pane_id}\t#{pane_start_command}")
+    )
+    assert after == before, (
+        "a pane was respawned anyway; an empty tmux target is the active pane, "
+        "not nothing"
+    )
