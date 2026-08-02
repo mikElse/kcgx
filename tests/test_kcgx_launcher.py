@@ -34,6 +34,7 @@ pytestmark = pytest.mark.skipif(
 # be told apart from "the status pane was handed the status command again".
 FAKE_ADSB = "sh -c 'sleep 300' kcgx-fake-adsb"
 FAKE_SQUELCH = "sh -c 'sleep 300' kcgx-fake-squelch"
+FAKE_STATUS = "sh -c 'sleep 300' kcgx-fake-status"
 
 # Every test gets a stand-in resolver by default. Without one, each launch
 # would shell out to the real `uv run ... kcgx-airport resolve`, which reads
@@ -57,8 +58,36 @@ fi
 """
 
 
+@pytest.fixture(scope="session")
+def socket_dir():
+    """Where tmux keeps its sockets, asked of tmux rather than guessed.
+
+    Needed because the per-test teardown cannot ask: `display -p` requires
+    a running server, and the `kcgx stop` tests deliberately end with none
+    -- killing the last session ends the server, which still leaves its
+    socket file behind. One throwaway server at the start of the run
+    answers the question once for every test.
+    """
+    name = f"kcgx-test-probe-{uuid.uuid4().hex[:8]}"
+    subprocess.run(
+        ["tmux", "-L", name, "new-session", "-d", "-s", "probe", "sleep 30"],
+        capture_output=True,
+        timeout=30,
+    )
+    path = subprocess.run(
+        ["tmux", "-L", name, "display", "-p", "#{socket_path}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=30)
+    assert path, "tmux would not say where its sockets live"
+    Path(path).unlink(missing_ok=True)
+    return Path(path).parent
+
+
 @pytest.fixture
-def cockpit(tmp_path):
+def cockpit(tmp_path, socket_dir):
     """Give each test its own tmux socket and session, and tear both down.
 
     Yields `(run, tmux, session)`. The socket name hangs off `run.socket`
@@ -109,9 +138,16 @@ def cockpit(tmp_path):
     run.resolver = str(resolver)
     yield run, tmux, session
 
+    # A server that stops -- killed here, or by `kcgx stop` taking its last
+    # session -- leaves its socket file behind, and every test uses a fresh
+    # uuid, so the suite was depositing one dead socket per test in
+    # /tmp/tmux-$UID, unbounded, forever. Unlink unconditionally: whether a
+    # server is still up at this point varies by test, but the file is only
+    # ever ours.
     subprocess.run(
         ["tmux", "-L", socket, "kill-server"], capture_output=True, timeout=30
     )
+    (socket_dir / socket).unlink(missing_ok=True)
 
 
 def panes(tmux, session, fmt):
@@ -125,22 +161,13 @@ def panes(tmux, session, fmt):
     return result.stdout.splitlines()
 
 
-def pane_field(tmux, session, field):
-    """Map pane index -> field value. Handles panes whose field is empty."""
-    out = {}
-    for line in panes(tmux, session, "#{pane_index}\t#{" + field + "}"):
-        index, _, value = line.partition("\t")
-        out[int(index)] = value.strip()
-    return out
-
-
 def role_field(tmux, session, field):
     """Map @kcgx_role -> field value.
 
-    The index-keyed version above is no longer enough to say *which* pane a
-    value belongs to: inserting the status pane moved squelch from index 1
-    to index 2 while its pane id stayed put, so an assertion keyed on 1 now
-    silently describes a different pane.
+    Keyed on role, not on pane index: inserting the status pane moved
+    squelch from index 1 to index 2 while its pane id stayed put, so an
+    assertion keyed on 1 would silently describe a different pane. The
+    index-keyed version this replaced is gone; nothing called it.
     """
     out = {}
     for line in panes(tmux, session, "#{@kcgx_role}\t#{" + field + "}"):
@@ -1021,8 +1048,6 @@ def test_a_broken_resolver_still_opens_the_cockpit(cockpit, airport_stub):
 
 
 # -- the status pane -------------------------------------------------------
-
-FAKE_STATUS = "sh -c 'sleep 300' kcgx-fake-status"
 
 
 def roles(tmux, session):

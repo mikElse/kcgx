@@ -20,7 +20,15 @@
 #   KCGX_STATE_PATH    where the picked airport is remembered; read by the
 #                      Python side, but inherited through this script, so
 #                      setting it here reaches kcgx-airport three processes
-#                      down (default: ~/.local/state/kcgx/airport)
+#                      down (default: ~/.local/state/kcgx/airport).
+#                      Panes are a different story. A pane inherits the tmux
+#                      *server's* environment, captured when the server
+#                      started -- not the environment of the command that
+#                      created the pane. So this reaches the status pane on
+#                      the launch that starts the server, and does not on a
+#                      later `kcgx go` against a running cockpit: the pane
+#                      goes on reading whatever path the server was born
+#                      with, however this script is invoked afterwards.
 #   KCGX_SQUELCH_COLS  width of the right column       (default: 48)
 #   KCGX_STATUS_ROWS   height of the status pane       (default: 4)
 #   KCGX_STATUS_CMD    command for the status pane
