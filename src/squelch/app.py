@@ -12,6 +12,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView, Static
+from textual.worker import NoActiveWorker, get_current_worker
 
 from squelch.config import Config
 from squelch.feeds import Feed
@@ -408,12 +409,31 @@ class SquelchApp(App):
         too. Pressing `f` on a flaky network used to freeze the whole app
         for a quarter of a minute. The injected-loader seam is unchanged;
         only where it is called from has moved.
+
+        `exclusive=True, group="feeds"` marks a superseded worker
+        cancelled, but Textual cannot interrupt a running thread -- the
+        body keeps running regardless, so without this check a stack of
+        `f` presses against a slow fetch each marshalled their own result
+        back and stacked one FeedPicker per press. Checking
+        `is_cancelled` once the (uninterruptible) loader call returns is
+        the only point this worker can act on its own cancellation.
+        `NoActiveWorker` (no active worker in this thread/task) is treated
+        as "not cancelled" -- it only arises when this body is invoked
+        directly, outside the @work decorator's context, which is exactly
+        how test_feed_worker_never_raises_when_the_app_has_gone drives the
+        "app already gone" hazard without spinning up a real thread.
         """
         assert self._feed_loader is not None
         try:
             feeds = self._feed_loader()
         except Exception:
             feeds = []
+        try:
+            cancelled = get_current_worker().is_cancelled
+        except NoActiveWorker:
+            cancelled = False
+        if cancelled:
+            return
         try:
             self.call_from_thread(self._present_feeds, feeds)
         except Exception:
