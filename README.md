@@ -143,6 +143,21 @@ live, `◐` reconnecting, `○` offline.
 Feed idents no longer appear on the row. They are still what `feed` in
 `squelch.toml` and `--feed` take, and the feed picker (`f`) still shows them.
 
+### Ordering
+
+Feeds are ordered by how busy they have been over the last five minutes —
+the fraction of that window spent above `activity_threshold_dbfs`. The
+busiest frequency is at the top, and an offline feed decays to 0% and sinks.
+The expanded row shows the figure as `busy 34%`.
+
+The order does not change the instant the ranking does. A new order is
+applied only once it has held for fifteen seconds and you have not touched
+the pane for two — because clicking a row toggles its mute, and a row that
+moves while you are reaching for it silences the wrong frequency.
+
+Activity is measured **before** the compressor, so making quiet feeds louder
+does not make them look busier.
+
 Transcription was removed — see "History" at the end.
 
 To run it on its own, outside the cockpit:
@@ -215,6 +230,7 @@ failing later inside the audio pipeline.
 |----------------------|----------------------------------------------------------------|---------|
 | `icao`               | `"KPDX"`                                                        | Airport used by the feed picker (`f`) to look up feeds on LiveATC.net |
 | `feed`               | `"kpdx3_twr"`                                                    | The one feed left unmuted at startup |
+| `activity_threshold_dbfs` | `-40.0`                                                    | Level above which a feed counts as busy for the five-minute ranking. Must be written as a decimal (`-40.0`, not `-40`). |
 
 The `model`, `compute_type` and `vad_aggressiveness` keys are gone. An
 existing config that still sets them keeps working — unknown keys are
@@ -284,6 +300,8 @@ watching on battery.
 - Feeds are discovered once at startup; a feed that appears on LiveATC
   later needs a restart to show up.
 - `[A]` is rendered and toggleable but silent until the mixing engine lands.
+- Ranking is by level crossings, not by speech detection — a feed with a
+  noisy carrier will rank above a quiet but busy one.
 - No transcription (see "History").
 - The message log only carries warnings, so the pane is mostly empty at
   rest. Retention is capped at the most recent 200 messages so memory and
