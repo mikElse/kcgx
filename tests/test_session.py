@@ -212,3 +212,24 @@ def test_state_is_tracked_for_the_row_to_read(state):
     session, _ = make()
     session._set_state(state)
     assert session.state == state
+
+
+def test_a_session_starts_off_the_ambient_bus():
+    session, _ = make()
+    assert session.ambient is False
+
+
+def test_toggle_ambient_flips_and_reports_the_new_value():
+    session, _ = make()
+    assert session.toggle_ambient() is True
+    assert session.ambient is True
+    assert session.toggle_ambient() is False
+    assert session.ambient is False
+
+
+def test_ambient_is_independent_of_mute():
+    """A feed can be routed to the ambient bus while muted on the dry bus."""
+    session, _ = make()
+    session.toggle_ambient()
+    assert session.ambient is True
+    assert session.muted is True

@@ -62,6 +62,10 @@ class FeedSession:
         self.name = strip_icao(feed.label, icao) if icao else feed.label
         self.events = events
         self.state = "starting"
+        # Routed to the ambient bus. Rendered and toggleable now; the mixer
+        # that acts on it arrives with spec D, so this is deliberately inert
+        # rather than absent -- the UI is the same either way.
+        self.ambient = False
         self.level = SILENCE_FLOOR_DBFS
         self._player = player_factory()
         self._player.muted = muted
@@ -88,6 +92,10 @@ class FeedSession:
     def toggle_mute(self) -> bool:
         self.muted = not self.muted
         return self.muted
+
+    def toggle_ambient(self) -> bool:
+        self.ambient = not self.ambient
+        return self.ambient
 
     # -- lifecycle -----------------------------------------------------
 
