@@ -42,11 +42,17 @@ def rendered(app):
 
 
 def make(icaos=("KPDX",), times=(T1,), clicks=None):
-    """Build a pane whose resolver and clock are scripted, not real."""
+    """Build a pane whose resolver and clock are scripted, not real.
+
+    The scripted resolver takes `known` and ignores it: the pane hands its
+    own dataset to whatever resolver it was given, and a fake that answers
+    from a list has no use for it. What `known` is *for* is checked against
+    the real current_icao() below.
+    """
     icao_seq = list(icaos)
     time_seq = list(times)
 
-    def resolver():
+    def resolver(known=None):
         return icao_seq[0] if len(icao_seq) == 1 else icao_seq.pop(0)
 
     def now():
@@ -160,6 +166,48 @@ async def test_an_unknown_icao_shows_the_bare_code():
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_remembered_icao_falls_back_where_the_launcher_pointed(
+    tmp_path,
+):
+    """The pane must not contradict the cockpit it is describing.
+
+    bin/kcgx resolves through `current_icao(known=...)`, so a remembered
+    ICAO the dataset no longer has is skipped and adsb-tui and squelch are
+    pointed at the next source. The pane called the same function without
+    the predicate, so with ZZZZ remembered you got radar and audio on
+    Portland and a status line reading ZZZZ -- one function, two spellings,
+    which is the failure current_icao() was written to make impossible.
+
+    Both sources are unknown here, so the answer is FALLBACK_ICAO, and the
+    config loader is scripted so the assertion does not depend on whether
+    the developer happens to have a ~/.config/squelch/squelch.toml.
+    """
+    from functools import partial
+
+    from squelch.config import Config
+
+    from kcgx.state import FALLBACK_ICAO, current_icao
+
+    state = tmp_path / "airport"
+    state.write_text("ZZZZ\n")
+
+    app = StatusPane(
+        resolver=partial(
+            current_icao, path=state, config_loader=lambda: Config(icao="ZZZZ")
+        ),
+        airports_loader=lambda: AIRPORTS,
+        now=lambda: (T1, T1.astimezone(PDT)),
+        opener=lambda: None,
+    )
+    async with app.run_test(size=SIZE):
+        joined = "\n".join(rendered(app)[0])
+        assert "ZZZZ" not in joined, "the pane is naming an airport nothing else is on"
+        assert FALLBACK_ICAO == "KPDX"
+        assert "KPDX" in joined
+        assert "Portland International Airport" in joined
+
+
+@pytest.mark.asyncio
 async def test_a_failing_resolver_keeps_the_last_known_airport_and_the_clock_still_ticks():
     """The airport half of tick() must not take the clock half down with it.
 
@@ -170,7 +218,7 @@ async def test_a_failing_resolver_keeps_the_last_known_airport_and_the_clock_sti
     """
     calls = {"n": 0}
 
-    def flaky_resolver():
+    def flaky_resolver(known=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return "KPDX"
@@ -212,7 +260,7 @@ async def test_a_failing_clock_keeps_the_last_known_time_and_the_airport_still_u
     """
     icaos = ["KPDX", "KORD"]
 
-    def resolver():
+    def resolver(known=None):
         return icaos[0] if len(icaos) == 1 else icaos.pop(0)
 
     calls = {"n": 0}
@@ -272,7 +320,7 @@ async def test_a_failing_opener_does_not_kill_the_pane():
         raise RuntimeError("no tmux here")
 
     app = StatusPane(
-        resolver=lambda: "KPDX",
+        resolver=lambda known=None: "KPDX",
         airports_loader=lambda: AIRPORTS,
         now=lambda: (T1, T1.astimezone(PDT)),
         opener=boom,
