@@ -121,10 +121,18 @@ async def test_arrows_move_the_highlight_while_typing():
 
 @pytest.mark.asyncio
 async def test_escape_cancels_with_no_selection():
+    """Checks is_running immediately after escape, not just after teardown.
+
+    run_test()'s __aexit__ force-stops the app and return_value defaults
+    to None, so a no-op action_cancel is indistinguishable from a working
+    one if the assertion only runs after the `async with` block exits.
+    Checking is_running while still inside the block catches that.
+    """
     app = AirportPicker(AIRPORTS)
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("escape")
         await pilot.pause()
+        assert not app.is_running, "escape must exit the app, not just leave it idle"
     assert app.return_value is None
 
 
@@ -153,8 +161,19 @@ async def test_an_initial_query_prefilters():
 
 
 @pytest.mark.asyncio
-async def test_the_popup_never_overflows_its_width():
+async def test_no_widget_is_wider_than_the_popup():
+    """Overflow is invisible to the compositor.
+
+    render_strips() clips every strip to the screen width, so asserting
+    on cell_length only restates the size passed to run_test(). A widget
+    laid out wider than the popup shows up in its own size, not in what
+    gets painted.
+    """
     app = AirportPicker(AIRPORTS)
     async with app.run_test(size=SIZE):
-        _text, strips = rendered(app)
-        assert all(s.cell_length == POPUP_WIDTH for s in strips)
+        too_wide = [
+            (w.__class__.__name__, w.id, w.outer_size.width)
+            for w in app.screen.query("*")
+            if w.outer_size.width > POPUP_WIDTH
+        ]
+        assert too_wide == []
