@@ -127,14 +127,23 @@ launcher and the Python side. Two modes, both emitting one tab-separated
 record: `icao<TAB>lat<TAB>lon<TAB>name, city`.
 
 The record goes to the path given by `--out`, falling back to stdout when
-that is omitted. **Textual draws on stderr**, not stdout — its driver
-writes to `sys.__stderr__`. So `bin/kcgx` sends the airport command's
-stdout to `/dev/null`, which keeps a printed record out of the popup, and
-must leave stderr connected or the picker renders into nothing. `bin/kcgx`
-always passes `--out` rather than capturing with `$(...)`: a record on
-stdout and a UI on stderr sharing one terminal is not a contract worth
-having. stdout stays available for the modes that draw nothing, which is
-what makes the tool usable by hand.
+that is omitted.
+
+**The picker needs both standard streams left alone.** Textual's driver
+writes its frames to `sys.__stderr__`, and it measures the terminal with
+`shutil.get_terminal_size()`, which reads `sys.__stdout__`. Redirect
+stderr and the popup is blank. Redirect stdout and it draws in the right
+place at the wrong size — it falls back to 80x24 and paints a frame bigger
+than the 64x20 popup, so the terminal scrolls and the airport rows end up
+off screen. Both failures look the same from outside, and neither stops
+the search from answering a keypress: the cockpit moves somewhere the user
+never saw.
+
+So `bin/kcgx` redirects neither stream. Nothing is lost by that — keeping
+the record off the terminal is `--out`'s job, and `bin/kcgx` always passes
+it, so nothing is printed to stdout there at all. stdout stays available
+for the modes that draw nothing, which is what makes the tool usable by
+hand.
 
 - **`kcgx-airport resolve`** — print the current target, resolved through
   the order under Persistence. No interaction. `bin/kcgx` calls this at

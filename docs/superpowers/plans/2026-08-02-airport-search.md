@@ -1448,15 +1448,20 @@ Two modes, both emitting one tab-separated record:
 
     icao<TAB>lat<TAB>lon<TAB>label
 
-The record goes to --out when given, stdout otherwise. Textual draws on
-*stderr* (its driver writes to sys.__stderr__), so bin/kcgx can safely
-send our stdout to /dev/null to keep a printed record out of the popup --
-but it must leave stderr alone or the picker renders into nothing. That is
-also why bin/kcgx always passes --out: capturing the record with $(...)
-would work for the drawing, but a record on stdout and a UI on stderr
-sharing one terminal is not a contract worth having. stdout stays
-available for the modes that draw nothing, which keeps this usable by
-hand.
+The record goes to --out when given, stdout otherwise.
+
+The picker needs *both* standard streams left alone. Textual's driver
+writes its frames to sys.__stderr__, and it measures the terminal with
+shutil.get_terminal_size(), which reads sys.__stdout__. Redirect stderr
+and the popup is blank; redirect stdout and it draws in the right place at
+the wrong size -- 80x24, the fallback -- spilling out of a 64x20 popup
+until the airport rows have scrolled off. Either way the search still
+answers a keypress, so it moves the cockpit somewhere nobody saw.
+
+Keeping the record off the terminal is --out's job, not a redirection's:
+bin/kcgx always passes it, so nothing is printed to stdout there at all.
+stdout stays available for the modes that draw nothing, which keeps this
+usable by hand.
 """
 
 from __future__ import annotations
@@ -2315,13 +2320,27 @@ out-of-scope items are absent by construction.
 **Known deviation from the spec** — the spec's Entry point section was
 amended during planning: the record goes to `--out` rather than stdout.
 The reason given here at plan time — "Textual draws on stdout" — was
-wrong; Textual's driver writes to `sys.__stderr__`. Corrected during final
-review, along with the spec and the module docstring that repeated it. The
-`--out` decision stands on its own (a record and a UI must not share one
-stream), but the false premise had also produced `>/dev/null 2>&1` in
-`bin/kcgx`, which sent the entire picker to /dev/null while leaving stdin
-connected: a blank popup that still answered a blind enter. See
-`test_the_picker_can_draw_on_the_terminal`.
+wrong, and it took two rounds of final review to get the correction right:
+
+- Textual's driver *writes* its frames to `sys.__stderr__`
+  (`linux_driver.py`: `self._file = sys.__stderr__`).
+- It *measures* the terminal with `shutil.get_terminal_size()
+  (`linux_driver.py:118`), which reads `sys.__stdout__`.
+
+So the picker needs **both** streams left alone, and the original
+`>/dev/null 2>&1` in `bin/kcgx` was wrong twice over. Dropping `2>&1`
+alone still left the list blank: the driver fell back to 80x24, painted a
+frame bigger than the 64x20 popup, and the terminal scrolled the airport
+rows off. Both spellings still answered a blind keypress and retargeted
+the cockpit somewhere the user never saw.
+
+The `--out` decision stands on its own and is what actually keeps the
+record off the terminal; no redirection was ever doing that job. Corrected
+here, in the spec, and in the module docstring that repeats this text.
+Pinned by `test_the_real_picker_fills_the_popup_it_was_given`, which runs
+the real picker on a 64x20 pty and asserts it addresses no row past 20 —
+the geometry is what discriminates, since the broken build emitted the
+airport rows too, just laid out for a terminal nobody had.
 
 **Verified at plan time** — the search algorithm in Task 3 was prototyped
 against the real 4,737-row dataset and all thirteen of its planned

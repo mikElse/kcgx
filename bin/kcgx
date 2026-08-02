@@ -111,13 +111,24 @@ airport_record() {
     # `cmd || status=$?` rather than `if ! cmd`: inside the body of an `if !`
     # the `!` has already flipped the status, so $? there reads 0 and a
     # cancelled pick (1) would come back as success.
-    # stdout only. Textual draws on *stderr* (its driver writes to
-    # sys.__stderr__), so redirecting stderr would send the whole picker to
-    # /dev/null: a blank popup, with stdin still connected, so enter would
-    # blindly select the first airport alphabetically. stdout is redirected
-    # because that is where a record goes when --out is omitted, and a
-    # record printed into the popup is the corruption we do care about.
-    "${AIRPORT_CMD[@]}" "$@" --out "$out" >/dev/null || status=$?
+    # Neither stream is redirected, and both halves of that matter. Textual
+    # writes its frames to sys.__stderr__, so redirecting stderr sends the
+    # whole picker to /dev/null -- while stdin stays connected, so enter
+    # still blindly selects something. And it *measures* the terminal with
+    # shutil.get_terminal_size(), which reads sys.__stdout__, so redirecting
+    # stdout leaves it drawing in the right place at the wrong size: it
+    # falls back to 80x24, paints a frame bigger than the 64x20 popup, the
+    # terminal scrolls, and the airport rows end up off screen. Both look
+    # identical from here -- a working search that moves the cockpit
+    # somewhere the user never saw.
+    #
+    # Nothing is lost by leaving stdout alone. --out is always passed above,
+    # so the record goes to the file and never to stdout; keeping it off the
+    # terminal is --out's job, not the redirect's. Nor did the redirect
+    # suppress `uv` progress on a cold environment: uv writes that to
+    # stderr, which we cannot redirect either. One spelling for both modes,
+    # because a second spelling is how launch and switch drift apart.
+    "${AIRPORT_CMD[@]}" "$@" --out "$out" || status=$?
     if [ "$status" -ne 0 ]; then
         rm -f "$out"
         return "$status"
