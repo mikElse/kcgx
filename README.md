@@ -8,8 +8,8 @@ Two pieces live here:
 
 - **`squelch`** — plays *every* ATC feed an airport publishes at once,
   one metered row each, in a narrow **48 × 42** pane.
-- **`kcgx`** — a launcher that arranges `adsb-tui`, `squelch`, and a shell
-  into one mouse-resizable tmux session.
+- **`kcgx`** — a launcher that arranges `adsb-tui`, a status pane, and
+  `squelch` into one mouse-resizable tmux session.
 
 ```
 kcgx              # open the cockpit (or reattach to a running one)
@@ -27,17 +27,27 @@ draggable by mouse:
 
 ```
 ┌────────────────┬───────────┐
+│                │  status   │
+│    adsb-tui    ├───────────┤
 │                │  squelch  │
-│    adsb-tui    │           │
-│                ├───────────┤
-│                │  ~ $      │
+│                │           │
 └────────────────┴───────────┘
 ```
 
 The right column starts at exactly 48 columns because that is `squelch`'s
 design width; below it the header truncates and the level meter loses
-resolution. The shell starts short so squelch keeps most of the column.
-These are starting positions, not constraints — drag them.
+resolution. The status pane starts four rows tall so squelch keeps most of
+the column. These are starting positions, not constraints — drag them.
+
+**The status pane** sits above squelch and shows, on its first line, the
+current ICAO and airport name, and on its second, the time in Zulu and in
+your own timezone (`1955Z   12:55 PDT`) alongside `▾ airport (^b a)`.
+Clicking that hint opens the same picker popup as `Ctrl-b a` — both are the
+same `tmux display-popup` call, pinned together by a test. The pane re-reads
+the remembered airport once a second, so `kcgx go` moves it without a
+respawn or a flicker. The airport's own local time is deliberately not
+shown: the dataset carries no timezone column, and deriving one from
+longitude would be wrong across DST and political boundaries anyway.
 
 **Requires tmux 3.1 or newer** (`brew install tmux`). Settings live in
 `kcgx.tmux.conf` and are never read from — or written to — your
@@ -65,8 +75,10 @@ does not, so scrolling over it enters tmux's copy-mode, which gives you
 scrollback over the traffic table.
 
 **Picking an airport.** `Ctrl-b` then `a` opens an airport search in a
-popup over the cockpit; `kcgx go [query]` does the same from the shell
-pane. Typing matches ICAO, IATA, airport name, city, region and country;
+popup over the cockpit, and so does clicking `▾ airport (^b a)` in the
+status pane; `kcgx go [query]` does the same thing from any terminal — the
+cockpit no longer has a pane you could type it into. Typing matches ICAO,
+IATA, airport name, city, region and country;
 accents and separators are folded on both sides, so `seattle-tacoma`
 finds Seattle–Tacoma (the dataset spells it with an en dash) and `ohare`
 finds O'Hare. Short query words have to match the start of a word rather
