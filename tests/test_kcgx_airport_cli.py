@@ -131,6 +131,24 @@ def test_pick_opens_the_picker_for_a_vague_query(tmp_path):
     assert out.read_text().startswith("KORD\t")
 
 
+def test_a_multi_word_query_reaches_the_picker_as_one_string(tmp_path):
+    """`kcgx go chicago heights` arrives as separate words. usage() invites
+    exactly that, so argparse must not reject the extras -- bin/kcgx would
+    report the resulting exit 2 as "airport search failed"."""
+    seen = {}
+
+    def picker(airports, initial=""):
+        seen["initial"] = initial
+        return ORD
+
+    code = run(
+        ["pick", "chicago", "heights", "--out", str(tmp_path / "record")],
+        picker=picker,
+    )
+    assert code == 0
+    assert seen["initial"] == "chicago heights"
+
+
 def test_cancelling_the_picker_exits_1_and_writes_nothing(tmp_path):
     out = tmp_path / "record"
     assert run(["pick", "--out", str(out)], picker=lambda a, initial="": None) == 1
