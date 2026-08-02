@@ -1,21 +1,40 @@
-"""Stream acquisition and playback.
+"""Stream acquisition, level measurement, and playback.
 
-One ffmpeg process decodes the feed to 16 kHz mono PCM. Those frames feed
-both the speaker and the transcription pipeline, so the two can never drift
-apart.
+One ffmpeg process decodes the feed to 16 kHz mono PCM. Those frames go to
+the speaker and to the level meter.
 """
 
 from __future__ import annotations
 
+import array
+import math
 import subprocess
 import time
 from collections.abc import Callable, Iterator
 
-from squelch.vad import FRAME_BYTES, SAMPLE_RATE
-
 Spawner = Callable[[str], subprocess.Popen]
 
+SAMPLE_RATE = 16_000
+FRAME_MS = 20
+FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 320
+FRAME_BYTES = FRAME_SAMPLES * 2                 # 640
+SILENCE_FLOOR_DBFS = -96.0
+
 READ_SIZE = FRAME_BYTES * 4
+
+
+def rms_dbfs(pcm: bytes) -> float:
+    """Frame energy in dBFS, floored at SILENCE_FLOOR_DBFS."""
+    samples = array.array("h")
+    samples.frombytes(pcm)
+    if not samples:
+        return SILENCE_FLOOR_DBFS
+    mean_square = sum(s * s for s in samples) / len(samples)
+    if mean_square <= 0:
+        return SILENCE_FLOOR_DBFS
+    return max(
+        SILENCE_FLOOR_DBFS, 20 * math.log10(math.sqrt(mean_square) / 32768.0)
+    )
 
 # While waiting out a reconnect backoff there is, by definition, no audio to
 # yield -- but the consumer still needs to hear from us. Sleeping the whole

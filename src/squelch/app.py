@@ -16,22 +16,17 @@ from textual.worker import NoActiveWorker, get_current_worker
 
 from squelch.config import Config
 from squelch.feeds import Feed
-from squelch.pipeline import Block
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 FLOOR_DBFS = -60.0
 METER_WIDTH = 20
 
-# Transcript entries (blocks, warnings, dropped markers) are mounted widgets
-# and Textual never reclaims them on its own. squelch is meant to run for
-# hours against a busy tower feed, which produces thousands of entries: with
-# no cap, RSS grows perfectly linearly (measured ~135 MB at 1000 entries,
-# ~852 MB at 8000) and every `set_level` gets slower, because the cost of a
-# refresh scales with the number of mounted children. That cost lands on the
-# *audio* thread, which blocks inside call_from_thread waiting for it. A few
-# hundred entries is far more scrollback than anyone reads back through in a
-# 48-column pane, so the oldest are dropped once the cap is reached.
-MAX_TRANSCRIPT_ENTRIES = 200
+# Messages are mounted widgets and Textual never reclaims them on its own.
+# squelch runs for hours, and a flapping feed can warn repeatedly: with no
+# cap, RSS grows linearly and every `set_level` gets slower, because a
+# refresh scales with the number of mounted children -- a cost billed to the
+# *audio* thread, which blocks inside call_from_thread waiting for it.
+MAX_MESSAGES = 200
 
 
 def _glyph_for(dbfs: float) -> str:
@@ -56,7 +51,7 @@ def meter_bar(history: Sequence[float], width: int = METER_WIDTH) -> str:
     return BLOCKS[0] * pad + "".join(_glyph_for(level) for level in recent)
 
 
-class TranscriptView(VerticalScroll):
+class MessageLog(VerticalScroll):
     """A scroll region that stays pinned to the newest entry.
 
     Textual's own `anchor()` looks like the tool for this, but the
@@ -64,18 +59,18 @@ class TranscriptView(VerticalScroll):
     (`_compositor.py`, "if widget._anchored"), so while the content is
     shorter than the viewport it drives `scroll_y` to
     `content_bottom - viewport_height` -- a negative offset the pane then
-    renders as blank. Scrolling from `_mount_entry` does not work either:
+    renders as blank. Scrolling from `_mount_message` does not work either:
     a freshly `mount()`ed child has not been laid out when the next
     statement runs, so `max_scroll_y` is still the *previous* value and the
-    scroll lands one entry short -- which is precisely how warn() and
-    mark_dropped() ended up below the fold.
+    scroll lands one entry short -- which is precisely how warn() messages
+    ended up below the fold.
 
     `_size_updated` is the compositor's post-layout hook, the first point
     at which `max_scroll_y` reflects what was just mounted. Following is
     suspended as soon as the user scrolls away (Textual calls
     `release_anchor` on every user-initiated scroll) and resumes when they
     scroll back to the bottom, so nobody reading back through the
-    transcript gets yanked to the end by an incoming transmission.
+    log gets yanked to the end by an incoming message.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -131,7 +126,6 @@ class SquelchApp(App):
         self._level = FLOOR_DBFS
         self._history: deque[float] = deque(maxlen=METER_WIDTH)
         self._clock_text = datetime.now().strftime("%H:%M:%S")
-        self._pending: Static | None = None
         # Cached once at mount rather than re-queried on every update:
         # set_level runs at the meter's cadence for the entire lifetime of
         # the app, and a DOM query per tick is pure overhead billed to the
@@ -139,7 +133,7 @@ class SquelchApp(App):
         self._header: Static | None = None
         self._meter: Static | None = None
         self._footer: Static | None = None
-        self._transcript: TranscriptView | None = None
+        self._messages: MessageLog | None = None
         self._entries: deque[Widget] = deque()
         self._clock_timer = None
         self.on_mute_change = lambda muted: None
@@ -153,19 +147,19 @@ class SquelchApp(App):
 
     def compose(self) -> ComposeResult:
         # markup=False everywhere: none of our content (feed labels, key
-        # hints in brackets, ASR transcript text) is meant to be parsed as
+        # hints in brackets) is meant to be parsed as
         # Rich console markup. Without it, literal text like "[space]" is
         # silently swallowed as an unrecognized style tag instead of shown.
         yield Static(id="header", markup=False)
         yield Static(id="meter", markup=False)
-        yield TranscriptView(id="transcript")
+        yield MessageLog(id="messages")
         yield Static(id="footer", markup=False)
 
     def on_mount(self) -> None:
         self._header = self.query_one("#header", Static)
         self._meter = self.query_one("#meter", Static)
         self._footer = self.query_one("#footer", Static)
-        self._transcript = self.query_one("#transcript", TranscriptView)
+        self._messages = self.query_one("#messages", MessageLog)
         # Anchoring, rather than a scroll_end() after each mount: a manual
         # scroll runs before the newly mounted child has been laid out, so
         # it lands one entry short of the bottom and the newest message can
@@ -191,9 +185,8 @@ class SquelchApp(App):
             self._clock_timer.stop()
             self._clock_timer = None
         self._header = self._meter = self._footer = None
-        self._transcript = None
+        self._messages = None
         self._entries.clear()
-        self._pending = None
 
     # -- rendering ---------------------------------------------------
     #
@@ -273,95 +266,26 @@ class SquelchApp(App):
 
     # -- public API driven by the pipeline ---------------------------
 
-    def add_block(self, block: Block) -> None:
-        self._clear_pending()
-        stamp = block.started_at.strftime("%H:%M:%S")
-        # The timestamp and text are separate widgets rather than one string
-        # joined with "\n  " -- a literal "  " only indents the first line of
-        # the text; once it wraps, continuation lines start flush at the
-        # left margin because wrapping is unaware of the manually-typed
-        # spaces. Giving the text widget its own `padding-left` (see
-        # squelch.tcss) makes every wrapped line -- including continuations
-        # -- share the same left indent, since padding applies to the box
-        # Textual wraps *inside*, not to individual lines of the string.
-        widget = Vertical(
-            Static(stamp, classes="block-stamp", markup=False),
-            Static(block.text, classes="block-text", markup=False),
-            classes="block",
-        )
-        self._mount_entry(widget)
+    def _mount_message(self, widget: Widget) -> None:
+        """Mount one message and enforce the retention cap.
 
-    def _mount_entry(self, widget: Widget) -> None:
-        """Mount one transcript entry and enforce the retention cap.
-
-        Every transcript entry goes through here, not just add_block's:
-        warn() and mark_dropped() used to mount without scrolling at all,
-        so with a transcript already filled their message landed below the
-        viewport and was never seen -- pressing `f` with a dead network
-        looked exactly like pressing a key that does nothing. Scrolling is
-        now the transcript's anchor (see on_mount), which applies to
-        everything mounted here uniformly.
+        Messages used to mount without scrolling at all, so with the log
+        already filled they landed below the viewport and were never seen --
+        pressing `f` with a dead network looked exactly like pressing a key
+        that does nothing. Scrolling is the log's own follow behaviour (see
+        MessageLog), which applies to everything mounted here uniformly.
         """
-        transcript = self._transcript
-        if transcript is None:
+        log = self._messages
+        if log is None:
             return
-        transcript.mount(widget)
+        log.mount(widget)
         self._entries.append(widget)
-        while len(self._entries) > MAX_TRANSCRIPT_ENTRIES:
+        while len(self._entries) > MAX_MESSAGES:
             self._drop(self._entries.popleft())
 
     def _drop(self, widget: Widget) -> None:
-        if widget is self._pending:
-            self._pending = None
         try:
             widget.remove()
-        except Exception:
-            pass
-
-    def mark_pending(self) -> None:
-        if self._pending is not None:
-            return
-        # "block block-text": the same two classes add_block's text widget
-        # gets -- "block" for the margin between entries, "block-text" for
-        # the padding-left that keeps wrapped continuation lines indented
-        # (see add_block's comment). A single-Static message like this one
-        # has no separate stamp widget to carry the indent, so it must carry
-        # both classes itself, or a message long enough to wrap reads
-        # flush-left and ragged instead of matching the blocks around it.
-        self._pending = Static(
-            "░ transcribing…", classes="block block-text", markup=False
-        )
-        self._mount_entry(self._pending)
-
-    def mark_dropped(self) -> None:
-        self._clear_pending()
-        self._mount_entry(
-            Static("⚠ transmission lost", classes="block block-text", markup=False)
-        )
-
-    def mark_blank(self) -> None:
-        """The model returned no words for the pending utterance.
-
-        Nothing is mounted: a blank transcription is not a transcript, and
-        rendering an empty entry would present "the model heard nothing" as
-        though it were something the controller said. All that is required
-        is that the placeholder comes back down -- otherwise mark_pending's
-        guard silently swallows every later utterance for the rest of the
-        run. Routine (squelch clicks transcribe to nothing), and universal
-        in the model-unavailable degraded mode.
-        """
-        self._clear_pending()
-
-    def _clear_pending(self) -> None:
-        pending, self._pending = self._pending, None
-        if pending is None:
-            return
-        try:
-            self._entries.remove(pending)
-        except ValueError:
-            pass
-        try:
-            pending.remove()
         except Exception:
             pass
 
@@ -457,13 +381,13 @@ class SquelchApp(App):
         self.push_screen(FeedPicker(feeds), handle)
 
     def warn(self, message: str) -> None:
-        """Surface a problem in the transcript region.
+        """Surface a problem in the message log.
 
         Deliberately not `self.notify` -- a toast is styled and positioned by
         Textual, which makes it awkward to assert against and easy to render
         outside the 48-column budget.
         """
-        self._mount_entry(
+        self._mount_message(
             Static(f"⚠ {message}", classes="block block-text", markup=False)
         )
 

@@ -1,18 +1,15 @@
-from datetime import datetime
-
 import pytest
 from textual.containers import VerticalScroll
 from textual.geometry import Size
 from textual.widgets import Static
 
 from squelch.app import (
-    MAX_TRANSCRIPT_ENTRIES,
+    MAX_MESSAGES,
+    MessageLog,
     SquelchApp,
-    TranscriptView,
     meter_bar,
 )
 from squelch.config import Config
-from squelch.pipeline import Block
 
 SIZE = (48, 42)
 
@@ -102,93 +99,6 @@ async def test_layout_fits_48_columns_exactly():
 
 
 @pytest.mark.asyncio
-async def test_long_transcript_wraps_and_does_not_overflow():
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        app.add_block(
-            Block(
-                started_at=datetime(2026, 8, 2, 14, 31, 42),
-                text=(
-                    "Alaska four twelve heavy Portland tower wind two eight "
-                    "zero at one two runway two eight left cleared to land "
-                    "traffic is a Dash Eight on a three mile final"
-                ),
-            )
-        )
-        await pilot.pause()
-        _text, strips = rendered(app)
-        assert all(s.cell_length == 48 for s in strips)
-
-
-@pytest.mark.asyncio
-async def test_wrapped_block_text_keeps_indent_on_continuation_lines():
-    """Every wrapped line of a block's text must share the same left indent.
-
-    Regression test: the block used to be a single string joined with
-    "\\n  " -- a literal two-space prefix only ever lands on the first line
-    of the text. Once the text is long enough to wrap inside the transcript
-    width, continuation lines start flush at the left margin (no indent at
-    all), so a wrapped block reads ragged instead of like one indented
-    paragraph under its timestamp. This asserts on the *rendered* strips,
-    not the input string, since the bug is invisible from the source text
-    alone -- it only shows up once Textual actually wraps it.
-    """
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        app.add_block(
-            Block(
-                started_at=datetime(2026, 8, 2, 14, 31, 42),
-                text=(
-                    "Alaska four twelve heavy Portland tower wind two eight "
-                    "zero at one two runway two eight left cleared to land "
-                    "traffic is a Dash Eight on a three mile final"
-                ),
-            )
-        )
-        await pilot.pause()
-        text, strips = rendered(app)
-        assert all(s.cell_length == 48 for s in strips)
-
-        stamp_idx = next(i for i, line in enumerate(text) if "14:31:42" in line)
-        # The text wraps across several lines; collect every non-blank line
-        # that follows the timestamp until the wrapped paragraph ends.
-        body_lines = []
-        for line in text[stamp_idx + 1 :]:
-            if not line.strip():
-                break
-            body_lines.append(line)
-        assert len(body_lines) >= 3, (
-            "test text must be long enough to produce at least one genuine "
-            "continuation line beyond the first wrap"
-        )
-
-        indents = [len(line) - len(line.lstrip(" ")) for line in body_lines]
-        assert all(indent > 0 for indent in indents), (
-            "every wrapped line -- including continuations -- must be "
-            f"indented, not flush at the left margin: {body_lines!r}"
-        )
-        assert len(set(indents)) == 1, (
-            "all wrapped lines of one block must share the same indent so "
-            f"the block reads as one paragraph, got indents {indents!r} for "
-            f"lines {body_lines!r}"
-        )
-
-
-@pytest.mark.asyncio
-async def test_block_timestamp_and_text_are_displayed():
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        app.add_block(
-            Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text="cleared to land")
-        )
-        await pilot.pause()
-        text, _strips = rendered(app)
-        joined = "\n".join(text)
-        assert "14:31:42" in joined
-        assert "cleared to land" in joined
-
-
-@pytest.mark.asyncio
 async def test_reconnecting_state_is_visible():
     app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
     async with app.run_test(size=SIZE) as pilot:
@@ -271,96 +181,6 @@ async def test_header_never_exceeds_48_cells_for_pathological_state():
             f"({composed[-1]!r}), not 48 -- the compositor's own fixed-size "
             "rendering cannot be trusted to catch this; the composed "
             "string itself must be exactly 48 cells"
-        )
-
-
-@pytest.mark.asyncio
-async def test_warn_message_matches_transcript_block_indent():
-    """warn() (and mark_pending/mark_dropped, same code path) must use
-    *the same* left-indent as a transcript block's text -- see add_block's
-    "block-text" comment above -- not merely be self-consistent at some
-    indent of its own.
-
-    Regression test: these three used to mount a bare `classes="block"`
-    Static with no `block-text` padding-left, so a message long enough to
-    wrap read flush-left and ragged, unlike every transcript block around
-    it. This matters concretely for Task 9's warn messages, e.g. "could
-    not resolve feed kpdx3_twr".
-
-    An earlier version of this test only asserted that warn()'s own
-    wrapped lines shared one indent with each other, and passed even with
-    `block-text` reverted off warn() -- an indent of 1 (transcript padding
-    only) is just as internally consistent as an indent of 3 (transcript
-    padding + block-text's padding-left), so self-consistency alone can't
-    tell the two apart. This instead measures add_block's real wrapped
-    body indent independently, in a separate app instance, and asserts
-    warn() reproduces that exact number, so the two indents cannot
-    silently drift apart.
-    """
-    block_app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with block_app.run_test(size=SIZE) as pilot:
-        block_app.add_block(
-            Block(
-                started_at=datetime(2026, 8, 2, 14, 31, 42),
-                text=(
-                    "Alaska four twelve heavy Portland tower wind two eight "
-                    "zero at one two runway two eight left cleared to land "
-                    "traffic is a Dash Eight on a three mile final"
-                ),
-            )
-        )
-        await pilot.pause()
-        text, strips = rendered(block_app)
-        assert all(s.cell_length == 48 for s in strips)
-
-        stamp_idx = next(i for i, line in enumerate(text) if "14:31:42" in line)
-        block_body = []
-        for line in text[stamp_idx + 1 :]:
-            if not line.strip():
-                break
-            block_body.append(line)
-        assert len(block_body) >= 3, (
-            "test text must be long enough to wrap onto several "
-            "continuation lines"
-        )
-        block_indents = [len(line) - len(line.lstrip(" ")) for line in block_body]
-        assert len(set(block_indents)) == 1, (
-            "add_block's own wrapped lines must share one indent -- if "
-            f"not, this test's baseline is broken: {block_indents!r}"
-        )
-        block_indent = block_indents[0]
-
-    warn_app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with warn_app.run_test(size=SIZE) as pilot:
-        warn_app.warn(
-            "could not resolve feed kpdx3_twr because the upstream "
-            "playlist request timed out after fifteen seconds and no "
-            "cached stream URL was available to fall back on"
-        )
-        await pilot.pause()
-        text, strips = rendered(warn_app)
-        assert all(s.cell_length == 48 for s in strips)
-
-        stamp_idx = next(i for i, line in enumerate(text) if "⚠" in line)
-        warn_body = [text[stamp_idx]]
-        for line in text[stamp_idx + 1 :]:
-            if not line.strip():
-                break
-            warn_body.append(line)
-        assert len(warn_body) >= 2, (
-            "test message must be long enough to actually wrap onto a "
-            "continuation line"
-        )
-        warn_indents = [len(line) - len(line.lstrip(" ")) for line in warn_body]
-        assert len(set(warn_indents)) == 1, (
-            "all wrapped lines of one warn message must share the same "
-            f"indent, got {warn_indents!r} for lines {warn_body!r}"
-        )
-        assert warn_indents[0] == block_indent, (
-            f"warn()'s wrapped lines are indented {warn_indents[0]} cells, "
-            f"but transcript block bodies are indented {block_indent} "
-            "cells -- warn() must match add_block's indent exactly, not "
-            "merely be self-consistent at some indent of its own"
         )
 
 
@@ -497,72 +317,6 @@ async def test_on_start_runs_once_the_app_is_running():
 
 
 @pytest.mark.asyncio
-async def test_blank_transcription_resolves_the_pending_placeholder():
-    """mark_blank must take the placeholder down without faking a transcript.
-
-    Regression test: nothing cleared `_pending` when a transcription came
-    back empty, and `mark_pending`'s guard then made every later utterance
-    a no-op -- the pane was stuck showing "░ transcribing…" for the rest of
-    the run, with no further transcripts ever appearing.
-    """
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        app.mark_pending()
-        await pilot.pause()
-        assert "transcribing" in "\n".join(rendered(app)[0])
-
-        app.mark_blank()
-        await pilot.pause()
-        text, _strips = rendered(app)
-        joined = "\n".join(text)
-        assert "transcribing" not in joined, "the placeholder was never removed"
-        assert "░" not in joined
-        assert app._pending is None
-
-        # And the next real utterance must not be swallowed by the guard.
-        app.mark_pending()
-        app.add_block(
-            Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text="cleared to land")
-        )
-        await pilot.pause()
-        assert "cleared to land" in "\n".join(rendered(app)[0])
-
-
-@pytest.mark.asyncio
-async def test_transcript_entries_are_capped():
-    """Mounted transcript widgets must not grow without bound.
-
-    Regression test: every block mounted a Vertical plus two Statics and
-    nothing ever removed them. Over a multi-hour session on a busy feed
-    that is thousands of live widgets -- measured ~852 MB RSS at 8000
-    blocks -- and the per-update cost lands on the audio thread, which
-    blocks inside call_from_thread waiting for the UI.
-    """
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        overflow = 50
-        for i in range(MAX_TRANSCRIPT_ENTRIES + overflow):
-            app.add_block(
-                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
-            )
-        await pilot.pause()
-        transcript = app.query_one("#transcript", VerticalScroll)
-        assert len(transcript.children) == MAX_TRANSCRIPT_ENTRIES, (
-            f"{MAX_TRANSCRIPT_ENTRIES + overflow} entries were mounted and "
-            f"{len(transcript.children)} are still live -- the oldest must "
-            "be removed as new ones arrive"
-        )
-
-        text, strips = rendered(app)
-        joined = "\n".join(text)
-        assert f"call {MAX_TRANSCRIPT_ENTRIES + overflow - 1}" in joined, (
-            "the newest entry must still be visible"
-        )
-        assert "call 0" not in joined, "the oldest entry must be gone"
-        assert all(s.cell_length == 48 for s in strips)
-
-
-@pytest.mark.asyncio
 async def test_chrome_widgets_are_cached_not_requeried():
     """set_level runs for the app's whole lifetime; it must not query the DOM.
 
@@ -589,48 +343,6 @@ async def test_chrome_widgets_are_cached_not_requeried():
         assert queries == [], (
             f"chrome updates must use cached widget references, got {queries!r}"
         )
-
-
-@pytest.mark.asyncio
-async def test_warn_is_scrolled_into_view_on_a_full_transcript():
-    """A warning below the fold is a warning nobody sees.
-
-    Regression test: add_block scrolled the transcript to the end but
-    warn() and mark_dropped() mounted without scrolling. Once the
-    transcript had filled the pane, "could not load feeds" landed below the
-    viewport -- so pressing `f` with a dead network looked exactly like
-    pressing a key that does nothing.
-    """
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        for i in range(30):  # comfortably more than the ~38-row transcript
-            app.add_block(
-                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
-            )
-        await pilot.pause()
-        app.warn("could not load feeds")
-        await pilot.pause()
-        text, strips = rendered(app)
-        assert "could not load feeds" in "\n".join(text), (
-            "the warning was mounted below the viewport and never scrolled "
-            "into view"
-        )
-        assert all(s.cell_length == 48 for s in strips)
-
-
-@pytest.mark.asyncio
-async def test_dropped_marker_is_scrolled_into_view_on_a_full_transcript():
-    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
-    async with app.run_test(size=SIZE) as pilot:
-        for i in range(30):
-            app.add_block(
-                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
-            )
-        await pilot.pause()
-        app.mark_dropped()
-        await pilot.pause()
-        text, _strips = rendered(app)
-        assert "transmission lost" in "\n".join(text)
 
 
 @pytest.mark.asyncio
@@ -666,14 +378,13 @@ async def test_clock_timer_is_stopped_on_unmount():
 @pytest.mark.asyncio
 async def test_long_startup_warnings_stay_within_48_columns():
     """The new startup messages are long; the pane budget still holds."""
-    from squelch.__main__ import FFMPEG_MISSING, MODEL_LOADING, feed_selection_hint
+    from squelch.__main__ import FFMPEG_MISSING, feed_selection_hint
     from squelch.feeds import Feed
 
     app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
     async with app.run_test(size=SIZE) as pilot:
         for message in (
-            MODEL_LOADING,
-            FFMPEG_MISSING,
+                        FFMPEG_MISSING,
             feed_selection_hint(Feed(ident="kpdx3_twr", label="Portland Tower")),
         ):
             app.warn(message)
@@ -688,37 +399,110 @@ async def test_long_startup_warnings_stay_within_48_columns():
         assert "restart with" in joined
 
 
-@pytest.mark.asyncio
-async def test_scrolling_up_suspends_following_and_returning_resumes_it():
-    """Reading back through the transcript must not be interrupted.
 
-    The follow-the-newest behaviour that fixes the invisible-warning bug
-    must not become its own annoyance: a user who has deliberately scrolled
-    up stays where they are until they scroll back to the bottom.
+
+# The transcript is gone, but the message log it became still has to do the
+# three things the transcript tests covered: keep long messages inside the
+# 48-column budget with a consistent indent, cap retention so an hours-long
+# run does not grow without bound, and scroll new messages into view.
+
+
+@pytest.mark.asyncio
+async def test_long_warning_wraps_with_a_consistent_indent():
+    """Continuation lines must share the first line's indent.
+
+    A literal two-space prefix only indents the first line; once the text
+    wraps, continuation lines start flush left and the message reads
+    ragged. The indent comes from the widget's `padding-left` instead, so
+    it applies to every wrapped line.
     """
     app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
     async with app.run_test(size=SIZE) as pilot:
-        for i in range(30):
-            app.add_block(
-                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
-            )
-        await pilot.pause()
-        transcript = app.query_one("#transcript", TranscriptView)
-        assert transcript.scroll_y == transcript.max_scroll_y
-
-        transcript.scroll_to(y=0, animate=False)
-        await pilot.pause()
-        assert transcript._follow is False
-        app.warn("a warning that must not yank the view")
-        await pilot.pause()
-        assert transcript.scroll_y == 0, (
-            "an incoming message must not scroll a user who has deliberately "
-            "scrolled up"
+        app.warn(
+            "could not resolve feed kpdx3_twr — check the ident, and press "
+            "[f] to list the feeds this airport actually publishes"
         )
+        await pilot.pause()
+        text, strips = rendered(app)
+        assert all(s.cell_length == 48 for s in strips)
 
-        transcript.scroll_to(y=transcript.max_scroll_y, animate=False)
+        body = [line for line in text if line.strip()]
+        wrapped = [
+            line for line in body if "check the ident" in line or "publishes" in line
+        ]
+        assert wrapped, "the message did not wrap; widen the test input"
+        indents = {len(line) - len(line.lstrip()) for line in wrapped}
+        assert len(indents) == 1, f"wrapped lines disagree on indent: {indents}"
+        assert indents.pop() > 1, "continuation lines lost their indent"
+
+
+@pytest.mark.asyncio
+async def test_messages_are_capped():
+    """Mounted widgets are never reclaimed by Textual on their own.
+
+    Without a cap, RSS grows linearly and every set_level gets slower,
+    because a refresh scales with the number of mounted children — a cost
+    billed to the audio thread, which blocks waiting for it.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for i in range(MAX_MESSAGES + 40):
+            app.warn(f"message {i}")
         await pilot.pause()
-        assert transcript._follow is True
-        app.warn("and now following resumes")
+
+        log = app.query_one("#messages", MessageLog)
+        assert len(log.children) == MAX_MESSAGES
+        assert len(app._entries) == MAX_MESSAGES
+
+        text = "\n".join(rendered(app)[0])
+        assert "message 0" not in text, "the oldest message should have been dropped"
+        assert f"message {MAX_MESSAGES + 39}" in text
+
+
+@pytest.mark.asyncio
+async def test_new_messages_are_scrolled_into_view_when_the_log_is_full():
+    """A warning below the fold is a warning nobody sees.
+
+    Regression test: messages used to mount without scrolling, so once the
+    log had filled the pane, "could not load feeds" landed below the
+    viewport — pressing `f` with a dead network looked exactly like
+    pressing a key that does nothing.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for i in range(30):  # comfortably more than the pane's height
+            app.warn(f"filler {i}")
         await pilot.pause()
-        assert "and now following resumes" in "\n".join(rendered(app)[0])
+        app.warn("could not load feeds")
+        await pilot.pause()
+
+        text, strips = rendered(app)
+        assert "could not load feeds" in "\n".join(text), (
+            "the warning was mounted below the viewport and never scrolled "
+            "into view"
+        )
+        assert all(s.cell_length == 48 for s in strips)
+
+
+@pytest.mark.asyncio
+async def test_scrolling_up_suspends_following_and_returning_resumes_it():
+    """Reading back must not be interrupted by an incoming message."""
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for i in range(40):
+            app.warn(f"filler {i}")
+        await pilot.pause()
+
+        log = app.query_one("#messages", MessageLog)
+        log.scroll_to(y=0, animate=False)
+        await pilot.pause()
+        assert log._follow is False, "a user scroll must suspend following"
+
+        parked = log.scroll_y
+        app.warn("arriving while you read")
+        await pilot.pause()
+        assert log.scroll_y == parked, "an incoming message yanked the view"
+
+        log.scroll_to(y=log.max_scroll_y, animate=False)
+        await pilot.pause()
+        assert log._follow is True, "returning to the bottom must resume following"
