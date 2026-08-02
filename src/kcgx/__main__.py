@@ -91,6 +91,45 @@ def main(
     picker: Callable[..., Airport | None] = pick,
     state_writer: Callable[[str], None] = write_airport,
 ) -> int:
+    """The console script. Every path out of here is one of the three exit
+    codes bin/kcgx knows: 0 chose something, 1 declined, 2 failed.
+
+    The wrapping is the point. Python's default exit code for an unhandled
+    exception is 1 -- indistinguishable, to bin/kcgx, from the user pressing
+    escape, which it answers by exiting 0 in silence. So a crash anywhere
+    below would make `kcgx go portland` print nothing, change nothing, and
+    report success.
+    """
+    try:
+        return _run(
+            argv,
+            airports_loader=airports_loader,
+            picker=picker,
+            state_writer=state_writer,
+        )
+    except SystemExit:
+        # argparse's own exits: --help is 0, a bad mode is 2, and both have
+        # already said their piece. Rewriting either would be a downgrade.
+        raise
+    except KeyboardInterrupt:
+        # Ctrl-C is the user declining, which is what 1 means. Quietly: the
+        # default handling says the same thing with a traceback and 130.
+        return 1
+    except Exception as exc:
+        # Type and message, not a traceback: this lands in a 20-row popup
+        # that vanishes when the command exits, where a traceback is
+        # unreadable and the top frame is rarely the informative one anyway.
+        print(f"kcgx-airport: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run(
+    argv: list[str] | None,
+    *,
+    airports_loader: Callable[[], list[Airport]],
+    picker: Callable[..., Airport | None],
+    state_writer: Callable[[str], None],
+) -> int:
     args = parse_args(argv)
     airports = airports_loader()
 
