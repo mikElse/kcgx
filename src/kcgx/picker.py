@@ -104,6 +104,17 @@ class AirportPicker(App[Airport | None]):
     ) -> None:
         self._choose(event.option_index)
 
+    # The two range guards below are backstops, not the mechanism. In
+    # Textual 8.2.8, OptionList.validate_highlighted already clamps
+    # `highlighted` into [0, len(options) - 1] before either of these sees
+    # it, so *neither* can be reached by any sequence of keystrokes and no
+    # behavioural test can tell them apart -- deleting both leaves the whole
+    # suite green. They stay because they are cheap and because
+    # `self._matches` and the OptionList's own options are two lists kept in
+    # step by hand in _refilter: Textual validates against its list, we index
+    # into ours. test_the_highlight_stops_at_both_ends_instead_of_falling_off
+    # pins the behaviour, whoever ends up enforcing it.
+
     def _choose(self, index: int | None = None) -> None:
         if not self._matches:
             return
