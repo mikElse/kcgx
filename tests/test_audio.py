@@ -4,13 +4,14 @@ import subprocess
 import pytest
 
 from squelch.audio import (
+    FRAME_BYTES,
     RECONNECT_TICK_S,
     Player,
     StreamReader,
     backoff_delays,
     ffmpeg_command,
+    rms_dbfs,
 )
-from squelch.vad import FRAME_BYTES
 
 
 def test_ffmpeg_command_requests_16k_mono_s16le():
@@ -299,3 +300,30 @@ def test_player_stop_is_idempotent_and_never_raises():
     player.stop()
     player.stop()
     assert player._stream is None
+
+
+# rms_dbfs moved here from vad.py when the segmenter was removed; it only
+# ever lived there to break a circular import the segmenter created.
+
+
+def test_rms_dbfs_silence_is_floor():
+    assert rms_dbfs(b"\x00" * FRAME_BYTES) <= -90.0
+
+
+def test_rms_dbfs_full_scale_is_near_zero():
+    import struct
+
+    loud = struct.pack("<h", 32000) * (FRAME_BYTES // 2)
+    assert -1.5 < rms_dbfs(loud) <= 0.0
+
+
+def test_rms_dbfs_orders_signals_correctly():
+    import struct
+
+    quiet = struct.pack("<h", 500) * (FRAME_BYTES // 2)
+    loud = struct.pack("<h", 20000) * (FRAME_BYTES // 2)
+    assert rms_dbfs(b"\x00" * FRAME_BYTES) < rms_dbfs(quiet) < rms_dbfs(loud)
+
+
+def test_rms_dbfs_handles_an_empty_buffer():
+    assert rms_dbfs(b"") <= -90.0

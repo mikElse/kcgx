@@ -12,7 +12,6 @@ import pytest
 
 from squelch.__main__ import (
     FFMPEG_MISSING,
-    MODEL_LOADING,
     build_pipeline_runner,
     feed_selection_hint,
     main,
@@ -21,7 +20,6 @@ from squelch.__main__ import (
     try_start,
 )
 from squelch.app import SquelchApp
-from squelch.asr import Transcript
 from squelch.config import Config
 from squelch.feeds import Feed
 
@@ -97,17 +95,6 @@ class Recorder:
         return "\n".join(self.warnings)
 
 
-class StubTranscriber:
-    def __init__(self):
-        self.loaded = False
-
-    def load(self):
-        self.loaded = True
-
-    def transcribe(self, pcm):
-        return Transcript(text="", avg_logprob=0.0)
-
-
 class StubPlayer:
     def __init__(self):
         self.started = False
@@ -129,11 +116,9 @@ def make_runner(rec, **overrides):
         warn=rec.warnings.append,
         set_state=rec.states.append,
         player=StubPlayer(),
-        transcriber=StubTranscriber(),
         events=None,
         resolve=lambda ident: "https://example.test/stream",
         reader_factory=lambda url: object(),
-        segmenter_factory=lambda **kw: object(),
         pipeline_factory=lambda *a, **kw: _NoopPipeline(),
         which=lambda name: f"/usr/bin/{name}",
     )
@@ -151,25 +136,13 @@ def test_runner_reports_a_missing_ffmpeg_with_an_actionable_message():
 
     `StreamReader.frames()` spawns ffmpeg lazily, so a missing binary raised
     FileNotFoundError deep inside the pipeline thread; the thread died and
-    the pane sat at its last state with an empty transcript forever.
+    the pane sat at its last state forever.
     """
     rec = Recorder()
     make_runner(rec, which=lambda name: None)()
     assert FFMPEG_MISSING in rec.warnings
     assert "brew install ffmpeg" in rec.joined, "must say how to fix it"
     assert rec.states == ["offline"], "the header must not keep claiming LIVE"
-
-
-def test_runner_survives_an_invalid_vad_mode():
-    """`webrtcvad.Vad(7)` raises ValueError; that used to kill the thread."""
-
-    def bad_segmenter(**kwargs):
-        raise ValueError("7 is an invalid mode, must be 0-3")
-
-    rec = Recorder()
-    make_runner(rec, segmenter_factory=bad_segmenter)()
-    assert "invalid mode" in rec.joined
-    assert rec.states == ["offline"]
 
 
 def test_runner_survives_a_reader_that_cannot_start():
@@ -196,14 +169,6 @@ def test_runner_survives_a_mid_run_read_error():
     assert rec.states == ["offline"]
 
 
-def test_runner_announces_the_model_download_before_loading_it():
-    rec = Recorder()
-    transcriber = StubTranscriber()
-    make_runner(rec, transcriber=transcriber)()
-    assert rec.warnings[0] == MODEL_LOADING
-    assert transcriber.loaded
-
-
 def test_runner_reports_a_feed_that_cannot_be_resolved():
     def boom(ident):
         raise RuntimeError("404")
@@ -212,25 +177,6 @@ def test_runner_reports_a_feed_that_cannot_be_resolved():
     make_runner(rec, resolve=boom)()
     assert "could not resolve feed" in rec.joined
     assert rec.states == ["offline"]
-
-
-def test_runner_degrades_to_audio_only_when_the_model_will_not_load():
-    class BrokenTranscriber(StubTranscriber):
-        def load(self):
-            raise RuntimeError("no such model")
-
-    rec = Recorder()
-    seen = {}
-    make_runner(
-        rec,
-        transcriber=BrokenTranscriber(),
-        pipeline_factory=lambda reader, seg, transcriber, player, events: (
-            seen.__setitem__("transcriber", transcriber) or _NoopPipeline()
-        ),
-    )()
-    assert "audio only" in rec.joined
-    assert seen["transcriber"].transcribe(b"") == Transcript(text="", avg_logprob=0.0)
-    assert rec.states == []
 
 
 # -- main() ----------------------------------------------------------------
@@ -367,7 +313,7 @@ def test_main_stops_the_player_even_when_the_app_run_raises():
 def test_main_rejects_an_invalid_config_before_starting_the_ui(tmp_path, monkeypatch):
     """A bad config must produce a message, not a dead pipeline thread."""
     bad = tmp_path / "squelch.toml"
-    bad.write_text("vad_aggressiveness = 9\n")
+    bad.write_text("feed = 3\n")  # must be a string
     import squelch.config as config_module
 
     monkeypatch.setattr(config_module, "DEFAULT_PATH", bad)

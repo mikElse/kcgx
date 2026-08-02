@@ -11,17 +11,11 @@ from dataclasses import replace
 from typing import Any
 
 from squelch.app import SquelchApp
-from squelch.asr import Transcript, WhisperTranscriber
 from squelch.audio import Player, StreamReader
 from squelch.config import Config, ConfigError, load_config
 from squelch.feeds import Feed, fetch_feeds, resolve_stream
 from squelch.pipeline import Events, Pipeline
-from squelch.vad import Segmenter
 
-MODEL_LOADING = (
-    "loading transcription model — first run downloads roughly "
-    "1.5 GB and can take several minutes"
-)
 FFMPEG_MISSING = (
     "ffmpeg not found on PATH — squelch decodes the feed with it. "
     "Install it (macOS: brew install ffmpeg) and start squelch again."
@@ -40,8 +34,8 @@ def try_start(
 ) -> bool:
     """Run a startup step, degrading rather than crashing.
 
-    A missing model or unavailable audio device should cost you one feature,
-    not the whole application.
+    An unavailable audio device should cost you one feature, not the whole
+    application.
     """
     try:
         start()
@@ -49,13 +43,6 @@ def try_start(
         on_error(message)
         return False
     return True
-
-
-class _NullTranscriber:
-    """Stands in when the model will not load, so audio still plays."""
-
-    def transcribe(self, pcm: bytes) -> Transcript:
-        return Transcript(text="", avg_logprob=0.0)
 
 
 def safe_call(app: Any, func: Callable[..., None], *args: Any) -> None:
@@ -91,11 +78,9 @@ def build_pipeline_runner(
     warn: Callable[[str], None],
     set_state: Callable[[str], None],
     player: Any,
-    transcriber: Any,
     events: Events,
     resolve: Callable[[str], str] = resolve_stream,
     reader_factory: Callable[..., Any] = StreamReader,
-    segmenter_factory: Callable[..., Any] = Segmenter,
     pipeline_factory: Callable[..., Any] = Pipeline,
     which: Callable[[str], str | None] = shutil.which,
 ) -> Callable[[], None]:
@@ -104,7 +89,7 @@ def build_pipeline_runner(
     Every collaborator is injectable because this function is the whole of
     squelch's wiring and it runs on a daemon thread, where an unhandled
     exception is invisible: the thread dies, nothing is printed, and the
-    pane sits at its last state with an empty transcript forever.
+    pane sits at its last state forever.
     """
 
     def run() -> None:
@@ -112,10 +97,9 @@ def build_pipeline_runner(
             _run()
         except Exception as exc:
             # Everything below the feed-resolution step used to be
-            # unguarded: a bad vad_aggressiveness (ValueError from
-            # webrtcvad), a missing ffmpeg (FileNotFoundError from Popen),
-            # or a read error on the ffmpeg pipe (OSError) all killed this
-            # thread in silence.
+            # unguarded: a missing ffmpeg (FileNotFoundError from Popen) or
+            # a read error on the ffmpeg pipe (OSError) killed this thread
+            # in silence.
             warn(f"stopped: {type(exc).__name__}: {exc}")
             set_state("offline")
 
@@ -125,18 +109,7 @@ def build_pipeline_runner(
             set_state("offline")
             return
 
-        # The model load below is synchronous and blocking: nothing else in
-        # this function -- including player.start(), so audio itself --
-        # runs until it returns. On a first run that's a ~1.5 GB download
-        # plus load, i.e. several minutes of an apparently dead pane if the
-        # user isn't told why.
-        warn(MODEL_LOADING)
-        active = transcriber
-        if try_start(transcriber.load, warn, "model unavailable — audio only"):
-            warn("transcription model ready")
-        else:
-            active = _NullTranscriber()
-        try_start(player.start, warn, "no audio device — transcribing only")
+        try_start(player.start, warn, "no audio device — nothing will be audible")
 
         try:
             url = resolve(config.feed)
@@ -150,13 +123,7 @@ def build_pipeline_runner(
             set_state("offline")
             return
 
-        pipeline_factory(
-            reader_factory(url),
-            segmenter_factory(aggressiveness=config.vad_aggressiveness),
-            active,
-            player,
-            events,
-        ).run()
+        pipeline_factory(reader_factory(url), player, events).run()
 
     return run
 
@@ -172,7 +139,7 @@ def main(
         config = load_config()
     except ConfigError as exc:
         # Before the UI exists, so this is the one place a plain stderr
-        # message beats a transcript warning.
+        # message beats a message-log warning.
         print(f"squelch: {exc}", file=sys.stderr)
         return 2
     if args.feed:
@@ -187,18 +154,13 @@ def main(
     )
 
     player = Player()
-    transcriber = WhisperTranscriber(config.model, compute_type=config.compute_type)
     app.on_mute_change = lambda muted: setattr(player, "muted", muted)
     # Runs on the UI thread (the picker's dismiss callback), so no marshalling.
     app.on_feed_selected = lambda feed: app.warn(feed_selection_hint(feed))
 
     events = Events(
         on_level=lambda d: app.call_from_thread(app.set_level, d),
-        on_pending=lambda: app.call_from_thread(app.mark_pending),
-        on_block=lambda b: app.call_from_thread(app.add_block, b),
         on_state=lambda s: app.call_from_thread(app.set_state, s),
-        on_dropped=lambda: app.call_from_thread(app.mark_dropped),
-        on_blank=lambda: app.call_from_thread(app.mark_blank),
     )
 
     runner = runner_factory(
@@ -206,15 +168,12 @@ def main(
         warn=lambda message: safe_call(app, app.warn, message),
         set_state=lambda state: safe_call(app, app.set_state, state),
         player=player,
-        transcriber=transcriber,
         events=events,
     )
 
-    # Started from on_mount, not here: the runner's first act is to warn
-    # about the model download, and a call_from_thread issued before
+    # Started from on_mount, not here: a call_from_thread issued before
     # App.run() has the loop up raises "App is not running" and is
-    # swallowed -- so on a first run the user watched a blank pane for
-    # minutes with no explanation.
+    # swallowed, so any early warning would be lost.
     app.on_start = lambda: threading.Thread(target=runner, daemon=True).start()
 
     try:
