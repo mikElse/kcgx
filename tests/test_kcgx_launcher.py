@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -1232,3 +1233,79 @@ def test_go_refuses_a_cockpit_whose_panes_carry_no_roles(cockpit, airport_stub):
         "a pane was respawned anyway; an empty tmux target is the active pane, "
         "not nothing"
     )
+
+
+# -- the radar pane id -----------------------------------------------------
+
+
+def _await_file(path, timeout=10.0):
+    """Wait for a pane's command to write its recording.
+
+    The pane is spawned asynchronously, so the launcher returning does not
+    mean the command inside it has run yet.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text().strip():
+            return path.read_text().strip()
+        time.sleep(0.05)
+    return path.read_text().strip() if path.exists() else None
+
+
+def _env_recorder(tmp_path, name, variable):
+    """A pane command that records one environment variable and then idles."""
+    out = tmp_path / f"{name}.value"
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s" "${variable}" > "{out}"\n'
+        "sleep 300\n"
+    )
+    script.chmod(0o755)
+    return script, out
+
+
+def test_the_squelch_pane_knows_the_radar_pane_id(cockpit, tmp_path):
+    """squelch samples the radar pane's colours, so it needs its id.
+
+    Asserted on the variable as the pane's own process sees it, not on the
+    launcher's copy: `split-window -e` is what has to carry it across, and
+    a value that never reaches the child is exactly the failure that would
+    leave squelch silently unthemed.
+    """
+    run, tmux, session = cockpit
+    script, out = _env_recorder(tmp_path, "record-radar", "KCGX_RADAR_PANE")
+    run(KCGX_SQUELCH_CMD=str(script))
+    value = _await_file(out)
+    assert value, "KCGX_RADAR_PANE must be exported into the squelch pane"
+    assert value.startswith("%"), "tmux pane ids look like %0, %1, ..."
+
+
+def test_the_radar_pane_id_matches_the_adsb_pane(cockpit, tmp_path):
+    run, tmux, session = cockpit
+    script, out = _env_recorder(tmp_path, "record-radar", "KCGX_RADAR_PANE")
+    run(KCGX_SQUELCH_CMD=str(script))
+    exported = _await_file(out)
+    assert exported == role_field(tmux, session, "pane_id")["adsb"]
+
+
+def test_the_radar_pane_id_survives_a_retarget(cockpit, tmp_path, airport_stub):
+    """`kcgx go` respawns the squelch pane, and must re-export the id.
+
+    This is the silent kind of failure: the audio pane simply stops
+    following the radar's theme afterwards, and nothing else changes.
+    """
+    run, tmux, session = cockpit
+    script, out = _env_recorder(tmp_path, "record-radar", "KCGX_RADAR_PANE")
+    run(KCGX_SQUELCH_CMD=str(script))
+    first = _await_file(out)
+    assert first, "the launch path must export it before this proves anything"
+
+    out.unlink()
+    run(
+        args=("go",),
+        KCGX_SQUELCH_CMD=str(script),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KORD\t41.9786\t-87.9048\tChicago O'Hare",
+    )
+    assert _await_file(out) == first
