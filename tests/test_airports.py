@@ -85,8 +85,25 @@ def test_an_exact_icao_always_ranks_first(airports):
     assert search("kord", airports)[0].icao == "KORD"
 
 
-def test_an_exact_iata_ranks_first(airports):
+def test_an_iata_lookup_finds_the_airport(airports):
     assert search("PDX", airports)[0].icao == "KPDX"
+
+
+def test_an_exact_iata_outranks_a_code_prefix_match():
+    """The ICAO tiebreak opposes the tier here.
+
+    ZZZZ wins only because an exact IATA match is tier 1 and a code
+    prefix is tier 2. Delete tier 1 and both fall to tier 2, where
+    alphabetical order puts PDXA first — so this test fails, as it
+    should.
+    """
+    fixture = [
+        Airport("PDXA", "", "Prefix Field", "Nowhere", "XX", "US",
+                0.0, 0.0, "large"),
+        Airport("ZZZZ", "PDX", "Exact Iata Field", "Nowhere", "XX", "US",
+                0.0, 0.0, "large"),
+    ]
+    assert [a.icao for a in search("pdx", fixture)] == ["ZZZZ", "PDXA"]
 
 
 def test_a_prefix_matches_before_a_name_match(airports):
@@ -98,6 +115,19 @@ def test_a_city_name_finds_the_airport(airports):
     icaos = [a.icao for a in search("portland", airports)]
     assert "KPDX" in icaos
     assert "KPWM" in icaos, "Portland, Maine is a real answer to 'portland'"
+
+
+def test_a_city_name_finds_the_airport_even_when_the_name_omits_it():
+    """The test above is not proof the city field is searched: both KPDX's
+    and KPWM's *name* fields also say "Portland", so it would pass even if
+    city were dropped from the haystack entirely. Pin the city field down
+    with a name that says nothing about the city.
+    """
+    fixture = [
+        Airport("XCTY", "", "Terminal One Airfield", "Boisetown", "XX", "US",
+                0.0, 0.0, "large"),
+    ]
+    assert "XCTY" in [a.icao for a in search("boisetown", fixture)]
 
 
 def test_multiple_tokens_are_anded(airports):
