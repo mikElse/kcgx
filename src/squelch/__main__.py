@@ -75,8 +75,25 @@ def _no_feeds(
     the cockpit can retarget squelch anywhere, falling back to kpdx3_twr at
     KORD would play Portland tower under a header reading KORD -- audio
     from the wrong airport is worse than an empty pane.
+
+    The ident-prefix check is a heuristic, not a lookup, and it is
+    deliberately conservative in both directions:
+
+    - It requires a non-empty `config.icao` before trusting the prefix
+      match, because `"anything".startswith("")` is True in Python -- an
+      empty ICAO (reachable from a hand-edited config file; `_checked`
+      only validates the type) would otherwise make every feed look like
+      it belonged to the airport, which is exactly the wrong-airport-audio
+      failure this function exists to prevent.
+    - It also means a feed named after a region rather than a field --
+      `norcal_app`, `chicago_center` -- never matches its airport's ICAO,
+      so someone who configures one as their home feed loses the fallback
+      on every network hiccup. That is accepted: it fails safe (a blank
+      pane with a message) rather than failing wrong (someone else's
+      audio), and deciding whether a regional feed covers a given airport
+      isn't answerable offline.
     """
-    if config.feed and config.feed.lower().startswith(config.icao.lower()):
+    if config.icao and config.feed and config.feed.lower().startswith(config.icao.lower()):
         warn(f"{config.icao} — {reason}; opening {config.feed}")
         return [Feed(ident=config.feed, label=config.feed)]
     tail = "; press f to retry" if retryable else ""
