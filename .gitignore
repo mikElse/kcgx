@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
+
+# subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/
