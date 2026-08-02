@@ -84,7 +84,11 @@ def _no_feeds(
       empty ICAO (reachable from a hand-edited config file; `_checked`
       only validates the type) would otherwise make every feed look like
       it belonged to the airport, which is exactly the wrong-airport-audio
-      failure this function exists to prevent.
+      failure this function exists to prevent. There is deliberately no
+      symmetric guard on `config.feed`: an empty feed cannot start with a
+      non-empty ICAO, so `"".startswith("KPDX")` is already False and a
+      `config.feed and` conjunct would be dead weight that reads as though
+      the two cases were alike.
     - It also means a feed named after a region rather than a field --
       `norcal_app`, `chicago_center` -- never matches its airport's ICAO,
       so someone who configures one as their home feed loses the fallback
@@ -93,7 +97,10 @@ def _no_feeds(
       audio), and deciding whether a regional feed covers a given airport
       isn't answerable offline.
     """
-    if config.icao and config.feed and config.feed.lower().startswith(config.icao.lower()):
+    # The `config.icao and` guard is load-bearing -- see the docstring; an
+    # empty ICAO would match every feed. Its absence on config.feed is not
+    # an oversight.
+    if config.icao and config.feed.lower().startswith(config.icao.lower()):
         warn(f"{config.icao} — {reason}; opening {config.feed}")
         return [Feed(ident=config.feed, label=config.feed)]
     tail = "; press f to retry" if retryable else ""
