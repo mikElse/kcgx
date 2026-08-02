@@ -9,6 +9,24 @@ from squelch.config import Config
 from squelch.feeds import Feed
 
 SIZE = (48, 42)
+
+
+class _FakeSession:
+    def __init__(self, ident, label):
+        from squelch.feeds import Feed as _Feed
+
+        self.feed = _Feed(ident=ident, label=label)
+        self.name = label
+        self.muted = True
+        self.state = "live"
+
+    def toggle_mute(self):
+        self.muted = not self.muted
+        return self.muted
+
+
+def _two_sessions():
+    return [_FakeSession("a_twr", "Tower"), _FakeSession("a_gnd", "Ground")]
 FEEDS = [
     Feed(ident="kpdx_twr", label="Portland Tower"),
     Feed(ident="kpdx_gnd", label="Portland Ground"),
@@ -18,8 +36,7 @@ FEEDS = [
 
 def make_app():
     return SquelchApp(
-        Config(), feed_label="Portland Tower", frequency="118.10",
-        feed_loader=lambda: FEEDS,
+        Config(), [], feed_loader=lambda: FEEDS,
     )
 
 
@@ -126,10 +143,7 @@ async def test_long_label_and_ident_truncate_visibly_within_row_width():
         label="KPDX Extremely Long Feed Label That Overflows The Row",
     )
     app = SquelchApp(
-        Config(),
-        feed_label="Portland Tower",
-        frequency="118.10",
-        feed_loader=lambda: [long_feed],
+        Config(), [], feed_loader=lambda: [long_feed],
     )
     async with app.run_test(size=SIZE) as pilot:
         await open_picker(pilot, app)
@@ -163,7 +177,7 @@ async def test_loader_failure_shows_message_not_crash():
         raise RuntimeError("network down")
 
     app = SquelchApp(
-        Config(), feed_label="Portland Tower", frequency="118.10", feed_loader=boom
+        Config(), [], feed_loader=boom
     )
     async with app.run_test(size=SIZE) as pilot:
         await open_picker(pilot, app)
@@ -191,17 +205,15 @@ async def test_pressing_f_does_not_block_the_event_loop():
         return FEEDS
 
     app = SquelchApp(
-        Config(), feed_label="Portland Tower", frequency="118.10",
-        feed_loader=slow_loader,
+        Config(), _two_sessions(), feed_loader=slow_loader,
     )
     try:
         async with app.run_test(size=SIZE) as pilot:
             await pilot.press("f")
             # The loader is still blocked. The UI must remain responsive.
-            await pilot.press("space")
+            await pilot.press("down")
             await pilot.pause()
-            text, _strips = rendered(app)
-            assert "MUTED" in "\n".join(text), (
+            assert app._selected == 1, (
                 "the event loop was blocked by the feed fetch -- keystrokes "
                 "(and therefore playback, which marshals through the same "
                 "loop) stalled until the loader returned"
@@ -239,8 +251,7 @@ async def test_pressing_f_three_times_stacks_only_one_picker():
         return FEEDS
 
     app = SquelchApp(
-        Config(), feed_label="Portland Tower", frequency="118.10",
-        feed_loader=slow_loader,
+        Config(), [], feed_loader=slow_loader,
     )
     try:
         async with app.run_test(size=SIZE) as pilot:
@@ -282,7 +293,10 @@ async def test_selection_hint_names_the_ident_and_the_flag():
         text, strips = rendered(app)
         joined = "\n".join(text)
         assert "kpdx_gnd" in joined, "the message must name the chosen feed"
-        assert "--feed" in joined, "the message must name the flag that starts it"
+        assert "space" in joined, (
+            "every feed is already open, so the hint must point at the row's "
+            "mute key rather than a restart flag"
+        )
         assert all(s.cell_length == 48 for s in strips)
 
 
@@ -297,7 +311,7 @@ def test_feed_worker_never_raises_when_the_app_has_gone():
     timing.
     """
     app = SquelchApp(
-        Config(), feed_label="Portland Tower", feed_loader=lambda: FEEDS
+        Config(), [], feed_loader=lambda: FEEDS
     )
     with pytest.raises(RuntimeError):
         app.call_from_thread(app._present_feeds, FEEDS)  # the raw hazard

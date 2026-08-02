@@ -6,8 +6,8 @@ pilots took off from, bulldozed in the middle of the night in 2003.
 
 Two pieces live here:
 
-- **`squelch`** — an ATC audio player with a live signal meter, built to
-  fit a narrow **48 × 42** pane.
+- **`squelch`** — plays *every* ATC feed an airport publishes at once,
+  one metered row each, in a narrow **48 × 42** pane.
 - **`kcgx`** — a launcher that arranges `adsb-tui`, `squelch`, and a shell
   into one mouse-resizable tmux session.
 
@@ -74,9 +74,24 @@ a readable traffic table and a 48-column pane.
 
 ## squelch
 
-A terminal ATC audio player: it streams a LiveATC.net feed, plays it
-through your speakers, and shows a scrolling level meter so you can see at
-a glance whether the frequency is busy.
+A terminal ATC audio player. It opens every feed LiveATC publishes for an
+airport, stacks them one per row with a scrolling level meter each, and
+lets you unmute the ones you want to hear.
+
+```
+ KPDX  12 feeds               07:54:29  10 live
+────────────────────────────────────────────────
+ ♪ Tower (Both)             kpdx3_twr        ●
+ ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▇▁▁▇▆▁▁▆▁▆▁▁▁▃▃▁▁▁▆▃▁▇▆▁▁▇▇
+────────────────────────────────────────────────
+ · Ground                   kpdx3_gnd        ◐
+ ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▁▆▁▁▆▃▁▇▁▁▃▃▁▇▁▇▆▆▇▇▁▁▇▁▆▃▆▇▃
+```
+
+`♪` is audible, `·` is muted. The dot on the right is that feed's
+connection: `●` live, `◐` reconnecting, `○` offline. **Every feed meters
+whether or not it is audible** — muting is an audio gate, not a pause, so a
+muted frequency still shows you when it is busy.
 
 Transcription was removed — see "History" at the end.
 
@@ -88,16 +103,17 @@ tmux split-window -h -l 48 'uv run squelch --feed kpdx3_twr'
 
 ## What it does, and does not, do
 
-- Plays a live LiveATC.net audio feed through your default output device.
-- Shows a scrolling level meter — one glyph per recent sample, so a busy
-  frequency reads as a waveform and an idle one as a flat line.
-- Keeps the header honest about what is actually happening: `STARTING`,
-  `LIVE`, `RECONNECTING`, `OFFLINE`.
-- Degrades rather than refusing to start: no audio device, an unresolvable
-  feed, or a missing `ffmpeg` each produce a message in the pane instead of
-  a dead pane or a stack trace.
-- Does **not** restart the stream when you pick a different feed from the
-  `f` picker in this version — see "Feed picker" below.
+- Opens every feed the airport publishes, each with its own ffmpeg
+  process, output stream, and meter.
+- Starts with everything muted except the feed named by `feed` in config
+  (or `--feed`) — you see the whole field immediately, but hear one
+  frequency until you choose otherwise. A dozen simultaneous voices is not
+  something anyone can follow.
+- Meters muted feeds exactly as it meters audible ones.
+- Isolates failures per feed: one that cannot resolve, or whose ffmpeg
+  dies, goes to `○` on its own row and warns. The other eleven keep going.
+- Scrolls when there are more feeds than rows; arrows move the selection
+  and bring it into view.
 - Does **not** transcribe. That was removed; see "History".
 - Does **not** record, save, or redistribute any audio. Playback is local
   only, for personal listening — consistent with LiveATC.net's terms of
@@ -121,8 +137,8 @@ uv run squelch --feed kpdx3_twr      # override the feed ident
 uv run squelch --icao KSEA           # override the airport used by the feed picker (`f`)
 ```
 
-Startup is immediate — squelch resolves the feed, opens the audio device,
-and starts playing. There is no model to download or load.
+Startup is immediate. Each feed resolves and connects on its own thread,
+so a slow or dead feed never holds up the others.
 
 If you resize your terminal, note the UI is laid out for exactly 48×42 and
 does not reflow past that.
@@ -148,7 +164,7 @@ failing later inside the audio pipeline.
 | Key                 | Default                                                        | Meaning |
 |----------------------|----------------------------------------------------------------|---------|
 | `icao`               | `"KPDX"`                                                        | Airport used by the feed picker (`f`) to look up feeds on LiveATC.net |
-| `feed`               | `"kpdx3_twr"`                                                    | LiveATC feed ident to stream on startup |
+| `feed`               | `"kpdx3_twr"`                                                    | The one feed left unmuted at startup |
 
 The `model`, `compute_type` and `vad_aggressiveness` keys are gone. An
 existing config that still sets them keeps working — unknown keys are
@@ -168,28 +184,37 @@ run.
 
 | Key     | Action |
 |---------|--------|
-| `space` | Mute/unmute audio playback. The meter keeps running while muted. |
+| `↑` `↓` | Move the selection through the stack. |
+| `space` | Mute/unmute the selected feed. Its meter keeps running either way. |
 | `f`     | Open the feed picker for the configured airport (`icao`). |
 | `escape`| (in the feed picker) Close it without choosing anything. |
 | `q`     | Quit. |
 
 ### Feed picker
 
-Pressing `f` fetches the list of feeds LiveATC publishes for the configured
-airport and shows them in an overlay. You can navigate and select a row,
-but **selecting a feed does not restart the stream in this version** — the
-running pipeline keeps listening to whatever URL it originally resolved at
-startup. Selecting a row prints the command that would start it, e.g.
-`selected ksea_twr — restart with: squelch --feed ksea_twr`. Live feed
-switching is intentionally out of scope for v1. If the feed list can't be
-loaded (network trouble, or the airport has no feeds LiveATC exposes), a
-warning appears in the message log instead of a crash. The fetch runs
-off the event loop, so a slow or hanging LiveATC request never stalls
-playback or the UI.
+Pressing `f` lists the feeds LiveATC publishes for the configured airport.
+Since squelch already opens all of them, the picker is a lookup rather than
+a switch: selecting a row reports that feed's ident and points you at its
+row, e.g. `kpdx3_gnd — already open; use [space] on its row to unmute`. If
+the list can't be loaded, a warning appears in the message log instead of a
+crash. The fetch runs off the event loop, so a slow or hanging LiveATC
+request never stalls playback or the UI.
+
+## Cost
+
+One ffmpeg process, one PortAudio output stream, and one thread per feed —
+twelve of each at KPDX. Twelve simultaneous output streams were verified to
+open and run on macOS (CoreAudio mixes them). Bandwidth is trivial at
+roughly 16–32 kbps per feed; the CPU is mostly ffmpeg decode. Worth
+watching on battery.
 
 ## Known limitations
 
-- Selecting a feed in the picker does not restart the stream (see above).
+- The picker cannot switch feeds, because they are all already open (see
+  above).
+- Feeds are discovered once at startup; a feed that appears on LiveATC
+  later needs a restart to show up.
+- There is no master mute or solo — muting is per feed.
 - No transcription (see "History").
 - The message log only carries warnings, so the pane is mostly empty at
   rest. Retention is capped at the most recent 200 messages so memory and

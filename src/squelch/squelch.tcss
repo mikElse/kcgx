@@ -7,13 +7,40 @@ Screen {
     background: $panel;
 }
 
-#meter {
+#feeds {
+    height: 1fr;
+}
+
+.feed {
+    height: 3;
+    padding: 0 1;
+    border-top: solid $primary;
+}
+
+/* Muted feeds dim, but their meters keep running -- muting is an audio
+   gate, not a pause. */
+.feed.muted {
+    color: $text-disabled;
+}
+
+.feed.selected {
+    background: $boost;
+}
+
+.feed-name {
     height: 1;
 }
 
+.feed-meter {
+    height: 1;
+}
+
+/* Takes no rows until something has actually been logged. With a dozen
+   feeds stacked above it, a permanently reserved message area would cost
+   rows the feeds themselves need. */
 #messages {
-    height: 1fr;
-    border-top: solid $primary;
+    height: auto;
+    max-height: 6;
     padding: 0 1;
 }
 
