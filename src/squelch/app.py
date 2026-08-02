@@ -28,6 +28,7 @@ from squelch.rows import (
     NAME_WIDTH,
     ROW_WIDTH,
     FeedRow,
+    RowClicked,
     _fit,
 )
 
@@ -226,7 +227,34 @@ class SquelchApp(App):
         session.toggle_mute()
         row = self._rows.get(id(session))
         if row is not None:
-            row.refresh_name()
+            row.refresh_all()
+
+    def action_toggle_solo(self) -> None:
+        # Task 8 wires the real state machine.
+        pass
+
+    def action_toggle_ambient(self) -> None:
+        session = self.selected_session
+        if session is None:
+            return
+        session.toggle_ambient()
+        row = self._rows.get(id(session))
+        if row is not None:
+            row.refresh_all()
+
+    def on_row_clicked(self, message: RowClicked) -> None:
+        session = message.row.session
+        self._selected = self._sessions.index(session)
+        self._apply_selection()
+        if message.control_name == "solo":
+            self.action_toggle_solo()
+        elif message.control_name == "ambient":
+            self.action_toggle_ambient()
+        else:
+            # Both an explicit [ON]/[OFF] hit and a click anywhere on the
+            # row body mute the feed -- the common action must not require
+            # aiming at a 5-cell target.
+            self.action_toggle_mute()
 
     # -- driven by the sessions ----------------------------------------
 
