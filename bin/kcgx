@@ -77,6 +77,43 @@ apply_config() {
     tm source-file "$CONF"
 }
 
+usage() {
+    cat <<'USAGE'
+kcgx — open the cockpit: live traffic, ATC audio, a shell.
+
+  kcgx          open the cockpit, or reattach to a running one
+  kcgx stop     shut the cockpit down
+  kcgx --help   this
+
+Drag any pane border with the mouse to resize. Ctrl-b then r respawns a
+pane that has died.
+USAGE
+}
+
+case "${1:-}" in
+    stop)
+        # Kill only our session. The tmux server may be running sessions that
+        # have nothing to do with kcgx, so kill-server is not an option.
+        if tm has-session -t "=$SESSION" 2>/dev/null; then
+            tm kill-session -t "=$SESSION"
+            printf 'kcgx: stopped.\n'
+        else
+            printf 'kcgx: not running.\n'
+        fi
+        exit 0
+        ;;
+    -h | --help | help)
+        usage
+        exit 0
+        ;;
+    "") ;;
+    *)
+        printf 'kcgx: unknown command %s\n\n' "$1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
 # Already running? Attach instead of building a second one, so squelch keeps its
 # transcript and you don't pay the model load again.
 if tm has-session -t "=$SESSION" 2>/dev/null; then

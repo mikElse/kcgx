@@ -12,7 +12,9 @@ Two pieces live here:
   into one mouse-resizable tmux session.
 
 ```
-kcgx        # open the cockpit (or reattach to a running one)
+kcgx          # open the cockpit (or reattach to a running one)
+kcgx stop     # shut it down
+kcgx --help
 ```
 
 ---
@@ -50,6 +52,10 @@ than requiring you to kill the server.
 **Running it again reattaches** rather than starting a second copy, so
 `squelch` keeps its transcript and you don't pay the model load twice.
 Closing the terminal detaches; the session keeps running.
+
+**`kcgx stop`** shuts the cockpit down. It kills only the kcgx session, not
+the tmux server, so any other tmux sessions you have keep running. Stopping
+something that isn't running is not an error.
 
 **Mouse behaviour.** tmux handles drags on pane borders. Clicks and scrolls
 *inside* a pane go to the application if it asked for mouse reporting —

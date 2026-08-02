@@ -33,7 +33,7 @@ def cockpit():
     socket = f"kcgx-test-{uuid.uuid4().hex[:8]}"
     session = f"kcgx-test-{uuid.uuid4().hex[:8]}"
 
-    def run(size="200x50", detached=True, launcher=LAUNCHER, **overrides):
+    def run(size="200x50", detached=True, launcher=LAUNCHER, args=(), **overrides):
         env = {
             **os.environ,
             "KCGX_SOCKET": socket,
@@ -50,7 +50,11 @@ def cockpit():
         env.pop("TMUX", None)
         env.update({k: str(v) for k, v in overrides.items()})
         return subprocess.run(
-            [str(launcher)], env=env, capture_output=True, text=True, timeout=30
+            [str(launcher), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
 
     def tmux(*args):
@@ -306,6 +310,61 @@ def test_symlinked_invocation_still_applies_the_config(cockpit, tmp_path):
 
     assert cockpit(launcher=link).returncode == 0
     assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
+
+
+def test_stop_kills_a_running_cockpit(cockpit):
+    assert cockpit().returncode == 0
+    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode == 0
+
+    result = cockpit(args=("stop",))
+    assert result.returncode == 0, result.stderr
+    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode != 0
+
+
+def test_stop_is_idempotent_when_nothing_is_running(cockpit):
+    """Stopping an already-stopped cockpit is not an error."""
+    result = cockpit(args=("stop",))
+    assert result.returncode == 0, result.stderr
+    assert "not running" in (result.stdout + result.stderr).lower()
+
+
+def test_stop_leaves_other_tmux_sessions_alone(cockpit):
+    """It must kill our session, not the tmux server — you may have others."""
+    other = subprocess.run(
+        ["tmux", "-L", cockpit.socket, "new-session", "-d", "-s", "keepme", "sleep 60"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert other.returncode == 0, other.stderr
+    assert cockpit().returncode == 0
+
+    assert cockpit(args=("stop",)).returncode == 0
+    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode != 0
+    assert cockpit.tmux("has-session", "-t", "=keepme").returncode == 0
+
+
+def test_stop_does_not_need_a_terminal(cockpit):
+    """Unlike launching, stopping has nothing to attach to."""
+    assert cockpit().returncode == 0
+    result = cockpit(args=("stop",), size=None, detached=False)
+    assert result.returncode == 0, result.stderr
+    assert "terminal" not in result.stderr.lower()
+
+
+def test_unknown_subcommand_is_rejected_with_usage(cockpit):
+    result = cockpit(args=("frobnicate",))
+    assert result.returncode != 0
+    assert "frobnicate" in result.stderr
+    assert "stop" in result.stderr, "should show what it does accept"
+
+
+def test_help_lists_the_subcommands(cockpit):
+    result = cockpit(args=("--help",))
+    assert result.returncode == 0, result.stderr
+    combined = result.stdout + result.stderr
+    assert "stop" in combined
+    assert "kcgx" in combined
 
 
 def test_reports_missing_tmux_with_an_actionable_message(tmp_path):
