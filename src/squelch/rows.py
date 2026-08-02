@@ -19,9 +19,11 @@ FLOOR_DBFS = -60.0
 
 # The pane is 48 wide; rows carry `padding: 0 1`, leaving 46 content cells.
 ROW_WIDTH = 46
-# Name row: marker + space + name + space + ident + space + dot.
-NAME_WIDTH = 24
-IDENT_WIDTH = 16
+# Dropping the ident buys the name 10 cells compact and 20 expanded. The
+# ident was never typed at runtime; `feed` in squelch.toml and the picker
+# are where it is still needed.
+NAME_WIDTH = 34
+NAME_WIDTH_EXPANDED = 44
 METER_ROWS = 3
 # One glyph per row of vertical resolution, so a sample spans 3 x 8 steps.
 # At a single row a colour gradient has too few cells to read as a gradient,
@@ -36,6 +38,43 @@ _STATE_DOTS = {
     "offline": "○",
     "starting": "◌",
 }
+
+
+# Both states of the mute toggle are 5 cells, so nothing beside it shifts
+# when it flips.
+_ON = "[ ON]"
+_OFF = "[OFF]"
+_SOLO = "[S]"
+_AMBIENT = "[A]"
+
+
+def _toggle(muted: bool) -> str:
+    return _OFF if muted else _ON
+
+
+def compact_line(name: str, *, muted: bool, ambient: bool, state: str) -> str:
+    """Name, controls, and state dot on one line.
+
+    A muted feed is compact, and a compact row still has to offer a way back
+    -- so the toggle lives here as well as on the expanded control line.
+    """
+    dot = _STATE_DOTS.get(state, "●")
+    return f"{_fit(name, NAME_WIDTH)} {_AMBIENT} {_toggle(muted)} {dot}"
+
+
+def expanded_name_line(name: str, *, state: str) -> str:
+    """Name and state dot. The controls get their own line below the meter."""
+    dot = _STATE_DOTS.get(state, "●")
+    return f"{_fit(name, NAME_WIDTH_EXPANDED)} {dot}"
+
+
+def control_line(
+    *, muted: bool, ambient: bool, soloed: bool, activity: float | None
+) -> str:
+    """The expanded row's control strip, with activity right-aligned."""
+    controls = f"{_SOLO}  {_toggle(muted)}  {_AMBIENT}"
+    readout = "" if activity is None else f"busy {round(activity * 100)}%"
+    return controls + readout.rjust(ROW_WIDTH - len(controls))
 
 
 def level_step(dbfs: float) -> int:
@@ -131,13 +170,15 @@ class FeedRow(Vertical):
         if self._name_widget is None:
             return
         session = self.session
-        marker = "·" if session.muted else "♪"
-        dot = _STATE_DOTS.get(session.state, "●")
-        line = (
-            f"{marker} {_fit(session.name, NAME_WIDTH)} "
-            f"{_fit(session.feed.ident, IDENT_WIDTH)} {dot}"
+        self._name_widget.update(
+            compact_line(
+                session.name,
+                muted=session.muted,
+                ambient=bool(getattr(session, "ambient", False)),
+                state=session.state,
+            ),
+            layout=False,
         )
-        self._name_widget.update(_fit(line, ROW_WIDTH), layout=False)
         # Dimming is a class, not a colour written into the string: the
         # meter must keep its full contrast relationship while the whole row
         # reads as inactive.
