@@ -16,6 +16,10 @@
 #   KCGX_ADSB_CMD      command for the left pane       (default: adsb-tui)
 #   KCGX_SQUELCH_CMD   command for the squelch pane
 #   KCGX_AIRPORT_CMD   command that resolves/picks an airport
+#   KCGX_STATE_PATH    where the picked airport is remembered; read by the
+#                      Python side, but inherited through this script, so
+#                      setting it here reaches kcgx-airport three processes
+#                      down (default: ~/.local/state/kcgx/airport)
 #   KCGX_SQUELCH_COLS  width of the right column       (default: 48)
 #   KCGX_SHELL_ROWS    height of the shell pane        (default: 12)
 #   KCGX_MIN_COLS      refuse to build below this      (default: 100)

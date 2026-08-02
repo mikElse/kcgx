@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from kcgx.state import (
-    STATE_PATH,
-    current_icao,
-    default_path,
-    read_airport,
-    write_airport,
-)
+import kcgx.state
+from kcgx.state import current_icao, default_path, read_airport, write_airport
 from squelch.config import Config
 
 
@@ -61,9 +56,12 @@ def test_kcgx_state_path_relocates_the_state_file(tmp_path, monkeypatch):
     assert read_airport() == "KORD"
 
 
-def test_the_default_is_the_home_state_file_when_the_seam_is_unset(monkeypatch):
+def test_the_default_is_the_state_path_constant_when_the_seam_is_unset(monkeypatch):
+    """Read through the module, not a from-import: conftest redirects
+    kcgx.state.STATE_PATH, and a name bound at import time would still point
+    at the real ~/.local/state/kcgx and make this assert the wrong thing."""
     monkeypatch.delenv("KCGX_STATE_PATH", raising=False)
-    assert default_path() == STATE_PATH
+    assert default_path() == kcgx.state.STATE_PATH
 
 
 def test_an_explicit_path_beats_the_environment(tmp_path, monkeypatch):
