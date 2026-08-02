@@ -9,6 +9,9 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "faster-whisper>=1.2.1",
+    # Imported directly by asr.py. It currently arrives transitively via
+    # faster-whisper, which is not a guarantee -- declare what we import.
+    "numpy>=2.0",
     "sounddevice>=0.5.5",
     "textual>=8.2.8",
     "webrtcvad-wheels>=2.0.14",

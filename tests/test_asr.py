@@ -61,3 +61,20 @@ def test_not_ready_before_load():
     assert tr.ready is False
     tr.load()
     assert tr.ready is True
+
+
+def test_numpy_is_a_declared_dependency():
+    """asr.py imports numpy directly, so it must be declared directly.
+
+    It currently arrives transitively via faster-whisper, which is not a
+    guarantee: a faster-whisper release that swaps its array backend would
+    turn this module's `import numpy as np` into an ImportError at startup.
+    """
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    deps = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
+    assert any(d.split(">")[0].split("=")[0].strip() == "numpy" for d in deps), (
+        f"numpy is imported by squelch.asr but not declared: {deps!r}"
+    )
