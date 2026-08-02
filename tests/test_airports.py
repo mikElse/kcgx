@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from kcgx.airports import DATA_PATH
+import pytest
+
+from kcgx.airports import DATA_PATH, Airport, find, load_airports
 
 
 def test_the_committed_dataset_is_present_and_substantial():
@@ -12,11 +14,6 @@ def test_the_committed_dataset_is_present_and_substantial():
     rows = [line for line in text.splitlines() if line and not line.startswith("#")]
     assert len(rows) > 4000, f"only {len(rows)} rows — did the filter change?"
     assert rows[0].startswith("icao,iata,name,city,region,country,lat,lon,size")
-
-
-import pytest
-
-from kcgx.airports import Airport, find, load_airports
 
 
 @pytest.fixture(scope="module")
