@@ -684,6 +684,38 @@ def test_the_default_resolver_really_works(cockpit, tmp_path):
     assert "--icao KORD" in squelch, squelch
 
 
+def test_an_unknown_remembered_icao_falls_back_instead_of_failing(cockpit, tmp_path):
+    """The spec: "An ICAO in the state file that is no longer in the dataset
+    falls back to the next source and warns, rather than failing to launch."
+
+    It did fail: `resolve` exited 2, and the launcher's degrade path built
+    the cockpit with no --site-lat/--site-lon and no --icao — on every
+    launch after, until the user happened to run `kcgx go`. Reachable from
+    a hand-edited state file, or from OurAirports reclassifying a field out
+    of the committed subset on the next regeneration.
+
+    Runs the real resolver, because a stub cannot get this wrong.
+    """
+    run, tmux, session = cockpit
+    state = tmp_path / "gone" / "airport"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("ZZZZ\n")
+
+    result = run(KCGX_AIRPORT_CMD="", KCGX_STATE_PATH=str(state))
+    assert result.returncode == 0, result.stderr
+
+    adsb = pane_command(tmux, session, 0)
+    squelch = pane_command(tmux, session, 1)
+    assert "--site-lat 45.588699" in adsb, (
+        "an unknown remembered airport cost the cockpit its coordinates: " + adsb
+    )
+    assert "--icao KPDX" in squelch, squelch
+    assert "ZZZZ" in result.stderr, (
+        "fell back in silence, which is the degradation this replaces: "
+        + repr(result.stderr)
+    )
+
+
 def test_a_real_pick_moves_the_cockpit_and_is_remembered(cockpit, tmp_path):
     """The one test that runs the whole chain: bin/kcgx -> uv -> the real
     kcgx-airport pick -> a record -> tmux panes -> the state file.

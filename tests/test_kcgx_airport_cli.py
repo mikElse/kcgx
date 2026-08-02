@@ -136,7 +136,7 @@ def test_whitespace_in_the_label_cannot_shift_fields():
 def test_resolve_writes_the_current_airport(tmp_path, monkeypatch):
     import kcgx.__main__ as cli
 
-    monkeypatch.setattr(cli, "current_icao", lambda: "KORD")
+    monkeypatch.setattr(cli, "current_icao", lambda **kwargs: "KORD")
     out = tmp_path / "record"
     assert run(["resolve", "--out", str(out)]) == 0
     assert out.read_text().split("\t")[0] == "KORD"
@@ -149,17 +149,46 @@ def test_resolve_prints_to_stdout_without_out(capsys, monkeypatch):
     catch it. KORD can only come from the monkeypatched current_icao."""
     import kcgx.__main__ as cli
 
-    monkeypatch.setattr(cli, "current_icao", lambda: "KORD")
+    monkeypatch.setattr(cli, "current_icao", lambda **kwargs: "KORD")
     assert run(["resolve"]) == 0
     assert capsys.readouterr().out.startswith("KORD\t")
 
 
-def test_resolve_fails_loudly_on_an_airport_not_in_the_dataset(capsys, monkeypatch):
+def test_resolve_fails_loudly_when_nothing_resolves(capsys, monkeypatch):
+    """The remaining route to exit 2: current_icao ran out of sources and
+    handed back a code the dataset does not have. Say which code."""
     import kcgx.__main__ as cli
 
-    monkeypatch.setattr(cli, "current_icao", lambda: "ZZZZ")
+    monkeypatch.setattr(cli, "current_icao", lambda **kwargs: "ZZZZ")
     assert run(["resolve"]) == 2
     assert "ZZZZ" in capsys.readouterr().err
+
+
+def test_resolve_falls_back_when_the_remembered_icao_left_the_dataset(
+    tmp_path, capsys, monkeypatch
+):
+    """The spec's promise, end to end through the CLI: a state file naming an
+    airport the dataset no longer has resolves to the next source and warns,
+    rather than exiting 2 and leaving the cockpit unconfigured.
+
+    KCGX_STATE_PATH is the seam the launcher uses too, so this drives the
+    real current_icao rather than a stand-in. squelch.toml is the second
+    source and is looked up under the developer's real $HOME (DEFAULT_PATH
+    is bound at import, so redirecting HOME cannot reach it), which would
+    otherwise let a machine that happens to have one decide the answer."""
+    import squelch.config
+
+    state = tmp_path / "airport"
+    state.write_text("ZZZZ\n")
+    monkeypatch.setenv("KCGX_STATE_PATH", str(state))
+    monkeypatch.setattr(squelch.config, "DEFAULT_PATH", tmp_path / "no-squelch.toml")
+
+    out = tmp_path / "record"
+    assert run(["resolve", "--out", str(out)]) == 0
+    assert out.read_text().split("\t")[0] == "KPDX", "no usable fallback target"
+
+    err = capsys.readouterr().err
+    assert "ZZZZ" in err, "fell back in silence, which is the bug it replaces"
 
 
 # -- pick ------------------------------------------------------------------
