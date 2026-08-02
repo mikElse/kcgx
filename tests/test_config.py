@@ -5,7 +5,7 @@ from squelch.config import Config, load_config
 def test_defaults_when_no_file(tmp_path):
     cfg = load_config(tmp_path / "missing.toml")
     assert cfg.icao == "KPDX"
-    assert cfg.feed == "kpdx_twr"
+    assert cfg.feed == "kpdx3_twr"
     assert cfg.vad_aggressiveness == 2
 
 

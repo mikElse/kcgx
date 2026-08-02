@@ -13,7 +13,7 @@ DEFAULT_MODEL = "jacktol/whisper-medium.en-fine-tuned-for-ATC-faster-whisper"
 @dataclass(frozen=True)
 class Config:
     icao: str = "KPDX"
-    feed: str = "kpdx_twr"
+    feed: str = "kpdx3_twr"
     model: str = DEFAULT_MODEL
     compute_type: str = "int8"
     vad_aggressiveness: int = 2
