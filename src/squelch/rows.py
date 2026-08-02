@@ -355,7 +355,7 @@ class FeedRow(Vertical):
                     muted=session.muted,
                     ambient=bool(getattr(session, "ambient", False)),
                     soloed=bool(getattr(session, "soloed", False)),
-                    activity=getattr(session, "activity", None),
+                    activity=session.activity,
                 ),
                 layout=False,
             )

@@ -21,6 +21,7 @@ from textual.worker import NoActiveWorker, get_current_worker
 
 from squelch.config import Config
 from squelch.feeds import Feed
+from squelch.activity import Resorter, rank
 from squelch.solo import Solo
 from squelch.rows import (
     BLOCKS,
@@ -96,6 +97,8 @@ class MessageLog(VerticalScroll):
 
 class SquelchApp(App):
     CSS_PATH = "squelch.tcss"
+    # Ranking is cheap; applying it is what needs to be rare.
+    RESORT_INTERVAL = 5.0
     BINDINGS = [
         ("up", "cursor_up", "Up"),
         ("down", "cursor_down", "Down"),
@@ -119,6 +122,8 @@ class SquelchApp(App):
         self._feed_loader = feed_loader
         self._selected = 0
         self._solo = Solo()
+        self._resorter = Resorter()
+        self._resort_timer = None
         for session in self._sessions:
             session.soloed = False
         self._clock_text = datetime.now().strftime("%H:%M:%S")
@@ -154,6 +159,9 @@ class SquelchApp(App):
         self._refresh_footer()
         self._apply_selection()
         self._clock_timer = self.set_interval(1.0, self._tick_clock)
+        self._resort_timer = self.set_interval(
+            self.RESORT_INTERVAL, self._tick_resort
+        )
         self.on_start()
 
     def on_unmount(self) -> None:
@@ -164,6 +172,9 @@ class SquelchApp(App):
         if self._clock_timer is not None:
             self._clock_timer.stop()
             self._clock_timer = None
+        if self._resort_timer is not None:
+            self._resort_timer.stop()
+            self._resort_timer = None
         self._header = self._footer = None
         self._messages = None
         self._feed_list = None
@@ -213,6 +224,40 @@ class SquelchApp(App):
             # Keep the selection on screen when it moves past the viewport --
             # the whole point of a scrollable stack.
             self._feed_list.scroll_to_widget(row, animate=False)
+
+    def on_key(self, event) -> None:
+        # A row that moves between the decision to press a key and the press
+        # itself acts on the wrong feed.
+        self._resorter.note_input()
+
+    def _tick_resort(self) -> None:
+        order = self._resorter.propose(
+            rank(self._sessions, lambda session: session.activity)
+        )
+        if order is not None:
+            self.apply_order(order)
+
+    def apply_order(self, order: list) -> None:
+        """Reorder the stack, moving rows rather than remounting them.
+
+        Remounting would drop every row's meter history and its scroll
+        position. `move_child` keeps the same widget instances, which is
+        also why `_rows` can stay keyed by `id(session)` -- the mapping does
+        not change, only the order of the children.
+        """
+        feed_list = self._feed_list
+        if feed_list is None:
+            return
+        selected = self.selected_session
+        self._sessions = list(order)
+        for index, session in enumerate(self._sessions):
+            row = self._rows.get(id(session))
+            if row is not None:
+                feed_list.move_child(row, before=index)
+        if selected is not None:
+            # Selection belongs to a feed, not to a position.
+            self._selected = self._sessions.index(selected)
+        self._apply_selection()
 
     def jump_to_feed(self, feed) -> None:
         """Move the selection to `feed`'s row.
@@ -296,6 +341,7 @@ class SquelchApp(App):
             self._refresh_row(session)
 
     def on_row_clicked(self, message: RowClicked) -> None:
+        self._resorter.note_input()
         session = message.row.session
         self._selected = self._sessions.index(session)
         self._apply_selection()

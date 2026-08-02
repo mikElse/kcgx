@@ -23,7 +23,7 @@ class FakeSession:
         self.state = state
         self.ambient = False
         self.soloed = False
-        self.activity = None
+        self.activity = 0.0
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -545,3 +545,103 @@ async def test_ambient_does_not_change_mute():
         await pilot.pause()
         assert mix(app) == before
         assert app._rows[id(app._sessions[1])].has_class("ambient")
+
+
+# -- activity sorting ------------------------------------------------------
+
+
+def set_activity(app, values):
+    for session, value in zip(app._sessions, values):
+        session.activity = value
+
+
+@pytest.mark.asyncio
+async def test_the_stack_reorders_busiest_first_once_settled():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.9, 0.5])
+        original = list(app._sessions)
+        for _ in range(3):
+            app._tick_resort()
+        await pilot.pause()
+        assert app._sessions == [original[1], original[2], original[0]]
+
+
+@pytest.mark.asyncio
+async def test_one_tick_is_not_enough_to_reorder():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.9, 0.5])
+        original = list(app._sessions)
+        app._tick_resort()
+        await pilot.pause()
+        assert app._sessions == original
+
+
+@pytest.mark.asyncio
+async def test_a_keypress_defers_a_resort():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.9, 0.5])
+        original = list(app._sessions)
+        for _ in range(2):
+            app._tick_resort()
+        await pilot.press("down")
+        await pilot.pause()
+        app._tick_resort()
+        await pilot.pause()
+        assert app._sessions == original, "the stack must not move under a keypress"
+
+
+@pytest.mark.asyncio
+async def test_the_selection_follows_the_feed_across_a_resort():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("down")
+        await pilot.pause()
+        selected = app.selected_session
+        set_activity(app, [0.1, 0.9, 0.5])
+        for _ in range(3):
+            app._tick_resort()
+        await pilot.pause()
+        assert app.selected_session is selected, "a resort must not change what is selected"
+
+
+@pytest.mark.asyncio
+async def test_a_resort_moves_the_widgets_not_just_the_list():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.9, 0.5])
+        for _ in range(3):
+            app._tick_resort()
+        await pilot.pause()
+        painted = [row.session for row in app.query(FeedRow)]
+        assert painted == app._sessions
+
+
+@pytest.mark.asyncio
+async def test_a_resort_preserves_meter_history():
+    """Rows are moved, never remounted."""
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        session = app._sessions[2]
+        session.muted = False
+        for level in (-20.0, -10.0, -5.0):
+            app.set_level(session, level)
+        set_activity(app, [0.1, 0.9, 0.5])
+        for _ in range(3):
+            app._tick_resort()
+        await pilot.pause()
+        assert len(app._rows[id(session)]._history) == 3
+
+
+@pytest.mark.asyncio
+async def test_offline_feeds_sink_to_the_bottom():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.0, 0.4, 0.8])
+        original = list(app._sessions)
+        for _ in range(3):
+            app._tick_resort()
+        await pilot.pause()
+        assert app._sessions[-1] is original[0]
