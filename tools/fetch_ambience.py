@@ -2,9 +2,15 @@
 
 Run with:  uv run --project . python tools/fetch_ambience.py
 
-The result is committed, so this runs about never — only to re-pull after
-editing the mix on ambient-mixer.com. Keeping it in the repo is what makes
-the asset directory reproducible rather than mysterious.
+The manifest and the attribution are committed; the mp3s are not (3.4 MB of
+binaries, see .gitignore). So this is both the way to re-pull after editing
+the mix on ambient-mixer.com and the way to restore a working checkout that
+has never had the stems. Keeping it in the repo is what makes the asset
+directory reproducible rather than mysterious.
+
+Every channel's source URL is recorded in ambience.json, so restoring the
+stems does not have to mean scraping the page again — that is what the
+eventual first-run fetch will read.
 
 The mix is a set of independent loops, not a stream: the site's player
 downloads every channel and sums them in the browser. This fetches the same
@@ -14,6 +20,7 @@ positions in ambience.json so squelch can reproduce the mix itself.
 
 from __future__ import annotations
 
+import datetime as dt
 import html
 import json
 import re
@@ -104,11 +111,17 @@ def main() -> None:
     for number, block in re.findall(r"<channel(\d)>(.*?)</channel\1>", xml, re.S):
         name = tag(block, "name_audio")
         path = OUT / f"{number}-{slugify(name)}.mp3"
-        path.write_bytes(get(tag(block, "url_audio")))
+        url = tag(block, "url_audio")
+        path.write_bytes(get(url))
         is_random = tag(block, "random") == "true"
         channels.append(
             {
                 "file": path.name,
+                # Recorded so a missing stem can be re-fetched by name without
+                # scraping the page again. The mp3s are not in the repo -- see
+                # .gitignore -- so this is the only thing that makes an
+                # incomplete asset directory recoverable.
+                "url": url,
                 "name": name,
                 "duration_s": duration_of(path),
                 # Fader positions, normalised: the site stores volume 0..100
@@ -129,7 +142,9 @@ def main() -> None:
         "source": PAGE,
         "template_id": template_id,
         "template_xml": TEMPLATE_XML.format(template_id),
-        "retrieved": "2026-08-02",
+        # The real run date, not a literal: a hardcoded one would have every
+        # future re-run assert a retrieval that never happened.
+        "retrieved": dt.date.today().isoformat(),
         "license": licence,
         "note": (
             "gain and balance are the template's fader positions, normalised "
