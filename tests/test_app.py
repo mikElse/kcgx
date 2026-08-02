@@ -115,6 +115,60 @@ async def test_long_transcript_wraps_and_does_not_overflow():
 
 
 @pytest.mark.asyncio
+async def test_wrapped_block_text_keeps_indent_on_continuation_lines():
+    """Every wrapped line of a block's text must share the same left indent.
+
+    Regression test: the block used to be a single string joined with
+    "\\n  " -- a literal two-space prefix only ever lands on the first line
+    of the text. Once the text is long enough to wrap inside the transcript
+    width, continuation lines start flush at the left margin (no indent at
+    all), so a wrapped block reads ragged instead of like one indented
+    paragraph under its timestamp. This asserts on the *rendered* strips,
+    not the input string, since the bug is invisible from the source text
+    alone -- it only shows up once Textual actually wraps it.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        app.add_block(
+            Block(
+                started_at=datetime(2026, 8, 2, 14, 31, 42),
+                text=(
+                    "Alaska four twelve heavy Portland tower wind two eight "
+                    "zero at one two runway two eight left cleared to land "
+                    "traffic is a Dash Eight on a three mile final"
+                ),
+            )
+        )
+        await pilot.pause()
+        text, strips = rendered(app)
+        assert all(s.cell_length == 48 for s in strips)
+
+        stamp_idx = next(i for i, line in enumerate(text) if "14:31:42" in line)
+        # The text wraps across several lines; collect every non-blank line
+        # that follows the timestamp until the wrapped paragraph ends.
+        body_lines = []
+        for line in text[stamp_idx + 1 :]:
+            if not line.strip():
+                break
+            body_lines.append(line)
+        assert len(body_lines) >= 3, (
+            "test text must be long enough to produce at least one genuine "
+            "continuation line beyond the first wrap"
+        )
+
+        indents = [len(line) - len(line.lstrip(" ")) for line in body_lines]
+        assert all(indent > 0 for indent in indents), (
+            "every wrapped line -- including continuations -- must be "
+            f"indented, not flush at the left margin: {body_lines!r}"
+        )
+        assert len(set(indents)) == 1, (
+            "all wrapped lines of one block must share the same indent so "
+            f"the block reads as one paragraph, got indents {indents!r} for "
+            f"lines {body_lines!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_block_timestamp_and_text_are_displayed():
     app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
     async with app.run_test(size=SIZE) as pilot:
@@ -158,19 +212,68 @@ async def test_long_label_truncates_with_ellipsis_not_collision():
     than deliberate truncation. There must be a visible ellipsis and at
     least one space before the state indicator, and the header must still
     be exactly 48 cells for both state widths.
+
+    This is a sweep, not a single case: it also covers the *exact-fit*
+    boundary, where the label's length lands precisely on the pre-fix `room`
+    value. That length used to slip past the old `len(left) > room` check
+    untruncated -- ljust(room) is a no-op on a string already `room` chars
+    long -- so nothing ever reserved a separating column, and the label
+    butted straight into "●" (e.g. "...118.10● LIVE") despite never
+    triggering the "too long" branch at all. `content_room` (`room - 1`)
+    fixes this by reserving that column unconditionally; the sweep below
+    checks a label exactly at the old `room` boundary (must now truncate),
+    a label exactly at the new `content_room` boundary (must fit with no
+    truncation, but still get the separator), and one comfortably short of
+    it (existing untruncated case).
     """
     long_label = "Seattle Approach East Sector Combined Frequency Two"
-    for state in ("live", "reconnecting"):
-        app = SquelchApp(Config(), feed_label=long_label, frequency="118.10")
-        async with app.run_test(size=SIZE) as pilot:
-            app.set_state(state)
-            await pilot.pause()
-            text, strips = rendered(app)
-            header = text[0]
-            assert strips[0].cell_length == 48
-            assert "…" in header
-            ellipsis_pos = header.index("…")
-            assert header[ellipsis_pos + 1] == " ", (
-                "ellipsis must be followed by a separating space, not glued "
-                "straight into the state glyph"
-            )
+    frequency = "118.10"
+    for state, state_text in (("live", "LIVE"), ("reconnecting", "RECONNECTING")):
+        right = f"● {state_text} "
+        room = 48 - len(right)  # pre-fix boundary: used to allow collision
+        content_room = room - 1  # post-fix boundary: exact fit, no truncation
+
+        def label_of_left_length(target_left_len: int) -> str:
+            # left = " " + label + "  " + frequency
+            return "X" * (target_left_len - 3 - len(frequency))
+
+        cases = {
+            "comfortably short": label_of_left_length(room - 10),
+            "exact new boundary (content_room, no truncation expected)":
+                label_of_left_length(content_room),
+            "exact old boundary (room, must now truncate)":
+                label_of_left_length(room),
+            "descriptive long label": long_label,
+        }
+        for case_name, label in cases.items():
+            app = SquelchApp(Config(), feed_label=label, frequency=frequency)
+            async with app.run_test(size=SIZE) as pilot:
+                app.set_state(state)
+                await pilot.pause()
+                text, strips = rendered(app)
+                header = text[0]
+                assert strips[0].cell_length == 48, case_name
+                state_pos = header.index("●")
+                assert header[state_pos - 1] == " ", (
+                    f"[{case_name}, state={state}] label must never collide "
+                    "straight into the state glyph -- a separating space is "
+                    "required unconditionally, not only when truncation "
+                    "happens to trigger"
+                )
+
+        # The descriptive long label and the label truncated at the old
+        # `room` boundary must both show visible truncation, ellipsis
+        # followed immediately by the guaranteed separator space.
+        for label in (long_label, label_of_left_length(room)):
+            app = SquelchApp(Config(), feed_label=label, frequency=frequency)
+            async with app.run_test(size=SIZE) as pilot:
+                app.set_state(state)
+                await pilot.pause()
+                text, strips = rendered(app)
+                header = text[0]
+                assert "…" in header
+                ellipsis_pos = header.index("…")
+                assert header[ellipsis_pos + 1] == " ", (
+                    "ellipsis must be followed by a separating space, not "
+                    "glued straight into the state glyph"
+                )

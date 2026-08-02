@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
-from textual.widgets import Label, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Label, ListItem, ListView, Static
 
 from squelch.config import Config
+from squelch.feeds import Feed
 from squelch.pipeline import Block
 
 BLOCKS = "▁▂▃▄▅▆▇█"
@@ -44,16 +46,23 @@ class SquelchApp(App):
     CSS_PATH = "squelch.tcss"
     BINDINGS = [
         ("space", "toggle_mute", "Mute"),
+        ("f", "show_feeds", "Feeds"),
         ("q", "quit", "Quit"),
     ]
 
     def __init__(
-        self, config: Config, *, feed_label: str, frequency: str = ""
+        self,
+        config: Config,
+        *,
+        feed_label: str,
+        frequency: str = "",
+        feed_loader: Callable[[], list[Feed]] | None = None,
     ) -> None:
         super().__init__()
         self._config = config
         self._feed_label = feed_label
         self._frequency = frequency
+        self._feed_loader = feed_loader
         self._state = "LIVE"
         self._muted = False
         self._level = FLOOR_DBFS
@@ -61,6 +70,7 @@ class SquelchApp(App):
         self._clock_text = datetime.now().strftime("%H:%M:%S")
         self._pending: Static | None = None
         self.on_mute_change = lambda muted: None
+        self.on_feed_selected = lambda feed: None
 
     def compose(self) -> ComposeResult:
         # markup=False everywhere: none of our content (feed labels, key
@@ -99,18 +109,25 @@ class SquelchApp(App):
         # Hard-truncate rather than pad-and-hope: the 48-column budget is the
         # premise of the layout, and the state text changes width at runtime.
         room = 48 - len(right)
-        if len(left) > room:
-            # Truncate visibly: an ellipsis and a separating space before the
-            # state glyph, so a long label reads as deliberately cut off
-            # rather than colliding straight into "●" like a rendering
-            # glitch. Degrades gracefully (no ellipsis, just blank) in the
-            # pathological case where room is too small to fit one.
-            if room >= 2:
-                left = left[: room - 2] + "… "
+        # One column of `room` is reserved, unconditionally, as a separator
+        # between the label and the state glyph -- not just when truncation
+        # kicks in. Without this, a label whose length exactly matches `room`
+        # sails past the `len(left) > room` check untruncated and butts
+        # straight into "●" (e.g. "...118.10● LIVE"), since ljust(room) is a
+        # no-op on a string that is already `room` chars long.
+        content_room = max(room - 1, 0)
+        if len(left) > content_room:
+            # Truncate visibly: an ellipsis before the mandatory separator,
+            # so a long label reads as deliberately cut off rather than
+            # colliding straight into "●" like a rendering glitch. Degrades
+            # gracefully (no ellipsis, just blank) in the pathological case
+            # where content_room is too small to fit one.
+            if content_room >= 1:
+                left = left[: content_room - 1] + "…"
             else:
-                left = " " * max(room, 0)
+                left = ""
         self.query_one("#header", Static).update(
-            left.ljust(room) + right, layout=False
+            left.ljust(content_room) + " " + right, layout=False
         )
 
     def _refresh_meter(self) -> None:
@@ -138,7 +155,19 @@ class SquelchApp(App):
     def add_block(self, block: Block) -> None:
         self._clear_pending()
         stamp = block.started_at.strftime("%H:%M:%S")
-        widget = Static(f"{stamp}\n  {block.text}", classes="block", markup=False)
+        # The timestamp and text are separate widgets rather than one string
+        # joined with "\n  " -- a literal "  " only indents the first line of
+        # the text; once it wraps, continuation lines start flush at the
+        # left margin because wrapping is unaware of the manually-typed
+        # spaces. Giving the text widget its own `padding-left` (see
+        # squelch.tcss) makes every wrapped line -- including continuations
+        # -- share the same left indent, since padding applies to the box
+        # Textual wraps *inside*, not to individual lines of the string.
+        widget = Vertical(
+            Static(stamp, classes="block-stamp", markup=False),
+            Static(block.text, classes="block-text", markup=False),
+            classes="block",
+        )
         self.query_one("#transcript", VerticalScroll).mount(widget)
         self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
 
@@ -174,3 +203,58 @@ class SquelchApp(App):
         self._muted = not self._muted
         self.on_mute_change(self._muted)
         self._refresh_footer()
+
+    def action_show_feeds(self) -> None:
+        if self._feed_loader is None:
+            return
+        try:
+            feeds = self._feed_loader()
+        except Exception:
+            feeds = []
+        if not feeds:
+            self.warn("could not load feeds")
+            return
+
+        def handle(feed: Feed | None) -> None:
+            if feed is not None:
+                self.on_feed_selected(feed)
+
+        self.push_screen(FeedPicker(feeds), handle)
+
+    def warn(self, message: str) -> None:
+        """Surface a problem in the transcript region.
+
+        Deliberately not `self.notify` -- a toast is styled and positioned by
+        Textual, which makes it awkward to assert against and easy to render
+        outside the 48-column budget.
+        """
+        self.query_one("#transcript", VerticalScroll).mount(
+            Static(f"⚠ {message}", classes="block", markup=False)
+        )
+
+
+class FeedPicker(ModalScreen):
+    """Overlay listing the feeds available at an airport."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, feeds: list[Feed]) -> None:
+        super().__init__()
+        self._feeds = feeds
+
+    def compose(self) -> ComposeResult:
+        yield ListView(
+            *[
+                ListItem(
+                    Label(f"{f.label[:26]:26} {f.ident[:17]}", markup=False)
+                )
+                for f in self._feeds
+            ],
+            id="feedlist",
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(self._feeds[event.list_view.index or 0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

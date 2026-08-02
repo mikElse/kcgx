@@ -22,8 +22,28 @@ Screen {
     margin-bottom: 1;
 }
 
+.block-stamp {
+    height: auto;
+}
+
+.block-text {
+    height: auto;
+    padding-left: 2;
+}
+
 #footer {
     height: 2;
     border-top: solid $primary;
     background: $panel;
+}
+
+FeedPicker {
+    align: center middle;
+}
+
+FeedPicker > ListView {
+    width: 44;
+    max-height: 20;
+    border: solid $primary;
+    background: $surface;
 }
