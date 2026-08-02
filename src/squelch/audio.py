@@ -68,10 +68,15 @@ class StreamReader:
 
     def frames(self) -> Iterator[bytes]:
         delays = backoff_delays()
-        buffer = b""
         while not self._stopped:
             self._process = self._spawn(self._url)
             self.reconnecting = False
+            # A partial frame left over from a dead connection belongs to a
+            # stream that no longer exists. Splicing it onto the next
+            # connection's bytes would produce a frame containing audio from
+            # two unrelated sources, so it must be discarded here rather than
+            # carried across the reconnect.
+            buffer = b""
             while not self._stopped:
                 chunk = self._process.stdout.read(READ_SIZE)
                 if not chunk:
@@ -95,12 +100,22 @@ class StreamReader:
     def _kill(self) -> None:
         if self._process is None:
             return
+        proc = self._process
+        self._process = None
         try:
-            self._process.kill()
-            self._process.wait(timeout=2)
+            proc.kill()
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            # SIGKILL was sent but the process hasn't been reaped yet
+            # (e.g. stuck in uninterruptible I/O). Block until it exits
+            # rather than abandoning an unreaped, potentially zombie
+            # process.
+            try:
+                proc.wait()
+            except Exception:
+                pass
         except Exception:
             pass
-        self._process = None
 
 
 class Player:

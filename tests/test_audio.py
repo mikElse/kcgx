@@ -1,4 +1,5 @@
 import itertools
+import subprocess
 
 from squelch.audio import StreamReader, backoff_delays, ffmpeg_command
 from squelch.vad import FRAME_BYTES
@@ -71,3 +72,56 @@ def test_stop_halts_iteration():
     reader.stop()
     assert list(it) == []
     assert proc.killed
+
+
+def test_buffer_does_not_span_reconnect():
+    """A partial frame from a dead connection must never be spliced onto
+    the next connection's bytes.
+
+    First connection delivers 300 bytes (less than one frame) and then
+    dies. Second connection delivers exactly one frame's worth of
+    distinguishable bytes. The first yielded frame must be composed
+    entirely of the second connection's bytes -- not a mix of both.
+    """
+    procs = iter(
+        [
+            FakeProcess([b"\xaa" * 300]),
+            FakeProcess([b"\xbb" * FRAME_BYTES]),
+        ]
+    )
+    reader = StreamReader("u", spawn=lambda url: next(procs), sleep=lambda s: None)
+    frame = next(reader.frames())
+    assert frame == b"\xbb" * FRAME_BYTES, (
+        "leftover bytes from the dead first connection leaked into a frame "
+        "from the second connection"
+    )
+
+
+class TimeoutThenReapableProcess(FakeProcess):
+    """A process whose first wait() times out, then reaps successfully."""
+
+    def __init__(self, chunks):
+        super().__init__(chunks)
+        self.wait_calls = []
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        if len(self.wait_calls) == 1:
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
+        return 1
+
+
+def test_kill_reaps_process_after_wait_timeout():
+    """If the first wait() after kill() times out, the process must still
+    be reaped rather than silently abandoned."""
+    proc = TimeoutThenReapableProcess([b"\x00" * FRAME_BYTES] * 5)
+    reader = StreamReader("u", spawn=lambda url: proc, sleep=lambda s: None)
+    it = reader.frames()
+    next(it)
+    reader.stop()
+    list(it)
+    assert proc.killed
+    assert len(proc.wait_calls) >= 2, (
+        "must retry wait() after TimeoutExpired instead of abandoning the "
+        "process unreaped"
+    )
