@@ -110,7 +110,7 @@ class StatusPane(App[None]):
     def __init__(
         self,
         *,
-        resolver: Callable[[], str] = current_icao,
+        resolver: Callable[..., str] = current_icao,
         airports_loader: Callable[[], list[Airport]] = load_airports,
         now: Callable[[], tuple[datetime, datetime]] = now_pair,
         opener: Callable[[], None] = open_picker,
@@ -121,7 +121,25 @@ class StatusPane(App[None]):
         self._now = now
         self._opener = opener
         self._airports: list[Airport] = []
-        self._icao = ""
+
+    def _known(self, code: str) -> bool:
+        """Is `code` in the dataset this pane loaded?
+
+        Passed to the resolver on every tick, because the resolver's answer
+        depends on it: an ICAO the dataset does not have is skipped in
+        favour of the next source. bin/kcgx's `resolve` mode has always
+        passed this; the pane did not, and the two disagreed. With ZZZZ
+        remembered, the launcher pointed adsb-tui and squelch at the
+        fallback airport while the pane -- the one surface whose whole job
+        is to say which airport you are hearing -- displayed ZZZZ.
+
+        Calling one function two different ways is a second spelling of the
+        resolution order, which is exactly what current_icao() exists to
+        prevent. The predicate has to be supplied by the caller rather than
+        wired in, because state.py deliberately knows nothing about the
+        dataset -- so it is supplied here, by the caller that loaded it.
+        """
+        return find(code, self._airports) is not None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="body"):
@@ -151,7 +169,7 @@ class StatusPane(App[None]):
         last-known value on screen rather than propagating.
         """
         try:
-            icao = self._resolver()
+            icao = self._resolver(known=self._known)
             airport = find(icao, self._airports)
         except Exception:
             pass
