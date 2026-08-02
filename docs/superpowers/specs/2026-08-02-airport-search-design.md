@@ -127,10 +127,14 @@ launcher and the Python side. Two modes, both emitting one tab-separated
 record: `icao<TAB>lat<TAB>lon<TAB>name, city`.
 
 The record goes to the path given by `--out`, falling back to stdout when
-that is omitted. **Textual draws on stdout**, so a caller that captured the
-record with `$(...)` would swallow the picker's own rendering and show an
-empty popup. `bin/kcgx` always passes `--out`; stdout stays available for
-the modes that draw nothing, which is what makes the tool usable by hand.
+that is omitted. **Textual draws on stderr**, not stdout — its driver
+writes to `sys.__stderr__`. So `bin/kcgx` sends the airport command's
+stdout to `/dev/null`, which keeps a printed record out of the popup, and
+must leave stderr connected or the picker renders into nothing. `bin/kcgx`
+always passes `--out` rather than capturing with `$(...)`: a record on
+stdout and a UI on stderr sharing one terminal is not a contract worth
+having. stdout stays available for the modes that draw nothing, which is
+what makes the tool usable by hand.
 
 - **`kcgx-airport resolve`** — print the current target, resolved through
   the order under Persistence. No interaction. `bin/kcgx` calls this at
