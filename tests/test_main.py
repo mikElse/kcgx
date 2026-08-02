@@ -83,11 +83,13 @@ def test_load_feeds_falls_back_when_the_airport_lists_nothing(tmp_path):
 
 
 class StubSession:
-    def __init__(self, feed, events, *, muted=True, icao=""):
+    def __init__(self, feed, events, *, muted=True, icao="",
+                 activity_threshold=-40.0):
         self.feed = feed
         self.events = events
         self.muted = muted
         self.icao = icao
+        self.activity_threshold = activity_threshold
         self.started = False
         self.stopped = False
 

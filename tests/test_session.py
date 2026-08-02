@@ -36,6 +36,22 @@ class FakePlayer:
         self.stopped = True
 
 
+class RecordingPipeline:
+    """Stands in for a running pipeline, recording its display rate."""
+
+    def __init__(self):
+        self.level_every = None
+
+    def set_level_every(self, n):
+        self.level_every = n
+
+    def run(self):
+        pass
+
+    def stop(self):
+        pass
+
+
 class FakePipeline:
     """Reports one level and one state, then returns."""
 
@@ -44,6 +60,12 @@ class FakePipeline:
         self.player = player
         self.events = events
         self.stopped = False
+        # Part of the Pipeline contract since the display rate became
+        # switchable: FeedSession sets it as soon as the pipeline exists.
+        self.level_every = None
+
+    def set_level_every(self, n):
+        self.level_every = n
 
     def run(self):
         self.events.on_state("live")
@@ -233,3 +255,49 @@ def test_ambient_is_independent_of_mute():
     session.toggle_ambient()
     assert session.ambient is True
     assert session.muted is True
+
+
+# -- activity --------------------------------------------------------------
+
+
+def test_a_session_starts_with_no_activity():
+    session, _ = make()
+    assert session.activity == 0.0
+
+
+def test_activity_readings_reach_the_tracker():
+    session, _ = make()
+    for _ in range(10):
+        session._on_activity(-10.0)
+    assert session.activity == 1.0
+
+
+def test_activity_ignores_levels_below_the_threshold():
+    session, _ = make()
+    for _ in range(10):
+        session._on_activity(-70.0)
+    assert session.activity == 0.0
+
+
+def test_unmuting_raises_the_display_rate():
+    session, _ = make()
+    fake = RecordingPipeline()
+    session._pipeline = fake
+    session.muted = False
+    assert fake.level_every == 2, "an expanded row draws a meter at 25 Hz"
+
+
+def test_muting_stops_display_levels_entirely():
+    session, _ = make()
+    fake = RecordingPipeline()
+    session._pipeline = fake
+    session.muted = False
+    session.muted = True
+    assert fake.level_every == 0, "a compact row draws no meter"
+
+
+def test_switching_the_rate_before_the_pipeline_exists_is_safe():
+    """Mute can be toggled between construction and the thread starting."""
+    session, _ = make()
+    assert session._pipeline is None
+    session.muted = False

@@ -62,3 +62,21 @@ def test_bool_is_rejected_for_a_string_key(tmp_path):
     p.write_text("icao = true\n")
     with pytest.raises(ConfigError):
         load_config(p)
+
+
+def test_the_activity_threshold_defaults_to_minus_forty():
+    assert Config().activity_threshold_dbfs == -40.0
+
+
+def test_the_activity_threshold_can_be_configured(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text("activity_threshold_dbfs = -35.5\n")
+    assert load_config(path).activity_threshold_dbfs == -35.5
+
+
+def test_a_non_numeric_activity_threshold_is_rejected(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text('activity_threshold_dbfs = "loud"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "activity_threshold_dbfs" in str(exc.value)

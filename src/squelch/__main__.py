@@ -217,6 +217,7 @@ def build_sessions(
                 events,
                 muted=feed.ident != config.feed,
                 icao=config.icao,
+                activity_threshold=config.activity_threshold_dbfs,
             )
         )
     if sessions and all(s.muted for s in sessions):
