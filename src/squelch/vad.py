@@ -99,6 +99,14 @@ class Segmenter:
         # pause until the hangover expires.
         self._buffer.append(frame)
         self._silence_run += 1
+        # A buffer that has been idling through the hangover countdown can
+        # keep growing past max_frames just as easily as one that is still
+        # actively voiced. Bound it here too, so max_ms is a hard cap on
+        # buffer residency regardless of which branch is executing, not
+        # only while continuous speech is being fed.
+        if len(self._buffer) >= self._max_frames:
+            end = index + 1 - self._silence_run
+            return self._close(end, enforce_min=False)
         if self._silence_run >= self._hangover_frames:
             end = index + 1 - self._silence_run
             return self._close(end, enforce_min=True)

@@ -143,3 +143,47 @@ def test_timestamps_advance_across_utterances():
     )
     first, second = drive(seg, frames)
     assert second.start_s > first.end_s
+
+
+def test_max_frames_bound_holds_during_hangover():
+    """Regression: max_ms must cap buffer residency during the hangover
+    countdown too, not only while speech is still being fed.
+
+    The `len(buffer) >= max_frames` check historically only ran in the
+    speech branch of feed(). Once speech stopped and the buffer entered the
+    silence/hangover branch, nothing re-checked that bound, so a buffer that
+    was still under max_frames when speech ended could keep growing
+    frame-by-frame for the entire hangover countdown before finally closing
+    -- overshooting max_frames by up to hangover_frames. This uses
+    hangover_ms > max_ms (600 vs 400) specifically to expose that gap:
+    speech stops well before the buffer is full, then hangover silence
+    frames accumulate.
+    """
+    max_ms = 400
+    hangover_ms = 600
+    seg = Segmenter(hangover_ms=hangover_ms, min_ms=100, max_ms=max_ms)
+    max_frames = max_ms // 20  # FRAME_MS = 20 -> 20 frames
+
+    # Fewer speech frames than max_frames, so the speech-branch check never
+    # fires and the buffer is still open when silence begins.
+    for f in [tone_frame()] * (max_frames - 1):
+        assert seg.feed(f) is None
+
+    out = None
+    # hangover_frames = 30, comfortably more than needed to overshoot
+    # max_frames if the bound is not enforced during silence.
+    for _ in range(hangover_ms // 20):
+        out = seg.feed(silence_frame())
+        assert len(seg._buffer) <= max_frames, (
+            f"internal buffer grew to {len(seg._buffer)} frames while "
+            f"waiting out the hangover, past the configured "
+            f"max_frames={max_frames}"
+        )
+        if out is not None:
+            break
+
+    assert out is not None, (
+        "a buffer that hits max_frames during hangover must be "
+        "force-flushed immediately, not left to buffer through the full "
+        "hangover countdown"
+    )
