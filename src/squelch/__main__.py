@@ -7,11 +7,19 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from squelch.app import SquelchApp
 from squelch.config import Config, ConfigError, load_config
-from squelch.feeds import Feed, fetch_feeds
+from squelch.feeds import (
+    CACHE_TTL_SECONDS,
+    Feed,
+    cached_age_seconds,
+    fetch_feeds,
+    read_cached_feeds,
+    write_cached_feeds,
+)
 from squelch.session import FeedSession, SessionEvents
 
 FFMPEG_MISSING = (
@@ -58,21 +66,48 @@ def load_feeds(
     *,
     warn: Callable[[str], None],
     fetch: Callable[[str], list[Feed]] = fetch_feeds,
+    cache_dir: Path | None = None,
+    ttl_seconds: float = CACHE_TTL_SECONDS,
 ) -> list[Feed]:
-    """Every feed the airport publishes, or a usable fallback.
+    """Every feed the airport publishes, or the best available substitute.
 
-    If discovery fails there is nothing to enumerate, but the configured
-    feed ident is still known and still streamable -- falling back to it
-    beats opening an empty pane.
+    LiveATC's listing page sits behind Cloudflare bot protection that
+    refuses roughly three requests in four, so this leans on a cache: a
+    fresh one is used outright, which makes the common launch need no
+    request at all. When a fetch is needed and fails, a stale cache still
+    beats the last resort of opening the single configured feed -- feed
+    lists change on the order of months, and the whole point of the app is
+    the whole airport.
     """
+    age = cached_age_seconds(config.icao, directory=cache_dir)
+    if age is not None and age < ttl_seconds:
+        cached = read_cached_feeds(config.icao, directory=cache_dir)
+        if cached:
+            return cached
+
     try:
         feeds = fetch(config.icao)
     except Exception as exc:
+        stale = read_cached_feeds(config.icao, directory=cache_dir)
+        if stale:
+            days = (age or 0) / 86400
+            warn(
+                f"could not refresh the feed list for {config.icao} ({exc}) — "
+                f"using the cached list from {days:.0f} day(s) ago"
+            )
+            return stale
         warn(f"could not list feeds for {config.icao} ({exc}) — opening {config.feed}")
         return [Feed(ident=config.feed, label=config.feed)]
+
     if not feeds:
+        stale = read_cached_feeds(config.icao, directory=cache_dir)
+        if stale:
+            warn(f"no feeds listed for {config.icao} — using the cached list")
+            return stale
         warn(f"no feeds listed for {config.icao} — opening {config.feed}")
         return [Feed(ident=config.feed, label=config.feed)]
+
+    write_cached_feeds(config.icao, feeds, directory=cache_dir)
     return feeds
 
 
