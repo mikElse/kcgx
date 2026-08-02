@@ -14,8 +14,15 @@ def test_write_then_read_round_trips(tmp_path):
 
 
 def test_the_icao_is_stored_uppercase_and_trimmed(tmp_path):
+    """Read the raw file, not read_airport(): read_airport strips and
+    upper-cases too, so a round-trip is satisfied whether or not the write
+    side normalises anything -- removing write_airport's `.strip().upper()`
+    left the whole suite green. What is on disk matters on its own. It is a
+    file a human reads and hand-edits (that is one of the ways an ICAO the
+    dataset no longer has gets in there), and `cat` should show KORD."""
     path = tmp_path / "airport"
     write_airport("  kord \n", path=path)
+    assert path.read_text() == "KORD\n"
     assert read_airport(path=path) == "KORD"
 
 
