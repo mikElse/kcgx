@@ -1,4 +1,9 @@
-"""Textual UI for squelch, sized for a 48-column side pane."""
+"""Textual UI for squelch, sized for a 48-column side pane.
+
+One row-pair per feed: name and ident above, level meter below, ruled
+apart. Every feed meters whether or not it is audible — muting is an audio
+gate, not a pause — so a muted feed dims but keeps moving.
+"""
 
 from __future__ import annotations
 
@@ -19,14 +24,29 @@ from squelch.feeds import Feed
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 FLOOR_DBFS = -60.0
-METER_WIDTH = 20
+
+# The pane is 48 wide; rows carry `padding: 0 1`, leaving 46 content cells.
+ROW_WIDTH = 46
+# Name row: marker + space + name + space + ident + space + dot.
+NAME_WIDTH = 24
+IDENT_WIDTH = 16
+# Meter row is otherwise empty, so the meter gets nearly the whole width --
+# roughly double the history the single-feed layout could show.
+METER_WIDTH = 44
 
 # Messages are mounted widgets and Textual never reclaims them on its own.
-# squelch runs for hours, and a flapping feed can warn repeatedly: with no
-# cap, RSS grows linearly and every `set_level` gets slower, because a
+# squelch runs for hours, and a dozen feeds can warn repeatedly: with no
+# cap, RSS grows linearly and every level update gets slower, because a
 # refresh scales with the number of mounted children -- a cost billed to the
-# *audio* thread, which blocks inside call_from_thread waiting for it.
+# audio threads, which block inside call_from_thread waiting for it.
 MAX_MESSAGES = 200
+
+_STATE_DOTS = {
+    "live": "●",
+    "reconnecting": "◐",
+    "offline": "○",
+    "starting": "◌",
+}
 
 
 def _glyph_for(dbfs: float) -> str:
@@ -39,38 +59,117 @@ def _glyph_for(dbfs: float) -> str:
 def meter_bar(history: Sequence[float], width: int = METER_WIDTH) -> str:
     """Render a rolling history of levels as one glyph per sample.
 
-    Oldest sample at the left, newest at the right -- this is meant to be
-    called with an ever-growing history and read like a scrolling waveform,
-    not a single quantised value. Only the most recent `width` samples are
-    shown (older ones have "scrolled off"); if fewer than `width` samples
-    exist yet, the left is padded with the idle glyph so a fresh or silent
-    meter reads as a flat low line rather than a partial bar or empty gap.
+    Oldest sample at the left, newest at the right -- meant to be read as a
+    scrolling waveform, not a single quantised value. Only the most recent
+    `width` samples are shown; if fewer exist yet, the left is padded with
+    the idle glyph so a fresh or silent meter reads as a flat low line
+    rather than a partial bar or an empty gap.
     """
     recent = list(history)[-width:]
     pad = width - len(recent)
     return BLOCKS[0] * pad + "".join(_glyph_for(level) for level in recent)
 
 
+def _fit(text: str, width: int) -> str:
+    """Fit `text` into exactly `width` cells, marking truncation visibly.
+
+    A bare slice reads as silent data loss; a real cut gets a trailing
+    ellipsis instead.
+    """
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text.ljust(width)
+    if width == 1:
+        return "…"
+    return text[: width - 1] + "…"
+
+
+class FeedRow(Vertical):
+    """One feed: a name row and a meter row, ruled off from its neighbours."""
+
+    def __init__(self, session, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.session = session
+        self._history: deque[float] = deque(maxlen=METER_WIDTH)
+        self._name_widget: Static | None = None
+        self._meter_widget: Static | None = None
+
+    def compose(self) -> ComposeResult:
+        # markup=False: feed labels are arbitrary third-party text and must
+        # never be parsed as Rich console markup.
+        yield Static(id=None, classes="feed-name", markup=False)
+        yield Static(id=None, classes="feed-meter", markup=False)
+
+    def on_mount(self) -> None:
+        self._name_widget = self.query_one(".feed-name", Static)
+        self._meter_widget = self.query_one(".feed-meter", Static)
+        self.refresh_all()
+
+    def push_level(self, dbfs: float) -> None:
+        self._history.append(dbfs)
+        self.refresh_meter()
+
+    def refresh_all(self) -> None:
+        self.refresh_name()
+        self.refresh_meter()
+
+    def refresh_name(self) -> None:
+        if self._name_widget is None:
+            return
+        session = self.session
+        marker = "·" if session.muted else "♪"
+        dot = _STATE_DOTS.get(session.state, "●")
+        line = (
+            f"{marker} {_fit(session.name, NAME_WIDTH)} "
+            f"{_fit(session.feed.ident, IDENT_WIDTH)} {dot}"
+        )
+        self._name_widget.update(_fit(line, ROW_WIDTH), layout=False)
+        # Dimming is a class, not a colour written into the string: the
+        # meter must keep its full contrast relationship while the whole row
+        # reads as inactive.
+        self.set_class(session.muted, "muted")
+
+    def refresh_meter(self) -> None:
+        if self._meter_widget is None:
+            return
+        self._meter_widget.update(
+            _fit(meter_bar(self._history, width=METER_WIDTH), ROW_WIDTH),
+            layout=False,
+        )
+
+
+class FeedList(VerticalScroll):
+    """The scrollable stack of feed rows.
+
+    `can_focus = False` is load-bearing. A VerticalScroll becomes focusable
+    once its content overflows, and a focused scroll container answers the
+    arrow keys itself -- so with few enough feeds to fit, arrows moved the
+    selection, and with enough feeds to scroll they silently scrolled the
+    container instead and the selection froze at the top. That is precisely
+    the case this stack exists for. Scrolling here is driven by the
+    selection (see _apply_selection), never by the container.
+    """
+
+    can_focus = False
+
+
 class MessageLog(VerticalScroll):
     """A scroll region that stays pinned to the newest entry.
 
     Textual's own `anchor()` looks like the tool for this, but the
-    compositor applies an anchor with an *unvalidated* `set_reactive`
-    (`_compositor.py`, "if widget._anchored"), so while the content is
-    shorter than the viewport it drives `scroll_y` to
-    `content_bottom - viewport_height` -- a negative offset the pane then
-    renders as blank. Scrolling from `_mount_message` does not work either:
-    a freshly `mount()`ed child has not been laid out when the next
-    statement runs, so `max_scroll_y` is still the *previous* value and the
-    scroll lands one entry short -- which is precisely how warn() messages
-    ended up below the fold.
+    compositor applies an anchor with an *unvalidated* `set_reactive`, so
+    while the content is shorter than the viewport it drives `scroll_y` to
+    a negative offset the pane then renders as blank. Scrolling from the
+    mount site does not work either: a freshly `mount()`ed child has not
+    been laid out when the next statement runs, so `max_scroll_y` is still
+    the *previous* value and the scroll lands one entry short -- which is
+    precisely how warnings ended up below the fold.
 
     `_size_updated` is the compositor's post-layout hook, the first point
     at which `max_scroll_y` reflects what was just mounted. Following is
-    suspended as soon as the user scrolls away (Textual calls
-    `release_anchor` on every user-initiated scroll) and resumes when they
-    scroll back to the bottom, so nobody reading back through the
-    log gets yanked to the end by an incoming message.
+    suspended as soon as the user scrolls away and resumes when they scroll
+    back to the bottom.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -89,8 +188,6 @@ class MessageLog(VerticalScroll):
     def _size_updated(self, size, virtual_size, container_size, layout=True):
         changed = super()._size_updated(size, virtual_size, container_size, layout)
         if self._follow and self.scroll_y < self.max_scroll_y:
-            # release_anchor=False: this is our own follow, not the user
-            # moving the view, and must not switch following off.
             self._scroll_to(y=self.max_scroll_y, animate=False, release_anchor=False)
         return changed
 
@@ -98,6 +195,8 @@ class MessageLog(VerticalScroll):
 class SquelchApp(App):
     CSS_PATH = "squelch.tcss"
     BINDINGS = [
+        ("up", "cursor_up", "Up"),
+        ("down", "cursor_down", "Down"),
         ("space", "toggle_mute", "Mute"),
         ("f", "show_feeds", "Feeds"),
         ("q", "quit", "Quit"),
@@ -106,175 +205,158 @@ class SquelchApp(App):
     def __init__(
         self,
         config: Config,
+        sessions: Sequence,
         *,
-        feed_label: str,
-        frequency: str = "",
         feed_loader: Callable[[], list[Feed]] | None = None,
     ) -> None:
         super().__init__()
         self._config = config
-        self._feed_label = feed_label
-        self._frequency = frequency
+        self._sessions = list(sessions)
         self._feed_loader = feed_loader
-        # Not "LIVE": nothing has been received yet, and the pipeline does
-        # not even start until on_mount. Claiming LIVE at construction is a
-        # lie for the whole model-load window -- minutes, on a first run --
-        # and it is exactly the window in which the user most needs to be
-        # told that something is happening rather than nothing.
-        self._state = "STARTING"
-        self._muted = False
-        self._level = FLOOR_DBFS
-        self._history: deque[float] = deque(maxlen=METER_WIDTH)
+        self._selected = 0
         self._clock_text = datetime.now().strftime("%H:%M:%S")
-        # Cached once at mount rather than re-queried on every update:
-        # set_level runs at the meter's cadence for the entire lifetime of
-        # the app, and a DOM query per tick is pure overhead billed to the
-        # audio thread.
         self._header: Static | None = None
-        self._meter: Static | None = None
         self._footer: Static | None = None
         self._messages: MessageLog | None = None
+        self._feed_list: FeedList | None = None
+        self._rows: dict[int, FeedRow] = {}
         self._entries: deque[Widget] = deque()
         self._clock_timer = None
-        self.on_mute_change = lambda muted: None
         self.on_feed_selected = lambda feed: None
-        # Called once the app is actually running (from on_mount). The
-        # pipeline thread must not be started before this: its very first
-        # action is to warn about the model download, and a
-        # call_from_thread issued before App.run() raises
-        # RuntimeError("App is not running") and is lost.
+        # Called once the app is actually running (from on_mount). Sessions
+        # must not be started before this: their first act can be a warning,
+        # and a call_from_thread issued before App.run() has the loop up
+        # raises "App is not running" and is lost.
         self.on_start = lambda: None
 
     def compose(self) -> ComposeResult:
-        # markup=False everywhere: none of our content (feed labels, key
-        # hints in brackets) is meant to be parsed as
-        # Rich console markup. Without it, literal text like "[space]" is
-        # silently swallowed as an unrecognized style tag instead of shown.
         yield Static(id="header", markup=False)
-        yield Static(id="meter", markup=False)
+        with FeedList(id="feeds"):
+            for session in self._sessions:
+                yield FeedRow(session, classes="feed")
         yield MessageLog(id="messages")
         yield Static(id="footer", markup=False)
 
     def on_mount(self) -> None:
         self._header = self.query_one("#header", Static)
-        self._meter = self.query_one("#meter", Static)
         self._footer = self.query_one("#footer", Static)
         self._messages = self.query_one("#messages", MessageLog)
-        # Anchoring, rather than a scroll_end() after each mount: a manual
-        # scroll runs before the newly mounted child has been laid out, so
-        # it lands one entry short of the bottom and the newest message can
-        # sit just below the fold. Textual re-applies an anchor as part of
-        # its own refresh cycle, after layout, and releases it if the user
-        # deliberately scrolls up -- which is the behaviour wanted anyway.
+        self._feed_list = self.query_one("#feeds", FeedList)
+        self._rows = {id(row.session): row for row in self.query(FeedRow)}
         self._refresh_header()
-        self._refresh_meter()
         self._refresh_footer()
-        # The clock has its own slow cadence, independent of how often audio
-        # frames arrive -- see _refresh_meter's docstring note below.
+        self._apply_selection()
         self._clock_timer = self.set_interval(1.0, self._tick_clock)
         self.on_start()
 
     def on_unmount(self) -> None:
         # The 1 s clock timer outlives the widgets it refreshes: during
-        # teardown it can fire after #meter has been unmounted, and the
+        # teardown it can fire after #header has been unmounted, and the
         # resulting NoMatches propagates out of App.run() -- taking main()'s
-        # shutdown with it, so the PortAudio stream is never closed. Stop
-        # the timer and drop the cached references so any refresh that is
-        # already in flight becomes a no-op.
+        # shutdown with it, so PortAudio streams are never closed.
         if self._clock_timer is not None:
             self._clock_timer.stop()
             self._clock_timer = None
-        self._header = self._meter = self._footer = None
+        self._header = self._footer = None
         self._messages = None
+        self._feed_list = None
+        self._rows = {}
         self._entries.clear()
 
-    # -- rendering ---------------------------------------------------
-    #
-    # Each chrome widget (header/meter/footer) has a fixed CSS height and
-    # never changes size, so every update below passes layout=False: there is
-    # no layout pass worth triggering, only the (cheap) repaint of that one
-    # line. What actually matters is that each setter below touches only the
-    # one widget it changed, rather than one _refresh_chrome() doing
-    # 3x query_one + 3x Static.update() on every call. Wired through the
-    # pipeline (Task 9), set_level fires at the ~20ms audio frame cadence --
-    # roughly 50 times a second, sustained for the app's entire runtime -- so
-    # touching the header and footer on every level tick was wasted work for
-    # two widgets that were not changing.
+    # -- rendering -----------------------------------------------------
 
     def _refresh_header(self) -> None:
         if self._header is None:
-            return  # not mounted yet, or already torn down
-        left = f" {self._feed_label}  {self._frequency}".rstrip()
-        right = f"● {self._state} "
-        if len(right) >= 48:
-            # The state text alone can consume the whole budget or more.
-            # When it does, there is no room left for the label or even the
-            # separator column reserved below, so `content_room` would go to
-            # 0 while `right` itself is still >=48 chars -- the old code
-            # then emitted `" " + right`, 49+ cells. Truncate `right` itself
-            # to the full width and stop; this is unreachable with today's
-            # only two state strings ("LIVE", "RECONNECTING") but the
-            # 48-cell invariant must hold for any state string structurally,
-            # not by luck of the two values currently in use.
+            return
+        live = sum(1 for s in self._sessions if s.state == "live")
+        left = f" {self._config.icao}  {len(self._sessions)} feeds"
+        right = f"{self._clock_text}  {live} live "
+        room = 48 - len(right)
+        if room < 1:
             self._header.update(right[:48], layout=False)
             return
-        # Hard-truncate rather than pad-and-hope: the 48-column budget is the
-        # premise of the layout, and the state text changes width at runtime.
-        room = 48 - len(right)
-        # One column of `room` is reserved, unconditionally, as a separator
-        # between the label and the state glyph -- not just when truncation
-        # kicks in. Without this, a label whose length exactly matches `room`
-        # sails past the `len(left) > room` check untruncated and butts
-        # straight into "●" (e.g. "...118.10● LIVE"), since ljust(room) is a
-        # no-op on a string that is already `room` chars long.
-        content_room = max(room - 1, 0)
-        if len(left) > content_room:
-            # Truncate visibly: an ellipsis before the mandatory separator,
-            # so a long label reads as deliberately cut off rather than
-            # colliding straight into "●" like a rendering glitch. Degrades
-            # gracefully (no ellipsis, just blank) in the pathological case
-            # where content_room is too small to fit one.
-            if content_room >= 1:
-                left = left[: content_room - 1] + "…"
-            else:
-                left = ""
-        self._header.update(left.ljust(content_room) + " " + right, layout=False)
-
-    def _refresh_meter(self) -> None:
-        if self._meter is None:
-            return
-        bar = meter_bar(self._history, width=METER_WIDTH)
-        # _clock_text is refreshed on its own 1s timer (_tick_clock), not
-        # recomputed here -- this method runs at audio-frame cadence and
-        # datetime.now().strftime(...) fifty times a second for a value that
-        # only needs to change once a second is wasted work.
-        self._meter.update(
-            f" {bar} {self._level:6.1f}dB  {self._clock_text}", layout=False
-        )
+        self._header.update(_fit(left, room) + right, layout=False)
 
     def _refresh_footer(self) -> None:
         if self._footer is None:
             return
-        hint = "MUTED" if self._muted else "mute"
         self._footer.update(
-            f" [space] {hint}  [f] feeds  [q] quit", layout=False
+            " [↑↓] select  [space] mute  [f] feeds  [q] quit", layout=False
         )
 
     def _tick_clock(self) -> None:
         self._clock_text = datetime.now().strftime("%H:%M:%S")
-        self._refresh_meter()
+        self._refresh_header()
 
-    # -- public API driven by the pipeline ---------------------------
+    # -- selection -----------------------------------------------------
+
+    @property
+    def selected_session(self):
+        if not self._sessions:
+            return None
+        return self._sessions[self._selected]
+
+    def _apply_selection(self) -> None:
+        for index, session in enumerate(self._sessions):
+            row = self._rows.get(id(session))
+            if row is not None:
+                row.set_class(index == self._selected, "selected")
+        row = self._rows.get(id(self.selected_session))
+        if row is not None and self._feed_list is not None:
+            # Keep the selection on screen when it moves past the viewport --
+            # the whole point of a scrollable stack.
+            self._feed_list.scroll_to_widget(row, animate=False)
+
+    def action_cursor_down(self) -> None:
+        if not self._sessions:
+            return
+        self._selected = min(self._selected + 1, len(self._sessions) - 1)
+        self._apply_selection()
+
+    def action_cursor_up(self) -> None:
+        if not self._sessions:
+            return
+        self._selected = max(self._selected - 1, 0)
+        self._apply_selection()
+
+    def action_toggle_mute(self) -> None:
+        session = self.selected_session
+        if session is None:
+            return
+        session.toggle_mute()
+        row = self._rows.get(id(session))
+        if row is not None:
+            row.refresh_name()
+
+    # -- driven by the sessions ----------------------------------------
+
+    def set_level(self, session, dbfs: float) -> None:
+        row = self._rows.get(id(session))
+        if row is not None:
+            row.push_level(dbfs)
+
+    def set_state(self, session, state: str) -> None:
+        row = self._rows.get(id(session))
+        if row is not None:
+            row.refresh_name()
+        self._refresh_header()
+
+    def warn(self, message: str) -> None:
+        """Surface a problem in the message log.
+
+        Deliberately not `self.notify` -- a toast is styled and positioned
+        by Textual, which makes it awkward to assert against and easy to
+        render outside the 48-column budget.
+        """
+        self._mount_message(
+            Static(f"⚠ {message}", classes="block block-text", markup=False)
+        )
+
+    def warn_for(self, session, message: str) -> None:
+        """A warning that belongs to one feed, named so it can be placed."""
+        self.warn(f"{session.name}: {message}")
 
     def _mount_message(self, widget: Widget) -> None:
-        """Mount one message and enforce the retention cap.
-
-        Messages used to mount without scrolling at all, so with the log
-        already filled they landed below the viewport and were never seen --
-        pressing `f` with a dead network looked exactly like pressing a key
-        that does nothing. Scrolling is the log's own follow behaviour (see
-        MessageLog), which applies to everything mounted here uniformly.
-        """
         log = self._messages
         if log is None:
             return
@@ -289,33 +371,7 @@ class SquelchApp(App):
         except Exception:
             pass
 
-    def set_level(self, dbfs: float) -> None:
-        self._level = dbfs
-        self._history.append(dbfs)
-        self._refresh_meter()
-
-    # Pipeline-reported states ("live"/"reconnecting") are not the only
-    # states the header needs to show truthfully: Task 9's startup path
-    # calls set_state("offline") when the feed could not be resolved at
-    # all, so the header never claims "● LIVE" while nothing is actually
-    # playing. Anything not in this map still falls back to "LIVE", which
-    # matches every state the Pipeline itself ever reports.
-    _STATE_LABELS = {
-        "reconnecting": "RECONNECTING",
-        "offline": "OFFLINE",
-        "starting": "STARTING",
-    }
-
-    def set_state(self, state: str) -> None:
-        self._state = self._STATE_LABELS.get(state, "LIVE")
-        self._refresh_header()
-
-    # -- actions -----------------------------------------------------
-
-    def action_toggle_mute(self) -> None:
-        self._muted = not self._muted
-        self.on_mute_change(self._muted)
-        self._refresh_footer()
+    # -- feed picker ---------------------------------------------------
 
     def action_show_feeds(self) -> None:
         if self._feed_loader is None:
@@ -328,24 +384,15 @@ class SquelchApp(App):
 
         The production loader is an HTTP GET with a 15 s timeout. Called
         straight from the action handler it blocks Textual's event loop for
-        the whole timeout -- and because the audio thread reaches the UI via
+        the whole timeout -- and because the audio threads reach the UI via
         call_from_thread, which waits on that same loop, *playback* stops
-        too. Pressing `f` on a flaky network used to freeze the whole app
-        for a quarter of a minute. The injected-loader seam is unchanged;
-        only where it is called from has moved.
+        too.
 
-        `exclusive=True, group="feeds"` marks a superseded worker
-        cancelled, but Textual cannot interrupt a running thread -- the
-        body keeps running regardless, so without this check a stack of
-        `f` presses against a slow fetch each marshalled their own result
-        back and stacked one FeedPicker per press. Checking
-        `is_cancelled` once the (uninterruptible) loader call returns is
-        the only point this worker can act on its own cancellation.
-        `NoActiveWorker` (no active worker in this thread/task) is treated
-        as "not cancelled" -- it only arises when this body is invoked
-        directly, outside the @work decorator's context, which is exactly
-        how test_feed_worker_never_raises_when_the_app_has_gone drives the
-        "app already gone" hazard without spinning up a real thread.
+        `exclusive=True` marks a superseded worker cancelled, but Textual
+        cannot interrupt a running thread -- the body keeps running
+        regardless, so without the check below a stack of `f` presses
+        against a slow fetch each marshalled their own result back and
+        stacked one FeedPicker per press.
         """
         assert self._feed_loader is not None
         try:
@@ -361,12 +408,8 @@ class SquelchApp(App):
         try:
             self.call_from_thread(self._present_feeds, feeds)
         except Exception:
-            # Pressing `f` and then `q` while the fetch is in flight leaves
-            # this worker holding a result for an app that has already gone:
-            # call_from_thread then raises "App is not running". There is
-            # nobody left to show a picker to, so this is nothing to report
-            # -- but uncaught it surfaces as a worker traceback printed
-            # after the app has exited.
+            # Pressing `f` then `q` while the fetch is in flight leaves this
+            # worker holding a result for an app that has already gone.
             pass
 
     def _present_feeds(self, feeds: list[Feed]) -> None:
@@ -380,17 +423,6 @@ class SquelchApp(App):
 
         self.push_screen(FeedPicker(feeds), handle)
 
-    def warn(self, message: str) -> None:
-        """Surface a problem in the message log.
-
-        Deliberately not `self.notify` -- a toast is styled and positioned by
-        Textual, which makes it awkward to assert against and easy to render
-        outside the 48-column budget.
-        """
-        self._mount_message(
-            Static(f"⚠ {message}", classes="block block-text", markup=False)
-        )
-
 
 _PICKER_LABEL_WIDTH = 26
 _PICKER_IDENT_WIDTH = 15
@@ -398,22 +430,6 @@ _PICKER_IDENT_WIDTH = 15
 # leaving exactly 42 content columns -- _PICKER_LABEL_WIDTH + 1 (separator)
 # + _PICKER_IDENT_WIDTH must never exceed that, or a row silently clips
 # inside the border with no indication anything was lost.
-
-
-def _fit(text: str, width: int) -> str:
-    """Fit `text` into exactly `width` cells, marking truncation visibly.
-
-    Mirrors the header's truncation convention (see _refresh_header): a
-    bare slice reads as silent data loss -- a real cut here gets a trailing
-    ellipsis instead, same principle applied to the same failure mode.
-    """
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text.ljust(width)
-    if width == 1:
-        return "…"
-    return text[: width - 1] + "…"
 
 
 class FeedPicker(ModalScreen):

@@ -5,56 +5,38 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
-import threading
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
 from squelch.app import SquelchApp
-from squelch.audio import Player, StreamReader
 from squelch.config import Config, ConfigError, load_config
-from squelch.feeds import Feed, fetch_feeds, resolve_stream
-from squelch.pipeline import Events, Pipeline
+from squelch.feeds import Feed, fetch_feeds
+from squelch.session import FeedSession, SessionEvents
 
 FFMPEG_MISSING = (
-    "ffmpeg not found on PATH — squelch decodes the feed with it. "
+    "ffmpeg not found on PATH — squelch decodes feeds with it. "
     "Install it (macOS: brew install ffmpeg) and start squelch again."
 )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="squelch", description=__doc__)
-    parser.add_argument("--feed", help="LiveATC feed ident, e.g. kpdx3_twr")
-    parser.add_argument("--icao", help="Airport ICAO for the feed picker")
+    parser.add_argument(
+        "--feed", help="LiveATC feed ident to leave unmuted, e.g. kpdx3_twr"
+    )
+    parser.add_argument("--icao", help="Airport whose feeds to open")
     return parser.parse_args(argv)
-
-
-def try_start(
-    start: Callable[[], None], on_error: Callable[[str], None], message: str
-) -> bool:
-    """Run a startup step, degrading rather than crashing.
-
-    An unavailable audio device should cost you one feature, not the whole
-    application.
-    """
-    try:
-        start()
-    except Exception:
-        on_error(message)
-        return False
-    return True
 
 
 def safe_call(app: Any, func: Callable[..., None], *args: Any) -> None:
     """Marshal onto the UI thread without ever raising back onto ours.
 
-    Unlike the `Events` callbacks -- which route through `Pipeline._emit`'s
-    own exception-swallowing wrapper -- calls made directly from this module
-    (`warn()`, and the state signals) have no such guard. If the app is not
-    running by the time one of these fires (already quit, or not yet
-    started), `call_from_thread` raises `RuntimeError("App is not
-    running")`. That's harmless -- there is nobody to tell -- but left
-    uncaught it would kill the pipeline thread with a stray traceback.
+    Sessions run on daemon threads. If the app is not running by the time
+    one of these fires (already quit, or not yet started),
+    `call_from_thread` raises `RuntimeError("App is not running")`. That's
+    harmless -- there is nobody to tell -- but left uncaught it would kill
+    that session's thread with a stray traceback.
     """
     try:
         app.call_from_thread(func, *args)
@@ -65,74 +47,72 @@ def safe_call(app: Any, func: Callable[..., None], *args: Any) -> None:
 def feed_selection_hint(feed: Feed) -> str:
     """What to tell the user when they pick a feed from the overlay.
 
-    Switching the live stream in place is out of scope for v1, but a picker
-    that silently does nothing is worse than no picker: it reads as a bug.
-    Naming the ident and the exact flag turns a dead end into an instruction.
+    The picker lists the same feeds already on screen; selecting one is a
+    way to find its ident, not a way to change what is playing.
     """
-    return f"selected {feed.ident} — restart with: squelch --feed {feed.ident}"
+    return f"{feed.ident} — already open; use [space] on its row to unmute"
 
 
-def build_pipeline_runner(
+def load_feeds(
     config: Config,
     *,
     warn: Callable[[str], None],
-    set_state: Callable[[str], None],
-    player: Any,
-    events: Events,
-    resolve: Callable[[str], str] = resolve_stream,
-    reader_factory: Callable[..., Any] = StreamReader,
-    pipeline_factory: Callable[..., Any] = Pipeline,
-    which: Callable[[str], str | None] = shutil.which,
-) -> Callable[[], None]:
-    """Build the callable that runs on the background pipeline thread.
+    fetch: Callable[[str], list[Feed]] = fetch_feeds,
+) -> list[Feed]:
+    """Every feed the airport publishes, or a usable fallback.
 
-    Every collaborator is injectable because this function is the whole of
-    squelch's wiring and it runs on a daemon thread, where an unhandled
-    exception is invisible: the thread dies, nothing is printed, and the
-    pane sits at its last state forever.
+    If discovery fails there is nothing to enumerate, but the configured
+    feed ident is still known and still streamable -- falling back to it
+    beats opening an empty pane.
     """
+    try:
+        feeds = fetch(config.icao)
+    except Exception as exc:
+        warn(f"could not list feeds for {config.icao} ({exc}) — opening {config.feed}")
+        return [Feed(ident=config.feed, label=config.feed)]
+    if not feeds:
+        warn(f"no feeds listed for {config.icao} — opening {config.feed}")
+        return [Feed(ident=config.feed, label=config.feed)]
+    return feeds
 
-    def run() -> None:
-        try:
-            _run()
-        except Exception as exc:
-            # Everything below the feed-resolution step used to be
-            # unguarded: a missing ffmpeg (FileNotFoundError from Popen) or
-            # a read error on the ffmpeg pipe (OSError) killed this thread
-            # in silence.
-            warn(f"stopped: {type(exc).__name__}: {exc}")
-            set_state("offline")
 
-    def _run() -> None:
-        if which("ffmpeg") is None:
-            warn(FFMPEG_MISSING)
-            set_state("offline")
-            return
+def build_sessions(
+    feeds: list[Feed],
+    config: Config,
+    events: SessionEvents,
+    *,
+    session_factory: Callable[..., Any] = FeedSession,
+) -> list[Any]:
+    """One session per feed, all muted except the configured one.
 
-        try_start(player.start, warn, "no audio device — nothing will be audible")
-
-        try:
-            url = resolve(config.feed)
-        except Exception:
-            warn(
-                f"could not resolve feed {config.feed} — check the ident "
-                "(press [f] to list this airport's feeds)"
+    Everything meters from the start, so the whole field's activity is
+    visible immediately; only the configured feed is audible, because a
+    dozen simultaneous voices is not something anyone can follow.
+    """
+    sessions = []
+    for feed in feeds:
+        sessions.append(
+            session_factory(
+                feed,
+                events,
+                muted=feed.ident != config.feed,
+                icao=config.icao,
             )
-            # The header must not keep claiming "● LIVE" once nothing is
-            # actually playing -- see set_state's "offline" entry.
-            set_state("offline")
-            return
-
-        pipeline_factory(reader_factory(url), player, events).run()
-
-    return run
+        )
+    if sessions and all(s.muted for s in sessions):
+        # The configured ident matched nothing this airport publishes.
+        # Opening entirely silent reads as broken, so unmute the first.
+        sessions[0].muted = False
+    return sessions
 
 
 def main(
     argv: list[str] | None = None,
     *,
     app_factory: Callable[..., Any] = SquelchApp,
-    runner_factory: Callable[..., Callable[[], None]] = build_pipeline_runner,
+    feeds_loader: Callable[..., list[Feed]] = load_feeds,
+    sessions_builder: Callable[..., list[Any]] = build_sessions,
+    which: Callable[[str], str | None] = shutil.which,
 ) -> int:
     args = parse_args(argv)
     try:
@@ -147,42 +127,49 @@ def main(
     if args.icao:
         config = replace(config, icao=args.icao)
 
+    if which("ffmpeg") is None:
+        print(f"squelch: {FFMPEG_MISSING}", file=sys.stderr)
+        return 2
+
+    # Warnings raised before the app exists have nowhere to go yet, so they
+    # are collected and replayed once it is running.
+    pending: list[str] = []
+    feeds = feeds_loader(config, warn=pending.append)
+
+    app: Any = None
+    events = SessionEvents(
+        on_level=lambda session, dbfs: safe_call(app, app.set_level, session, dbfs),
+        on_state=lambda session, state: safe_call(app, app.set_state, session, state),
+        on_warn=lambda session, message: safe_call(
+            app, app.warn_for, session, message
+        ),
+    )
+
+    sessions = sessions_builder(feeds, config, events)
     app = app_factory(
         config,
-        feed_label=config.feed,
+        sessions,
         feed_loader=lambda: fetch_feeds(config.icao),
     )
-
-    player = Player()
-    app.on_mute_change = lambda muted: setattr(player, "muted", muted)
-    # Runs on the UI thread (the picker's dismiss callback), so no marshalling.
     app.on_feed_selected = lambda feed: app.warn(feed_selection_hint(feed))
 
-    events = Events(
-        on_level=lambda d: app.call_from_thread(app.set_level, d),
-        on_state=lambda s: app.call_from_thread(app.set_state, s),
-    )
-
-    runner = runner_factory(
-        config,
-        warn=lambda message: safe_call(app, app.warn, message),
-        set_state=lambda state: safe_call(app, app.set_state, state),
-        player=player,
-        events=events,
-    )
+    def start_everything() -> None:
+        for message in pending:
+            app.warn(message)
+        for session in sessions:
+            session.start()
 
     # Started from on_mount, not here: a call_from_thread issued before
-    # App.run() has the loop up raises "App is not running" and is
-    # swallowed, so any early warning would be lost.
-    app.on_start = lambda: threading.Thread(target=runner, daemon=True).start()
+    # App.run() has the loop up raises "App is not running" and is lost.
+    app.on_start = start_everything
 
     try:
         app.run()
     finally:
-        # Unconditional: an exception escaping the UI (e.g. a timer firing
-        # against an unmounted widget during teardown) must not leave the
-        # PortAudio stream open.
-        player.stop()
+        # Unconditional: an exception escaping the UI must not leave a dozen
+        # PortAudio streams and ffmpeg processes behind.
+        for session in sessions:
+            session.stop()
     return 0
 
 
