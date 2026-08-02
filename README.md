@@ -200,6 +200,22 @@ the list can't be loaded, a warning appears in the message log instead of a
 crash. The fetch runs off the event loop, so a slow or hanging LiveATC
 request never stalls playback or the UI.
 
+## Feed discovery and LiveATC's bot protection
+
+LiveATC fronts its airport listing page with Cloudflare bot protection.
+Measured against the live site: a browser `User-Agent` does not help,
+spacing requests out does not help, and roughly **one request in four is
+allowed through anyway**. (The `/play/*.pls` endpoints squelch actually
+streams from are not protected, which is why audio works regardless.)
+
+squelch therefore treats a 403 on the listing as a coin flip to re-flip,
+not an answer — up to five attempts with backoff — and caches the result
+for a week under `~/.cache/squelch/`. A normal launch needs no request at
+all. When a refresh is due and every attempt is refused, it falls back to
+the cached list (feed lists change on the order of months) and only opens
+the single configured feed if there is no cache at all. Each of those
+fallbacks says so in the message log.
+
 ## Cost
 
 One ffmpeg process, one PortAudio output stream, and one thread per feed —

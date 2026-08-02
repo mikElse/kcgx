@@ -41,13 +41,16 @@ def test_feed_and_icao_overrides():
 # -- feed discovery --------------------------------------------------------
 
 
-def test_load_feeds_returns_everything_the_airport_publishes():
+def test_load_feeds_returns_everything_the_airport_publishes(tmp_path):
     warnings = []
-    assert load_feeds(Config(), warn=warnings.append, fetch=lambda icao: FEEDS) == FEEDS
+    feeds = load_feeds(
+        Config(), warn=warnings.append, fetch=lambda icao: FEEDS, cache_dir=tmp_path
+    )
+    assert feeds == FEEDS
     assert warnings == []
 
 
-def test_load_feeds_falls_back_to_the_configured_feed_when_discovery_fails():
+def test_load_feeds_falls_back_to_the_configured_feed_when_discovery_fails(tmp_path):
     """An empty pane is worse than one known-good feed."""
 
     def boom(icao):
@@ -55,16 +58,24 @@ def test_load_feeds_falls_back_to_the_configured_feed_when_discovery_fails():
 
     warnings = []
     feeds = load_feeds(
-        Config(icao="KPDX", feed="kpdx3_twr"), warn=warnings.append, fetch=boom
+        Config(icao="KPDX", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=boom,
+        cache_dir=tmp_path,
     )
     assert [f.ident for f in feeds] == ["kpdx3_twr"]
     assert warnings and "network down" in warnings[0]
     assert "kpdx3_twr" in warnings[0], "say what it opened instead"
 
 
-def test_load_feeds_falls_back_when_the_airport_lists_nothing():
+def test_load_feeds_falls_back_when_the_airport_lists_nothing(tmp_path):
     warnings = []
-    feeds = load_feeds(Config(feed="kpdx3_twr"), warn=warnings.append, fetch=lambda i: [])
+    feeds = load_feeds(
+        Config(feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=lambda i: [],
+        cache_dir=tmp_path,
+    )
     assert [f.ident for f in feeds] == ["kpdx3_twr"]
     assert warnings
 
@@ -262,3 +273,81 @@ def test_cli_overrides_reach_the_sessions():
     run_main(["--icao", "KSEA", "--feed", "ksea_twr"], feeds_loader=loader)
     assert seen["config"].icao == "KSEA"
     assert seen["config"].feed == "ksea_twr"
+
+
+# -- feed discovery, cached ------------------------------------------------
+#
+# LiveATC's listing page sits behind Cloudflare bot protection that refuses
+# roughly three requests in four. A cache means a launch usually needs no
+# request at all, and a launch that does can fall back to a stale list
+# rather than to a single feed.
+
+
+def test_a_fresh_cache_is_used_without_hitting_the_network(tmp_path):
+    from squelch.feeds import write_cached_feeds
+
+    write_cached_feeds("KPDX", FEEDS, directory=tmp_path)
+    calls = []
+
+    def fetch(icao):
+        calls.append(icao)
+        raise AssertionError("must not fetch when the cache is fresh")
+
+    feeds = load_feeds(
+        Config(icao="KPDX"), warn=[].append, fetch=fetch, cache_dir=tmp_path
+    )
+    assert feeds == FEEDS
+    assert calls == []
+
+
+def test_a_successful_fetch_populates_the_cache(tmp_path):
+    from squelch.feeds import read_cached_feeds
+
+    load_feeds(
+        Config(icao="KPDX"),
+        warn=[].append,
+        fetch=lambda icao: FEEDS,
+        cache_dir=tmp_path,
+    )
+    assert read_cached_feeds("KPDX", directory=tmp_path) == FEEDS
+
+
+def test_a_stale_cache_beats_falling_back_to_one_feed(tmp_path):
+    """The whole point of the app is the whole airport."""
+    import os
+    import time
+
+    from squelch.feeds import cache_path, write_cached_feeds
+
+    write_cached_feeds("KPDX", FEEDS, directory=tmp_path)
+    path = cache_path("KPDX", directory=tmp_path)
+    ancient = time.time() - (30 * 24 * 60 * 60)
+    os.utime(path, (ancient, ancient))
+
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KPDX", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert feeds == FEEDS, "a stale list is far better than a single feed"
+    assert warnings and "cached" in warnings[0].lower()
+
+
+def test_no_cache_and_a_blocked_fetch_still_opens_the_configured_feed(tmp_path):
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KPDX", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert [f.ident for f in feeds] == ["kpdx3_twr"]
+    assert warnings
