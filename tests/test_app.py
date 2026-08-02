@@ -388,3 +388,41 @@ async def test_the_stack_still_fits_48_columns_in_both_states():
         # screen width, so that assertion only restates run_test(size=...).
         # Overflow shows up in a widget's own size. See overflowing().
         assert overflowing(app) == []
+
+
+# -- clicking --------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clicking_a_row_body_toggles_its_mute():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        session = app._sessions[1]
+        assert session.muted is True
+        await pilot.click(app._rows[id(session)], offset=(3, 0))
+        await pilot.pause()
+        assert session.muted is False
+
+
+@pytest.mark.asyncio
+async def test_clicking_a_row_selects_it():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        assert app._selected == 0
+        await pilot.click(app._rows[id(app._sessions[2])], offset=(3, 0))
+        await pilot.pause()
+        assert app.selected_session is app._sessions[2]
+
+
+@pytest.mark.asyncio
+async def test_clicking_the_ambient_control_does_not_toggle_mute():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        session = app._sessions[1]
+        row = app._rows[id(session)]
+        content = row.content_region
+        x = content.x - row.region.x + 36  # inside the compact [A] span
+        await pilot.click(row, offset=(x, content.y - row.region.y))
+        await pilot.pause()
+        assert session.ambient is True
+        assert session.muted is True, "the ambient control is not the mute control"

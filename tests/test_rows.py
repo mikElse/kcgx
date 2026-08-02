@@ -172,3 +172,59 @@ def test_control_line_omits_activity_until_it_is_measured():
 def test_activity_rounds_rather_than_truncating():
     line = control_line(muted=False, ambient=False, soloed=False, activity=0.999)
     assert "busy 100%" in line
+
+
+from squelch.rows import control_at
+
+
+def test_a_compact_click_on_the_name_is_not_a_control():
+    assert control_at(0, 0, expanded=False) is None
+    assert control_at(20, 0, expanded=False) is None
+
+
+def test_a_compact_click_hits_the_ambient_and_mute_controls():
+    line = compact_line("Ground", muted=True, ambient=False, state="live")
+    for x in range(len(line)):
+        if line[x : x + 3] == "[A]":
+            assert control_at(x, 0, expanded=False) == "ambient"
+        if line[x : x + 5] == "[OFF]":
+            assert control_at(x, 0, expanded=False) == "mute"
+
+
+def test_a_compact_row_has_no_solo_control():
+    assert "solo" not in {
+        control_at(x, 0, expanded=False) for x in range(ROW_WIDTH)
+    }
+
+
+def test_a_compact_click_below_the_first_line_is_nothing():
+    assert control_at(2, 1, expanded=False) is None
+
+
+def test_expanded_controls_live_on_the_control_line_only():
+    assert control_at(1, 0, expanded=True) is None, "the name line"
+    assert control_at(1, 2, expanded=True) is None, "a meter line"
+    assert control_at(1, 4, expanded=True) == "solo"
+
+
+def test_expanded_click_hits_each_control():
+    line = control_line(muted=False, ambient=False, soloed=False, activity=None)
+    assert line.index("[S]") == 0
+    assert control_at(0, 4, expanded=True) == "solo"
+    assert control_at(line.index("[ ON]"), 4, expanded=True) == "mute"
+    assert control_at(line.index("[A]"), 4, expanded=True) == "ambient"
+
+
+def test_expanded_click_on_the_activity_readout_is_not_a_control():
+    assert control_at(ROW_WIDTH - 1, 4, expanded=True) is None
+
+
+def test_the_gaps_between_controls_are_not_controls():
+    assert control_at(3, 4, expanded=True) is None
+    assert control_at(4, 4, expanded=True) is None
+
+
+def test_out_of_range_coordinates_are_safe():
+    assert control_at(-1, 0, expanded=False) is None
+    assert control_at(999, 4, expanded=True) is None
+    assert control_at(0, -3, expanded=True) is None

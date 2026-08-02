@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.message import Message
 from textual.widgets import Static
 
 BLOCKS = "▁▂▃▄▅▆▇█"
@@ -77,6 +78,50 @@ def control_line(
     return controls + readout.rjust(ROW_WIDTH - len(controls))
 
 
+# Cell spans of each control, as half-open [start, stop) ranges within the
+# 46-cell content area. Derived from the format strings above -- compact is
+# `name(34) SP [A](3) SP [xx](5) SP dot`, expanded's control line is
+# `[S](3) SP SP [xx](5) SP SP [A](3)`.
+_COMPACT_AMBIENT = (NAME_WIDTH + 1, NAME_WIDTH + 4)          # 35..38
+_COMPACT_TOGGLE = (NAME_WIDTH + 5, NAME_WIDTH + 10)          # 39..44
+_EXPANDED_SOLO = (0, 3)
+_EXPANDED_TOGGLE = (5, 10)
+_EXPANDED_AMBIENT = (12, 15)
+
+# Row-relative line indices when expanded: name, meter x3, controls.
+CONTROL_LINE_Y = 4
+
+
+def _within(x: int, span: tuple[int, int]) -> bool:
+    return span[0] <= x < span[1]
+
+
+def control_at(x: int, y: int, *, expanded: bool) -> str | None:
+    """Which control, if any, sits at a content-relative cell.
+
+    `None` means "no control here", which the caller treats as a click on
+    the row body -- and a click on the row body toggles mute, so the common
+    action never requires aiming at a 5-cell target.
+    """
+    if expanded:
+        if y != CONTROL_LINE_Y:
+            return None
+        if _within(x, _EXPANDED_SOLO):
+            return "solo"
+        if _within(x, _EXPANDED_TOGGLE):
+            return "mute"
+        if _within(x, _EXPANDED_AMBIENT):
+            return "ambient"
+        return None
+    if y != 0:
+        return None
+    if _within(x, _COMPACT_AMBIENT):
+        return "ambient"
+    if _within(x, _COMPACT_TOGGLE):
+        return "mute"
+    return None
+
+
 def level_step(dbfs: float) -> int:
     """Quantise one level reading to 0..METER_STEPS-1."""
     fraction = max(0.0, min(1.0, (dbfs - FLOOR_DBFS) / -FLOOR_DBFS))
@@ -137,6 +182,24 @@ def _fit(text: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
+class RowClicked(Message):
+    """A click landed on a row, on `control_name` or on its body (`None`).
+
+    Not `self.control` -- Textual reserves that name on Message for the
+    originating widget, which is what `@on` selectors match against, and
+    shadowing it with a string would break them.
+    """
+
+    def __init__(self, row: "FeedRow", control_name: str | None) -> None:
+        super().__init__()
+        self.row = row
+        self.control_name = control_name
+
+    @property
+    def control(self) -> "FeedRow":
+        return self.row
+
+
 class FeedRow(Vertical):
     """One feed. Compact when muted, expanded when audible.
 
@@ -170,6 +233,25 @@ class FeedRow(Vertical):
         self._meter_widget = self.query_one(".feed-meter", Static)
         self._controls_widget = self.query_one(".feed-controls", Static)
         self.refresh_all()
+
+    def on_click(self, event) -> None:
+        """Route a click to a control, or to the row body.
+
+        Coordinates come from the screen and are rebased on `content_region`
+        rather than on hardcoded offsets, so the border and padding in the
+        stylesheet stay the single source of truth for where content starts.
+        """
+        content = self.content_region
+        self.post_message(
+            RowClicked(
+                self,
+                control_at(
+                    event.screen_x - content.x,
+                    event.screen_y - content.y,
+                    expanded=self.expanded,
+                ),
+            )
+        )
 
     def push_level(self, dbfs: float) -> None:
         self._history.append(dbfs)
