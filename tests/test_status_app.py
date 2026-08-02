@@ -7,6 +7,7 @@ blank fill for every child widget.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -17,6 +18,7 @@ from kcgx.status import (
     PICKER_POPUP,
     STATUS_ROWS,
     STATUS_WIDTH,
+    TICK_SECONDS,
     StatusPane,
     open_picker,
 )
@@ -108,6 +110,45 @@ async def test_a_changed_airport_is_picked_up_on_the_next_tick():
         await pilot.pause()
         joined = "\n".join(rendered(app)[0])
         assert "KORD" in joined
+        assert "Chicago O'Hare International Airport" in joined
+
+
+def test_the_tick_is_fast_enough_to_be_a_clock():
+    """Pins the period, which the timer test below cannot.
+
+    The test below sleeps `TICK_SECONDS * 1.5`, so a period stretched to an
+    hour would not fail it -- it would *hang* it, for 90 minutes, which is
+    not a test result. This bound is what turns that mutation into a
+    failure, and it is the real requirement anyway: a clock showing minutes
+    has to repaint well inside a minute.
+    """
+    assert 0 < TICK_SECONDS <= 5
+
+
+@pytest.mark.asyncio
+async def test_the_pane_ticks_by_itself_with_nobody_driving_it():
+    """The one test that waits for the real timer instead of calling tick().
+
+    Every other test here calls `app.tick()` by hand, so all of them stay
+    green with `set_interval` deleted or its period set to an hour -- and a
+    pane that only paints once is a frozen clock and an airport that never
+    catches up with `kcgx go`. This one sleeps past a tick boundary and
+    asserts the pane moved on its own, which is the only way that line is
+    protected.
+
+    Real wall-clock time, deliberately: Textual's timers run on the event
+    loop this test shares, so a scripted clock would prove nothing about
+    whether anything is scheduled.
+    """
+    app = make(icaos=("KPDX", "KORD"))
+    async with app.run_test(size=SIZE) as pilot:
+        assert "KPDX" in "\n".join(rendered(app)[0])
+
+        await asyncio.sleep(TICK_SECONDS * 1.5)
+        await pilot.pause()
+
+        joined = "\n".join(rendered(app)[0])
+        assert "KORD" in joined, "the pane never ticked without being told to"
         assert "Chicago O'Hare International Airport" in joined
 
 
