@@ -66,3 +66,37 @@ def test_resolve_stream_uses_injected_fetcher():
         return "[playlist]\nFile1=https://example.test/stream\n"
 
     assert resolve_stream("kpdx_twr", fake) == "https://example.test/stream"
+
+
+def test_label_survives_intervening_ad_table():
+    """Regression test: a "nearest preceding <table>" heuristic would latch
+    onto an injected ad block's own <table> and return its text (e.g.
+    "Sponsored") instead of skipping past it to the real feed label.
+    """
+    feeds = parse_airport_page((FIXTURES / "kpdx_adversarial.html").read_text())
+    by_ident = {f.ident: f.label for f in feeds}
+    assert by_ident["kpdx_nested_table_test"] == "KPDX Nested Table Test"
+
+
+def test_label_extraction_handles_strong_attributes_and_case():
+    """<strong class="..."> and <STRONG> must both extract the label text,
+    not fall through to the title-cased-ident fallback.
+    """
+    feeds = parse_airport_page((FIXTURES / "kpdx_adversarial.html").read_text())
+    by_ident = {f.ident: f.label for f in feeds}
+    assert by_ident["kpdx_attr_strong_test"] == "KPDX Attr Strong Test"
+
+    html = (
+        '<table class="body"><tbody><tr><td bgcolor="lightblue">'
+        "<STRONG>Uppercase Tag Test</STRONG></td></tr>"
+        '<tr><td><a href="/play/kpdx_uppercase_tag_test.pls">'
+        "(launches your MP3 player)</a></td></tr></tbody></table>"
+    )
+    feeds = parse_airport_page(html)
+    assert feeds[0].label == "Uppercase Tag Test"
+
+
+def test_label_falls_back_to_ident_when_no_strong_present():
+    feeds = parse_airport_page((FIXTURES / "kpdx_adversarial.html").read_text())
+    by_ident = {f.ident: f.label for f in feeds}
+    assert by_ident["kpdx_no_strong_test"] == "KPDX NO STRONG TEST"

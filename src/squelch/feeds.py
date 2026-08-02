@@ -14,7 +14,12 @@ USER_AGENT = "squelch/0.1 (personal listener)"
 
 _PLS_FILE_RE = re.compile(r"^\s*File\d+\s*=\s*(\S+)\s*$", re.MULTILINE)
 _FEED_LINK_RE = re.compile(r"/play/([a-z0-9_\-]+)\.pls", re.IGNORECASE)
-_STRONG_RE = re.compile(r"<strong>([^<]{1,80})</strong>", re.IGNORECASE)
+# Attribute-tolerant: matches <strong>, <strong class="x">, <STRONG>, etc.
+_STRONG_RE = re.compile(r"<strong[^>]*>([^<]{1,80})</strong>", re.IGNORECASE)
+# LiveATC's boilerplate <strong> rows are always a "Field:" caption or a bare
+# status word -- real feed names are neither, so this is used to filter
+# out captions/status without hardcoding every phrase the site might use.
+_STATUS_WORDS = {"UP", "DOWN"}
 
 
 class FeedError(Exception):
@@ -46,40 +51,61 @@ def parse_pls(text: str) -> str:
 def parse_airport_page(html: str) -> list[Feed]:
     """Extract feeds from a LiveATC airport search page.
 
-    Feeds are anchored on /play/<ident>.pls links. Each feed's link lives
-    inside its own `<table class="body">...</table>` block, whose *first*
-    <strong> element is the human-readable feed name (e.g. "KPDX Tower
-    (Both)") -- earlier in the DOM than the "Feed Status:"/"Listeners:"
-    labels that also use <strong> further down the same table. The label
-    falls back to a title-cased ident if no such heading can be found, so a
-    label is never empty.
+    Feeds are anchored on /play/<ident>.pls links. Each feed's link lives in
+    a block whose first <strong> element is the human-readable feed name
+    (e.g. "KPDX Tower (Both)") -- earlier in the DOM than the "Feed
+    Status:"/"Listeners:" captions that also use <strong> further down. The
+    label falls back to a title-cased ident if no such heading can be found,
+    so a label is never empty.
     """
     feeds: list[Feed] = []
     seen: set[str] = set()
+    window_start = 0
     for match in _FEED_LINK_RE.finditer(html):
         ident = match.group(1).lower()
         if ident in seen:
             continue
         seen.add(ident)
-        feeds.append(Feed(ident=ident, label=_label_for(html, match.start(), ident)))
+        label = _label_for(html, window_start, match.start(), ident)
+        feeds.append(Feed(ident=ident, label=label))
+        window_start = match.end()
     if not feeds:
         raise FeedError("no feeds found on page")
     return feeds
 
 
-def _label_for(html: str, pos: int, ident: str) -> str:
+def _label_for(html: str, window_start: int, pos: int, ident: str) -> str:
     """Find the display label for the feed link at `pos`.
 
-    Walk backward to the start of the enclosing `<table` for this feed, then
-    take the first <strong>...</strong> at or after that point but before the
-    link itself -- that's the feed name, not one of the later status labels.
+    Deliberately does *not* anchor on any enclosing `<table` -- a stray or
+    injected `<table>` between a feed's real label and its link (e.g. an ad
+    block) would make a "nearest preceding <table>" heuristic latch onto the
+    wrong block and silently return the wrong text. Instead this scans the
+    region between the end of the *previous* feed's link (or the start of
+    the document, for the first feed) and the start of this feed's link, and
+    returns the first <strong> in that region that isn't a boilerplate
+    caption/status ("Feed Status:", "Listeners:", "UP", "DOWN", ...). Since
+    the real label always appears before any of a feed's own boilerplate
+    rows -- and, per the observed markup, before any ad content too -- the
+    first non-boilerplate <strong> in the window is the label, regardless of
+    what shows up structurally (nested tables, extra attributes) after it.
+
+    Note: this assumes injected content sits *after* the real label, which
+    matches every case observed on the live page. Non-boilerplate text
+    injected *before* the label within the same window would still fool
+    this, same as any positional heuristic would.
     """
-    table_start = html.rfind("<table", 0, pos)
-    search_start = table_start if table_start != -1 else max(0, pos - 1500)
-    match = _STRONG_RE.search(html, search_start, pos)
-    if match:
-        return _clean(match.group(1))
+    window = html[window_start:pos]
+    for candidate in _STRONG_RE.finditer(window):
+        text = _clean(candidate.group(1))
+        if _is_boilerplate(text):
+            continue
+        return text
     return ident.replace("_", " ").upper()
+
+
+def _is_boilerplate(text: str) -> bool:
+    return text.endswith(":") or text.upper() in _STATUS_WORDS
 
 
 def _clean(text: str) -> str:
