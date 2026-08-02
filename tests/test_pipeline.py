@@ -125,3 +125,70 @@ def test_stop_halts_the_loop_and_stops_the_reader():
     pipeline.run()
     assert reader.stopped
     assert player.written == []
+
+
+# -- the activity tap ------------------------------------------------------
+
+
+def collect_all():
+    got = {"levels": [], "states": [], "activity": []}
+    return got, Events(
+        on_level=lambda d: got["levels"].append(d),
+        on_state=lambda s: got["states"].append(s),
+        on_activity=lambda d: got["activity"].append(d),
+    )
+
+
+def loud_frames(n):
+    return [struct.pack("<h", 8000) * (FRAME_BYTES // 2) for _ in range(n)]
+
+
+def test_activity_is_reported_at_a_fixed_ten_hertz():
+    got, events = collect_all()
+    Pipeline(FakeReader(loud_frames(20)), FakePlayer(), events).run()
+    assert len(got["activity"]) == 4, "20 frames at one per 5 is 4 readings"
+
+
+def test_the_display_rate_is_independent_of_the_activity_rate():
+    got, events = collect_all()
+    Pipeline(
+        FakeReader(loud_frames(20)), FakePlayer(), events, level_every=2
+    ).run()
+    assert len(got["levels"]) == 10
+    assert len(got["activity"]) == 4
+
+
+def test_the_display_rate_can_be_changed_at_runtime():
+    got, events = collect_all()
+    pipeline = Pipeline(FakeReader(loud_frames(20)), FakePlayer(), events)
+    pipeline.set_level_every(2)
+    pipeline.run()
+    assert len(got["levels"]) == 10
+
+
+def test_a_reconnect_heartbeat_does_not_feed_activity():
+    """A `None` is the absence of a sample, not five minutes of silence."""
+    got, events = collect_all()
+    Pipeline(FakeReader([None] * 10), FakePlayer(), events).run()
+    assert got["activity"] == []
+    assert got["states"] == ["reconnecting"]
+
+
+def test_events_can_still_be_built_without_an_activity_callback():
+    """Existing construction sites must keep working."""
+    events = Events(on_level=lambda d: None, on_state=lambda s: None)
+    Pipeline(FakeReader(loud_frames(10)), FakePlayer(), events).run()
+
+
+def test_a_failing_activity_callback_does_not_stop_the_pump():
+    def explode(_dbfs):
+        raise RuntimeError("boom")
+
+    events = Events(
+        on_level=lambda d: None,
+        on_state=lambda s: None,
+        on_activity=explode,
+    )
+    player = FakePlayer()
+    Pipeline(FakeReader(loud_frames(10)), player, events).run()
+    assert len(player.written) == 10, "audio must survive a broken callback"
