@@ -1,0 +1,93 @@
+{
+  "source": "https://vehicles.ambient-mixer.com/air-traffic-control-with-plane",
+  "template_id": 444055,
+  "template_xml": "https://xml.ambient-mixer.com/audio-template?id_template=444055",
+  "retrieved": "2026-08-02",
+  "license": {
+    "name": "Creative Commons Sampling Plus 1.0 License",
+    "url": "https://creativecommons.org/licenses/sampling+/1.0/"
+  },
+  "note": "gain and balance are the template's fader positions, normalised to 0..1 and -1..1. mode=loop plays continuously; mode=random fires discrete events at rate_per_hour. license and credit are as published by the source page and must be shown in-app.",
+  "channels": [
+    {
+      "file": "1-ticking-clock.mp3",
+      "name": "Ticking clock",
+      "duration_s": 19.383,
+      "gain": 0.08,
+      "balance": 0.0,
+      "mode": "loop",
+      "rate_per_hour": null,
+      "credit": "Mariusz Jasionowicz - www.raresound.co.uk"
+    },
+    {
+      "file": "2-neon-lights-hum.mp3",
+      "name": "Neon Lights Hum",
+      "duration_s": 5.407,
+      "gain": 1.0,
+      "balance": 0.0,
+      "mode": "loop",
+      "rate_per_hour": null,
+      "credit": "kbnevel from http://freesound.org"
+    },
+    {
+      "file": "3-distant-jet-3.mp3",
+      "name": "Distant Jet 3",
+      "duration_s": 28.447,
+      "gain": 0.24,
+      "balance": 0.0,
+      "mode": "loop",
+      "rate_per_hour": null,
+      "credit": "Gigarama MAKS 2019"
+    },
+    {
+      "file": "4-server-room-computer-lab.mp3",
+      "name": "Server Room \\ Computer Lab",
+      "duration_s": 45.087,
+      "gain": 1.0,
+      "balance": 0.0,
+      "mode": "loop",
+      "rate_per_hour": null,
+      "credit": "BugInTheSYS from http://freesound.org"
+    },
+    {
+      "file": "5-water-pump-engine.mp3",
+      "name": "water pump engine",
+      "duration_s": 3.918,
+      "gain": 0.03,
+      "balance": 0.0,
+      "mode": "loop",
+      "rate_per_hour": null,
+      "credit": "bansemer - freesound.org"
+    },
+    {
+      "file": "6-huge-slow-metal-fan.mp3",
+      "name": "Huge slow metal fan",
+      "duration_s": 56.869,
+      "gain": 0.17,
+      "balance": 0.1,
+      "mode": "loop",
+      "rate_per_hour": null,
+      "credit": "SoundDogs"
+    },
+    {
+      "file": "7-distant-jet-2.mp3",
+      "name": "Distant Jet 2",
+      "duration_s": 26.41,
+      "gain": 0.55,
+      "balance": -0.23,
+      "mode": "random",
+      "rate_per_hour": 33,
+      "credit": "Gigarama MAKS 2019"
+    },
+    {
+      "file": "8-distant-jet-1.mp3",
+      "name": "Distant Jet 1",
+      "duration_s": 32.078,
+      "gain": 0.52,
+      "balance": 0.18,
+      "mode": "random",
+      "rate_per_hour": 112,
+      "credit": "Gigarama MAKS 2019"
+    }
+  ]
+}
