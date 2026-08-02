@@ -30,8 +30,6 @@ from squelch.rows import (
     ROW_WIDTH,
     FeedRow,
     _fit,
-    _glyph_for,
-    meter_bar,
 )
 
 # Messages are mounted widgets and Textual never reclaims them on its own.

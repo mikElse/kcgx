@@ -12,7 +12,7 @@ Screen {
 }
 
 .feed {
-    height: 3;
+    height: 5;
     padding: 0 1;
     border-top: solid $primary;
 }
@@ -32,7 +32,7 @@ Screen {
 }
 
 .feed-meter {
-    height: 1;
+    height: 3;
 }
 
 /* Takes no rows until something has actually been logged. With a dozen
