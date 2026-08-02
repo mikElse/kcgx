@@ -37,7 +37,12 @@ def read_airport(*, path: Path | None = None) -> str | None:
     path = default_path() if path is None else path
     try:
         value = path.read_text().strip().upper()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # Unreadable and undecodable are the same story: nothing usable was
+        # remembered. UnicodeDecodeError is a ValueError, not an OSError --
+        # a truncated write, disk corruption, or a stray binary must fall
+        # through to the next source exactly like a missing file, not raise
+        # past the caller.
         return None
     return value or None
 

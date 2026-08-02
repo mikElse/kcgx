@@ -119,6 +119,49 @@ async def test_an_unknown_icao_shows_the_bare_code():
 
 
 @pytest.mark.asyncio
+async def test_a_failing_resolver_keeps_the_last_known_airport_and_the_clock_still_ticks():
+    """The airport half of tick() must not take the clock half down with it.
+
+    A corrupt state file (UnicodeDecodeError) or any other resolver failure
+    must not kill the pane on the very tick it happens: the airport we last
+    knew stays on screen, and the clock -- which does not depend on the
+    resolver at all -- keeps advancing.
+    """
+    calls = {"n": 0}
+
+    def flaky_resolver():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "KPDX"
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    times = [T1, T2]
+
+    def now():
+        t = times[0] if len(times) == 1 else times.pop(0)
+        return t, t.astimezone(PDT)
+
+    app = StatusPane(
+        resolver=flaky_resolver,
+        airports_loader=lambda: AIRPORTS,
+        now=now,
+        opener=lambda: None,
+    )
+    async with app.run_test(size=SIZE) as pilot:
+        joined = "\n".join(rendered(app)[0])
+        assert "KPDX" in joined
+        assert "1955Z" in joined
+
+        app.tick()
+        await pilot.pause()
+
+        assert app.is_running
+        joined = "\n".join(rendered(app)[0])
+        assert "KPDX" in joined
+        assert "2030Z" in joined
+
+
+@pytest.mark.asyncio
 async def test_clicking_the_affordance_opens_the_picker():
     clicks = []
     app = make(clicks=clicks)

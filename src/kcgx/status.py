@@ -89,6 +89,10 @@ def now_pair() -> tuple[datetime, datetime]:
 
 
 def open_picker(run: Callable[..., object] = subprocess.run) -> None:
+    # No check=True: a popup that runs but exits non-zero fails silently.
+    # Accepted tradeoff -- the caller already swallows every exception this
+    # can raise (see StatusPane.on_click), so a raised CalledProcessError
+    # would buy no more feedback than this does.
     run(("tmux", *PICKER_POPUP))
 
 
@@ -138,12 +142,22 @@ class StatusPane(App[None]):
         move the cockpit without touching this pane: no respawn, no flicker,
         and it is right even if the remembered airport changes by some other
         route.
+
+        The airport half is wrapped on its own: a resolver that raises (an
+        unreadable or undecodable state file, say) must leave the
+        last-known airport on screen rather than taking the clock down with
+        it -- the clock does not depend on the resolver at all and has no
+        reason to stop just because this one read failed.
         """
-        icao = self._resolver()
-        airport = find(icao, self._airports)
-        self.query_one("#airport", Static).update(
-            airport_line(airport, icao, CONTENT_WIDTH), layout=False
-        )
+        try:
+            icao = self._resolver()
+            airport = find(icao, self._airports)
+        except Exception:
+            pass
+        else:
+            self.query_one("#airport", Static).update(
+                airport_line(airport, icao, CONTENT_WIDTH), layout=False
+            )
 
         utc, local = self._now()
         clocks = clock_text(utc, local)
