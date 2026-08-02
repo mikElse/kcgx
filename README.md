@@ -63,11 +63,13 @@ startup.
 If you resize your terminal, note the UI is laid out for exactly 48×42 and
 does not reflow past that.
 
-The header's `●` indicator is always truthful about playback: `LIVE` while
-streaming normally, `RECONNECTING` while the audio process is being
-respawned after a dropout, and `OFFLINE` if the configured feed could not
-be resolved at all (in which case a warning also appears in the transcript
-pane explaining why).
+The header's `●` indicator is always truthful about playback: `STARTING`
+before the first audio frame has arrived (including the whole model load),
+`LIVE` while streaming normally, `RECONNECTING` while the audio process is
+being respawned after a dropout, and `OFFLINE` if the stream could not be
+started or has stopped for good (in which case a warning also appears in
+the transcript pane explaining why). The meter and clock keep running
+through a reconnect, so the pane never freezes.
 
 ## Configuration
 
@@ -75,6 +77,9 @@ squelch reads TOML from `~/.config/squelch/squelch.toml`. Every key is
 optional; anything not set (or the whole file, if it doesn't exist) falls
 back to the defaults below. Unknown keys in the file are ignored rather
 than treated as an error, so an older binary can still read a newer config.
+Known keys *are* type- and range-checked at startup: a bad value (say
+`vad_aggressiveness = 7`) exits immediately with a message naming the file
+and the key, rather than failing later inside the audio pipeline.
 
 | Key                 | Default                                                        | Meaning |
 |----------------------|----------------------------------------------------------------|---------|
@@ -109,17 +114,21 @@ run.
 Pressing `f` fetches the list of feeds LiveATC publishes for the configured
 airport and shows them in an overlay. You can navigate and select a row,
 but **selecting a feed does not restart the stream in this version** — the
-selection hook fires, but the running pipeline keeps listening to whatever
-URL it originally resolved at startup. Live feed switching is intentionally
-out of scope for v1; use `--feed` (or the config file) and restart squelch
-to change feeds. If the feed list can't be loaded (network trouble, or the
-airport has no feeds LiveATC exposes), a warning appears in the transcript
-pane instead of a crash.
+running pipeline keeps listening to whatever URL it originally resolved at
+startup. Selecting a row prints the command that would start it, e.g.
+`selected ksea_twr — restart with: squelch --feed ksea_twr`. Live feed
+switching is intentionally out of scope for v1. If the feed list can't be
+loaded (network trouble, or the airport has no feeds LiveATC exposes), a
+warning appears in the transcript pane instead of a crash. The fetch runs
+off the event loop, so a slow or hanging LiveATC request never stalls
+playback or the UI.
 
 ## Known limitations
 
 - Selecting a feed in the picker does not restart the stream (see above).
-- No transcript logging to disk, no in-pane search or scrollback.
+- No transcript logging to disk, no in-pane search. Scrollback is capped
+  at the most recent 200 transcript entries; older ones are discarded so
+  memory and redraw cost stay flat over a multi-hour session.
 - No speaker labelling.
 - Inference is CPU-bound; there is no Metal/GPU acceleration path today.
 - Model loading is synchronous and blocks audio startup (see "Running it"
