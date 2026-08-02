@@ -119,19 +119,29 @@ airport, stacks them one per row with a scrolling level meter each, and
 lets you unmute the ones you want to hear.
 
 ```
- KPDX  12 feeds               07:54:29  10 live
+ KCGX  12 feeds               07:54:29  10 live
 ────────────────────────────────────────────────
- ♪ Tower (Both)             kpdx3_twr        ●
- ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▇▁▁▇▆▁▁▆▁▆▁▁▁▃▃▁▁▁▆▃▁▇▆▁▁▇▇
+ Tower (Both)                               ●
+ ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
+ ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
+ ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
+ [S]  [ ON]  [A]
 ────────────────────────────────────────────────
- · Ground                   kpdx3_gnd        ◐
- ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▁▆▁▁▆▃▁▇▁▁▃▃▁▇▁▇▆▆▇▇▁▁▇▁▆▃▆▇▃
+ Ground                          [A] [OFF] ◐
+────────────────────────────────────────────────
+ Clearance Delivery              [A] [OFF] ●
 ```
 
-`♪` is audible, `·` is muted. The dot on the right is that feed's
-connection: `●` live, `◐` reconnecting, `○` offline. **Every feed meters
-whether or not it is audible** — muting is an audio gate, not a pause, so a
-muted frequency still shows you when it is busy.
+An audible feed is **expanded** — a three-row meter and its full controls.
+A muted feed collapses to a single **compact** line. Expansion follows what
+you can hear, so the pane spends its height on the frequencies you are
+actually listening to. **Every feed meters whether or not it is audible** —
+muting is an audio gate, not a pause — a muted feed simply keeps its history
+without drawing it. The dot on the right is that feed's connection: `●`
+live, `◐` reconnecting, `○` offline.
+
+Feed idents no longer appear on the row. They are still what `feed` in
+`squelch.toml` and `--feed` take, and the feed picker (`f`) still shows them.
 
 Transcription was removed — see "History" at the end.
 
@@ -226,19 +236,24 @@ run.
 |---------|--------|
 | `↑` `↓` | Move the selection through the stack. |
 | `space` | Mute/unmute the selected feed. Its meter keeps running either way. |
-| `f`     | Open the feed picker for the configured airport (`icao`). |
+| `S`     | Solo the selected feed — mute every other one. Press again to restore the previous mix. |
+| `a`     | Route the selected feed to the ambient bus. |
+| `f`     | Open the feed picker and jump to a feed by name. |
 | `escape`| (in the feed picker) Close it without choosing anything. |
 | `q`     | Quit. |
+
+Every control is also clickable: `[S]`, `[ ON]`/`[OFF]`, and `[A]`. Clicking
+anywhere else on a row toggles its mute.
 
 ### Feed picker
 
 Pressing `f` lists the feeds LiveATC publishes for the configured airport.
-Since squelch already opens all of them, the picker is a lookup rather than
-a switch: selecting a row reports that feed's ident and points you at its
-row, e.g. `kpdx3_gnd — already open; use [space] on its row to unmute`. If
-the list can't be loaded, a warning appears in the message log instead of a
-crash. The fetch runs off the event loop, so a slow or hanging LiveATC
-request never stalls playback or the UI.
+Since squelch already opens all of them, the picker is a jump list rather
+than a switch: selecting a row moves the selection to that feed and scrolls
+it into view, which is the quick way to a specific frequency. If the list
+can't be loaded, a warning appears in the message log instead of a crash.
+The fetch runs off the event loop, so a slow or hanging LiveATC request
+never stalls playback or the UI.
 
 ## Feed discovery and LiveATC's bot protection
 
@@ -266,11 +281,9 @@ watching on battery.
 
 ## Known limitations
 
-- The picker cannot switch feeds, because they are all already open (see
-  above).
 - Feeds are discovered once at startup; a feed that appears on LiveATC
   later needs a restart to show up.
-- There is no master mute or solo — muting is per feed.
+- `[A]` is rendered and toggleable but silent until the mixing engine lands.
 - No transcription (see "History").
 - The message log only carries warnings, so the pane is mostly empty at
   rest. Retention is capped at the most recent 200 messages so memory and
