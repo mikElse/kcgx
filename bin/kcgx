@@ -22,7 +22,21 @@
 set -euo pipefail
 
 SESSION="${KCGX_SESSION:-kcgx}"
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Resolve symlinks before deriving the repo root. The intended install is a
+# symlink in ~/bin, and ${BASH_SOURCE[0]} reports the path used to invoke the
+# script, not the link's target — so this would otherwise resolve to ~ and go
+# looking for ~/kcgx.tmux.conf. `readlink -f` is not portable to older macOS,
+# hence the loop.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+    target="$(readlink "$self")"
+    case "$target" in
+        /*) self="$target" ;;
+        *) self="$(cd -P "$(dirname "$self")" && pwd)/$target" ;;
+    esac
+done
+REPO="$(cd -P "$(dirname "$self")/.." && pwd)"
 CONF="$REPO/kcgx.tmux.conf"
 
 SQUELCH_COLS="${KCGX_SQUELCH_COLS:-48}"
