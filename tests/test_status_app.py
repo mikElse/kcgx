@@ -15,6 +15,9 @@ from textual.geometry import Size
 
 from kcgx.airports import Airport
 from kcgx.status import (
+    CONTENT_WIDTH,
+    PICKER_HINT,
+    PICKER_HINT_SHORT,
     PICKER_POPUP,
     STATUS_ROWS,
     STATUS_WIDTH,
@@ -29,15 +32,19 @@ PDX = Airport("KPDX", "PDX", "Portland International Airport", "Portland",
               "OR", "US", 45.5887, -122.598, "large")
 ORD = Airport("KORD", "ORD", "Chicago O'Hare International Airport", "Chicago",
               "IL", "US", 41.9786, -87.9048, "large")
-AIRPORTS = [PDX, ORD]
+# A name that does not fit the design width but does fit a widened pane,
+# so the two resize tests below can tell "cut at 46" from "cut at all".
+LONG = Airport("KLNG", "LNG", "Somewhere With A Very Long Airport Name Indeed",
+               "Nowhere", "ZZ", "US", 0.0, 0.0, "large")
+AIRPORTS = [PDX, ORD, LONG]
 
 PDT = timezone(timedelta(hours=-7), "PDT")
 T1 = datetime(2026, 8, 2, 19, 55, tzinfo=timezone.utc)
 T2 = datetime(2026, 8, 2, 20, 30, tzinfo=timezone.utc)
 
 
-def rendered(app):
-    strips = app.screen._compositor.render_strips(Size(*SIZE))
+def rendered(app, size=SIZE):
+    strips = app.screen._compositor.render_strips(Size(*size))
     return [s.text for s in strips], strips
 
 
@@ -330,6 +337,48 @@ async def test_a_failing_opener_does_not_kill_the_pane():
         await pilot.pause()
         assert app.is_running
         assert "1955Z" in "\n".join(rendered(app)[0])
+
+
+@pytest.mark.asyncio
+async def test_a_narrowed_pane_cuts_visibly_and_degrades_the_hint():
+    """Every splitter here is drag-resizable, so 48 columns is a default.
+
+    Formatting to CONTENT_WIDTH regardless left tmux to do the cutting,
+    and tmux just clips: line 1 lost its trailing words with no ellipsis
+    to say so, and the hint was chopped mid-string ("▾ airport") rather
+    than degrading to "▾" -- which meant PICKER_HINT_SHORT, the
+    degradation the pane is designed around and test_status_format.py
+    checks, could not be reached at any width in the running app.
+
+    The explicit tick is the point of on_mount's first paint: it happens
+    before the first layout, when every widget still reports width 0, so
+    the design width stands in for exactly one frame.
+    """
+    narrow = (30, STATUS_ROWS)
+    app = make()
+    async with app.run_test(size=narrow) as pilot:
+        app.tick()
+        await pilot.pause()
+        joined = "\n".join(rendered(app, narrow)[0])
+        assert "…" in joined, "the pane was cut by tmux, not by fit()"
+        assert PICKER_HINT not in joined
+        assert PICKER_HINT_SHORT in joined
+
+
+@pytest.mark.asyncio
+async def test_a_widened_pane_uses_the_room_it_was_given():
+    """The other half: line 1 stopped at 46 while line 2 stretched."""
+    assert len(f"{LONG.icao}  {LONG.name}") > CONTENT_WIDTH, (
+        "this name has to be one the design width would cut"
+    )
+    wide = (80, STATUS_ROWS)
+    app = make(icaos=("KLNG",))
+    async with app.run_test(size=wide) as pilot:
+        app.tick()
+        await pilot.pause()
+        joined = "\n".join(rendered(app, wide)[0])
+        assert LONG.name in joined, "line 1 stopped at the design width"
+        assert "…" not in joined
 
 
 @pytest.mark.asyncio

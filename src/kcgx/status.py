@@ -20,12 +20,16 @@ from datetime import datetime, timezone
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.events import Click
+from textual.widget import Widget
 from textual.widgets import Static
 
 from kcgx.airports import Airport, find, load_airports
 from kcgx.state import current_icao
 
-# The right column is 48 columns; one cell of padding each side leaves 46.
+# The right column starts at 48 columns; one cell of padding each side
+# leaves 46. A starting position, not a constraint -- the splitter is
+# drag-resizable, so this is the default the pane formats to only until a
+# layout tells it how wide it really is. See content_width().
 STATUS_WIDTH = 48
 CONTENT_WIDTH = STATUS_WIDTH - 2
 # One row of padding, two content lines, one row of padding.
@@ -80,6 +84,25 @@ def hint_for_width(available: int) -> str:
 PICKER_POPUP = ("display-popup", "-E", "-w", "64", "-h", "20", "kcgx go")
 
 TICK_SECONDS = 1.0
+
+
+def content_width(widget: Widget) -> int:
+    """How wide `widget` really is, or CONTENT_WIDTH before it knows.
+
+    The first paint happens in on_mount, which runs before the first
+    layout: every widget reports width 0 there, and formatting to 0 would
+    blank the pane for the first frame. So 0 means "not laid out yet" and
+    the design width stands in until the real one arrives, one tick later.
+
+    There is deliberately no on_resize handler feeding this. Inside
+    on_resize the children still report 0 -- the event arrives before they
+    are laid out -- so it would have to defer to call_after_refresh, and
+    a mouse drag delivers a storm of resize events, each of which would
+    then re-run the resolver and its file read. The periodic tick already
+    repaints at the new width within TICK_SECONDS, which for a surface
+    whose finest reading is minutes is soon enough.
+    """
+    return widget.size.width or CONTENT_WIDTH
 
 
 def now_pair() -> tuple[datetime, datetime]:
@@ -167,6 +190,20 @@ class StatusPane(App[None]):
         Either way `tick()` itself must never raise -- that is the one
         guarantee the pane exists to make -- so each half leaves its own
         last-known value on screen rather than propagating.
+
+        Both halves lay out against the width the widget *actually has*,
+        not CONTENT_WIDTH. Every splitter in this cockpit is drag-resizable
+        -- that is what kcgx.tmux.conf exists for -- so the constant is a
+        starting position, not a constraint. Formatting to it regardless
+        meant a narrowed pane cut line 1 with no ellipsis (tmux clips; only
+        `fit` can put the "…" there) and clipped the hint mid-string
+        instead of degrading to "▾", which made PICKER_HINT_SHORT
+        unreachable at runtime however narrow the pane got. A widened one
+        stopped line 1 at 46 columns while line 2 stretched.
+
+        Asking the widget being written to, rather than the screen, is what
+        keeps this honest: it already accounts for #body's padding, and it
+        costs no query that was not being made anyway.
         """
         try:
             icao = self._resolver(known=self._known)
@@ -174,8 +211,9 @@ class StatusPane(App[None]):
         except Exception:
             pass
         else:
-            self.query_one("#airport", Static).update(
-                airport_line(airport, icao, CONTENT_WIDTH), layout=False
+            line1 = self.query_one("#airport", Static)
+            line1.update(
+                airport_line(airport, icao, content_width(line1)), layout=False
             )
 
         try:
@@ -184,9 +222,10 @@ class StatusPane(App[None]):
         except Exception:
             pass
         else:
+            available = content_width(self.query_one("#line2")) - len(clocks) - 1
             self.query_one("#clock", Static).update(clocks, layout=False)
             self.query_one("#hint", Static).update(
-                hint_for_width(CONTENT_WIDTH - len(clocks) - 1), layout=False
+                hint_for_width(available), layout=False
             )
 
     def on_click(self, event: Click) -> None:
