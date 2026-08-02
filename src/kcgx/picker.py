@@ -54,8 +54,11 @@ class AirportPicker(App[Airport | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel", show=False),
-        # The input keeps focus so typing always filters; without priority
-        # the Input would swallow these before the option list saw them.
+        # The input keeps focus so typing always filters, and up/down are
+        # handled here rather than by the list. priority=True is defensive:
+        # in Textual 8.2.8 nothing in this DOM competes for these keys, but
+        # a focusable scroll container quietly eating arrow keys is exactly
+        # how selection froze in the sibling squelch app.
         Binding("down", "move(1)", "down", show=False, priority=True),
         Binding("up", "move(-1)", "up", show=False, priority=True),
     ]
