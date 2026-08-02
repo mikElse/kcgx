@@ -396,3 +396,105 @@ def test_picker_returns_empty_when_there_is_no_cache_and_no_network(tmp_path):
         raise RuntimeError("HTTP 403")
 
     assert picker_feeds(Config(icao="KPDX"), fetch=blocked, cache_dir=tmp_path) == []
+
+
+# -- switching airports ----------------------------------------------------
+#
+# The cockpit can now retarget squelch at any airport, so a feed lookup
+# that fails at KORD must not quietly fall back to a KPDX feed. Audio from
+# the wrong airport under a header reading KORD is worse than silence.
+
+
+def test_a_failed_lookup_at_a_new_airport_opens_nothing(tmp_path):
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KORD", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert feeds == [], "kpdx3_twr is not a KORD feed"
+    assert warnings and "KORD" in warnings[0]
+
+
+def test_the_configured_feed_is_still_used_at_its_own_airport(tmp_path):
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KPDX", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert [f.ident for f in feeds] == ["kpdx3_twr"]
+
+
+def test_an_unreachable_listing_says_it_can_be_retried(tmp_path):
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    warnings = []
+    load_feeds(
+        Config(icao="KORD", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert "retry" in warnings[0].lower()
+
+
+def test_an_airport_liveatc_does_not_cover_does_not_suggest_retrying(tmp_path):
+    """Retrying a field with no feeds will never produce one."""
+    from squelch.feeds import FeedError
+
+    def empty(icao):
+        raise FeedError("no feeds found on page")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KBDN", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=empty,
+        cache_dir=tmp_path,
+    )
+    assert feeds == []
+    assert "no feeds" in warnings[0].lower()
+    assert "retry" not in warnings[0].lower()
+
+
+# -- which feed comes up audible ------------------------------------------
+
+
+def test_a_tower_feed_is_preferred_when_nothing_matches_the_config():
+    """Arriving somewhere new should land on the interesting channel."""
+    feeds = [
+        Feed(ident="kord_atis", label="KORD ATIS"),
+        Feed(ident="kord_gnd", label="KORD Ground"),
+        Feed(ident="kord_twr", label="KORD Tower"),
+    ]
+    sessions = build_sessions(
+        feeds,
+        Config(icao="KORD", feed="kpdx3_twr"),
+        events=None,
+        session_factory=StubSession,
+    )
+    assert [s.feed.ident for s in sessions if not s.muted] == ["kord_twr"]
+
+
+def test_the_first_feed_is_used_when_there_is_no_tower():
+    feeds = [
+        Feed(ident="kord_atis", label="KORD ATIS"),
+        Feed(ident="kord_gnd", label="KORD Ground"),
+    ]
+    sessions = build_sessions(
+        feeds,
+        Config(icao="KORD", feed="kpdx3_twr"),
+        events=None,
+        session_factory=StubSession,
+    )
+    assert [s.feed.ident for s in sessions if not s.muted] == ["kord_atis"]

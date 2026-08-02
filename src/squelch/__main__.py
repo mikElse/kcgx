@@ -15,6 +15,7 @@ from squelch.config import Config, ConfigError, load_config
 from squelch.feeds import (
     CACHE_TTL_SECONDS,
     Feed,
+    FeedError,
     cached_age_seconds,
     fetch_feeds,
     read_cached_feeds,
@@ -61,6 +62,28 @@ def feed_selection_hint(feed: Feed) -> str:
     return f"{feed.ident} — already open; use [space] on its row to unmute"
 
 
+def _no_feeds(
+    config: Config,
+    warn: Callable[[str], None],
+    reason: str,
+    *,
+    retryable: bool,
+) -> list[Feed]:
+    """What to open when the airport's feed list could not be had.
+
+    The configured feed is only a sane fallback at its own airport. Since
+    the cockpit can retarget squelch anywhere, falling back to kpdx3_twr at
+    KORD would play Portland tower under a header reading KORD -- audio
+    from the wrong airport is worse than an empty pane.
+    """
+    if config.feed and config.feed.lower().startswith(config.icao.lower()):
+        warn(f"{config.icao} — {reason}; opening {config.feed}")
+        return [Feed(ident=config.feed, label=config.feed)]
+    tail = "; press f to retry" if retryable else ""
+    warn(f"{config.icao} — {reason}{tail}")
+    return []
+
+
 def load_feeds(
     config: Config,
     *,
@@ -87,6 +110,12 @@ def load_feeds(
 
     try:
         feeds = fetch(config.icao)
+    except FeedError:
+        # The page loaded and had no feeds on it. Retrying will not
+        # conjure one, so do not suggest it.
+        return _no_feeds(
+            config, warn, "LiveATC has no feeds for this airport", retryable=False
+        )
     except Exception as exc:
         stale = read_cached_feeds(config.icao, directory=cache_dir)
         if stale:
@@ -96,16 +125,21 @@ def load_feeds(
                 f"using the cached list from {days:.0f} day(s) ago"
             )
             return stale
-        warn(f"could not list feeds for {config.icao} ({exc}) — opening {config.feed}")
-        return [Feed(ident=config.feed, label=config.feed)]
+        return _no_feeds(
+            config,
+            warn,
+            f"could not reach LiveATC's listing ({exc})",
+            retryable=True,
+        )
 
     if not feeds:
         stale = read_cached_feeds(config.icao, directory=cache_dir)
         if stale:
             warn(f"no feeds listed for {config.icao} — using the cached list")
             return stale
-        warn(f"no feeds listed for {config.icao} — opening {config.feed}")
-        return [Feed(ident=config.feed, label=config.feed)]
+        return _no_feeds(
+            config, warn, "LiveATC has no feeds for this airport", retryable=False
+        )
 
     write_cached_feeds(config.icao, feeds, directory=cache_dir)
     return feeds
@@ -134,6 +168,19 @@ def picker_feeds(
     return read_cached_feeds(config.icao, directory=cache_dir) or []
 
 
+def preferred_index(feeds: list[Feed]) -> int:
+    """Which feed to leave audible when the configured one matched nothing.
+
+    Tower is where the interesting traffic is; LiveATC's listing order is
+    arbitrary and often opens on ATIS, which is a recorded loop.
+    """
+    for index, feed in enumerate(feeds):
+        text = f"{feed.ident} {feed.label}".lower()
+        if "twr" in text or "tower" in text:
+            return index
+    return 0
+
+
 def build_sessions(
     feeds: list[Feed],
     config: Config,
@@ -159,8 +206,8 @@ def build_sessions(
         )
     if sessions and all(s.muted for s in sessions):
         # The configured ident matched nothing this airport publishes.
-        # Opening entirely silent reads as broken, so unmute the first.
-        sessions[0].muted = False
+        # Opening entirely silent reads as broken, so unmute the best guess.
+        sessions[preferred_index(feeds)].muted = False
     return sessions
 
 

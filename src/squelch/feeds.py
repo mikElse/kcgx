@@ -138,6 +138,11 @@ def _clean(text: str) -> str:
 # is not protected, which is why streaming works regardless.)
 CHALLENGE_STATUSES = frozenset({403, 429, 503})
 FETCH_ATTEMPTS = 5
+# A first visit to an airport has no cached list to fall back on, so an
+# empty pane is the alternative to trying again. At roughly one request in
+# four getting through, five attempts succeed about 76% of the time and
+# eight about 90% -- worth a few extra seconds exactly once per airport.
+COLD_FETCH_ATTEMPTS = 8
 
 CACHE_DIR = Path.home() / ".cache" / "squelch"
 # Feed lists change on the order of months, and every fetch is a request to
@@ -217,10 +222,26 @@ def _http_get_once(url: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
-def fetch_feeds(icao: str, fetch: Fetcher | None = None) -> list[Feed]:
+def fetch_feeds(
+    icao: str,
+    fetch: Fetcher | None = None,
+    *,
+    cache_dir: Path | None = None,
+    get: Fetcher | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[Feed]:
     if fetch is not None:
         return parse_airport_page(fetch(airport_url(icao)))
-    return parse_airport_page(http_get_with_retry(airport_url(icao)))
+    attempts = (
+        FETCH_ATTEMPTS
+        if cached_age_seconds(icao, directory=cache_dir) is not None
+        else COLD_FETCH_ATTEMPTS
+    )
+    return parse_airport_page(
+        http_get_with_retry(
+            airport_url(icao), get=get, sleep=sleep, attempts=attempts
+        )
+    )
 
 
 def resolve_stream(ident: str, fetch: Fetcher = _http_get_once) -> str:

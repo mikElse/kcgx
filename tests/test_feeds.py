@@ -233,3 +233,42 @@ def test_the_first_feed_is_not_labelled_with_a_page_section_heading():
         "the first feed picked up a page heading instead of its own name"
     )
     assert labels["kpdx3_gnd"] == "KPDX Ground"
+
+
+def test_a_first_visit_gets_more_coin_flips_than_a_revisit(tmp_path):
+    """No cache means no fallback, so it is worth re-flipping more times."""
+    import urllib.error
+
+    from squelch.feeds import (
+        COLD_FETCH_ATTEMPTS,
+        FETCH_ATTEMPTS,
+        Feed,
+        fetch_feeds,
+        write_cached_feeds,
+    )
+
+    attempts = []
+
+    def always_blocked(url):
+        attempts.append(url)
+        raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+
+    # Cold: no cache for KORD.
+    attempts.clear()
+    try:
+        fetch_feeds("KORD", cache_dir=tmp_path, get=always_blocked,
+                    sleep=lambda _s: None)
+    except urllib.error.HTTPError:
+        pass
+    assert len(attempts) == COLD_FETCH_ATTEMPTS
+
+    # Warm: a cache exists, so a failure is survivable.
+    write_cached_feeds("KSEA", [Feed("ksea_twr", "KSEA Tower")], directory=tmp_path)
+    attempts.clear()
+    try:
+        fetch_feeds("KSEA", cache_dir=tmp_path, get=always_blocked,
+                    sleep=lambda _s: None)
+    except urllib.error.HTTPError:
+        pass
+    assert len(attempts) == FETCH_ATTEMPTS
+    assert COLD_FETCH_ATTEMPTS > FETCH_ATTEMPTS
