@@ -139,6 +139,21 @@ METER_PALETTES: dict[str, MeterPalette] = {
 }
 
 
+def textual_color(value: str) -> str:
+    """A meter palette stop, spelled the way Textual spells it.
+
+    The palettes are Rich style strings, because that is what colours the
+    meter's individual cells. Rich and Textual disagree on how to name an
+    ANSI colour -- Rich says `bright_black`, Textual says
+    `ansi_bright_black` -- so handing a palette stop straight to `Theme`
+    raises ColorParseError for exactly the two themes (`color` and `mono`)
+    that use ANSI names on purpose. Hex passes through untouched.
+    """
+    if value.startswith("#"):
+        return value
+    return f"ansi_{value}"
+
+
 def textual_theme(name: str) -> Theme:
     """A Textual theme matching one of adsb-tui's.
 
@@ -147,15 +162,18 @@ def textual_theme(name: str) -> Theme:
     """
     palette = METER_PALETTES[name]
     fill = _FILL[name]
+    accent = textual_color(palette.accent)
+    text = textual_color(palette.text)
+    peak = textual_color(palette.peak)
     return Theme(
         name=f"{TEXTUAL_THEME_PREFIX}{name}",
-        primary=palette.accent,
-        secondary=palette.text,
-        warning=palette.peak,
-        error=palette.peak,
-        success=palette.accent,
-        accent=palette.accent,
-        foreground=palette.text,
+        primary=accent,
+        secondary=text,
+        warning=peak,
+        error=peak,
+        success=accent,
+        accent=accent,
+        foreground=text,
         background=fill,
         surface=fill,
         panel=fill,
