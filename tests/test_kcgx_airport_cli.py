@@ -6,7 +6,9 @@ record format is asserted precisely: bash splits it on tabs.
 
 from __future__ import annotations
 
-from kcgx.__main__ import format_record, main
+import inspect
+
+from kcgx.__main__ import format_record, main, write_airport
 from kcgx.airports import Airport
 
 PDX = Airport("KPDX", "PDX", "Portland International Airport", "Portland",
@@ -16,13 +18,32 @@ ORD = Airport("KORD", "ORD", "Chicago O'Hare International Airport", "Chicago",
 AIRPORTS = [PDX, ORD]
 
 
-def run(argv, *, picker=None, **kwargs):
+def run(argv, *, picker=None, state_writer=None, **kwargs):
+    """Never let a test reach the real write_airport: default state_writer
+    to a no-op unless a test explicitly wants to observe it. A test that
+    monkeypatches kcgx.__main__.write_airport instead of going through this
+    seam is exactly the mistake that leaked into the user's real
+    ~/.local/state/kcgx/airport -- this default is the fix, not a
+    convention callers have to remember."""
     return main(
         argv,
         airports_loader=lambda: AIRPORTS,
         picker=picker or (lambda airports, initial="": None),
+        state_writer=state_writer or (lambda icao: None),
         **kwargs,
     )
+
+
+# -- the state_writer seam --------------------------------------------------
+
+
+def test_the_real_write_airport_is_wired_by_default():
+    """Every test in this file goes through run(), which always overrides
+    state_writer -- so nothing else here would notice if main()'s real
+    default silently stopped persisting picks for the actual console
+    script. Check the wiring directly instead."""
+    default = inspect.signature(main).parameters["state_writer"].default
+    assert default is write_airport
 
 
 # -- the record format -----------------------------------------------------
@@ -105,19 +126,21 @@ def test_cancelling_the_picker_exits_1_and_writes_nothing(tmp_path):
     assert not out.exists(), "a cancelled pick must leave no record to act on"
 
 
-def test_a_successful_pick_is_remembered(tmp_path, monkeypatch):
-    import kcgx.__main__ as cli
-
+def test_a_successful_pick_is_remembered(tmp_path):
     remembered = []
-    monkeypatch.setattr(cli, "write_airport", lambda icao: remembered.append(icao))
-    run(["pick", "KORD", "--out", str(tmp_path / "r")], picker=lambda a, initial="": None)
+    run(
+        ["pick", "KORD", "--out", str(tmp_path / "r")],
+        picker=lambda a, initial="": None,
+        state_writer=remembered.append,
+    )
     assert remembered == ["KORD"]
 
 
-def test_a_cancelled_pick_is_not_remembered(tmp_path, monkeypatch):
-    import kcgx.__main__ as cli
-
+def test_a_cancelled_pick_is_not_remembered(tmp_path):
     remembered = []
-    monkeypatch.setattr(cli, "write_airport", lambda icao: remembered.append(icao))
-    run(["pick", "--out", str(tmp_path / "r")], picker=lambda a, initial="": None)
+    run(
+        ["pick", "--out", str(tmp_path / "r")],
+        picker=lambda a, initial="": None,
+        state_writer=remembered.append,
+    )
     assert remembered == []

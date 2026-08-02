@@ -52,6 +52,7 @@ def main(
     *,
     airports_loader: Callable[[], list[Airport]] = load_airports,
     picker: Callable[..., Airport | None] = pick,
+    state_writer: Callable[[str], None] = write_airport,
 ) -> int:
     args = parse_args(argv)
     airports = airports_loader()
@@ -75,7 +76,7 @@ def main(
     if chosen is None:
         return 1
 
-    write_airport(chosen.icao)
+    state_writer(chosen.icao)
     emit(format_record(chosen), args.out)
     return 0
 
