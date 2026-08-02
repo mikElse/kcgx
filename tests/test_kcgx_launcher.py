@@ -598,6 +598,41 @@ def test_a_truncated_record_is_a_failure_not_a_cancel(cockpit, airport_stub):
     assert pane_command(tmux, session, 0) == before
 
 
+def test_a_failed_mktemp_is_an_error_not_a_cancel(cockpit, airport_stub, tmp_path):
+    """`go` needs a temp file to receive the record. Not getting one is a
+    failure — but `mktemp` exits 1, and 1 is the code reserved for "the user
+    pressed escape". Passing it straight through would make an unwritable
+    temp directory look exactly like a cancelled search: silent, and
+    successful.
+
+    TMPDIR is not the lever: BSD mktemp with no template ignores it. So put a
+    failing mktemp on PATH, the way the missing-tmux test stubs PATH.
+    """
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+    before = pane_command(tmux, session, 0)
+
+    stub_bin = tmp_path / "mktemp-fails"
+    stub_bin.mkdir()
+    for tool in ("bash", "env", "tmux", "grep", "awk", "head", "dirname"):
+        found = shutil.which(tool)
+        if found:
+            (stub_bin / tool).symlink_to(found)
+    failing = stub_bin / "mktemp"
+    failing.write_text("#!/bin/sh\nexit 1\n")
+    failing.chmod(0o755)
+
+    result = run(
+        args=("go",),
+        PATH=str(stub_bin),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KSEA\t47.4479\t-122.3102\tSeattle-Tacoma",
+    )
+    assert result.returncode != 0, "a temp file it could not create is not a cancel"
+    assert result.stderr.strip(), "and it must say so"
+    assert pane_command(tmux, session, 0) == before
+
+
 def test_the_popup_binding_actually_runs_the_airport_search(cockpit):
     """prefix + a is how the search is meant to be reached, and nothing else
     in the suite reads that binding: a typo in kcgx.tmux.conf, or renaming
@@ -634,6 +669,43 @@ def test_the_default_resolver_really_works(cockpit):
         "the real resolver produced no coordinates: " + adsb
     )
     assert re.search(r"--icao [A-Z]{4}\b", squelch), squelch
+
+
+def test_a_real_pick_moves_the_cockpit_and_is_remembered(cockpit, tmp_path):
+    """The one test that runs the whole chain: bin/kcgx -> uv -> the real
+    kcgx-airport pick -> a record -> tmux panes -> the state file.
+
+    Everything else asserts the record format on one side only. bin/kcgx has
+    its own idea of the format and src/kcgx/ has its own, and until this test
+    existed nothing ever compared them. KORD's coordinates below are the
+    dataset's, so a change to either side's spelling of the record shows up
+    here as a wrong pane command rather than as two suites that still agree
+    with themselves.
+
+    KCGX_STATE_PATH keeps the real `pick`'s write inside tmp_path; `pick KORD`
+    is an exact code, so it short-circuits the picker and never opens Textual.
+    """
+    run, tmux, session = cockpit
+    state = tmp_path / "state" / "airport"
+    assert run(KCGX_STATE_PATH=str(state)).returncode == 0
+
+    result = run(
+        args=("go", "KORD"),
+        KCGX_AIRPORT_CMD="",  # empty -> fall through to the real resolver
+        KCGX_STATE_PATH=str(state),
+    )
+    assert result.returncode == 0, result.stderr
+
+    adsb = pane_command(tmux, session, 0)
+    squelch = pane_command(tmux, session, 1)
+    assert "--site-lat 41.9786" in adsb, adsb
+    assert "--site-lon -87.9048" in adsb, adsb
+    assert "--icao KORD" in squelch, squelch
+    # The label is free text and shares the record with the coordinates. If a
+    # separator ever goes wrong it arrives here, welded to a --site-lon value.
+    assert "Chicago" not in adsb and "O'Hare" not in adsb, adsb
+
+    assert state.read_text().strip() == "KORD", "the pick was not remembered"
 
 
 def test_go_without_a_running_cockpit_says_so(cockpit, airport_stub):
