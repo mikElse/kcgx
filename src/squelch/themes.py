@@ -12,6 +12,10 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from textual.theme import Theme
+
+from squelch.rows import MeterPalette
+
 # Harvested from ~/bin/adsb-tui on 2026-08-02 across the radar, full, and
 # compact layouts. Identification uses the *most frequent* background, not
 # the first: the first varies with layout (default paints (22,26,32) in
@@ -73,3 +77,87 @@ def theme_for(capture: str) -> str | None:
     if triple is None:
         return None
     return _BY_BACKGROUND.get(triple)
+
+
+TEXTUAL_THEME_PREFIX = "kcgx-"
+
+# The pane fill each theme is matched to. Picked from THEME_BACKGROUNDS as
+# the one adsb-tui uses for the body of the pane, so squelch sits beside it
+# in the same shade rather than a neighbouring one.
+_FILL = {
+    "default": "#161a20",   # rgb(22,26,32)
+    "color": "#0e1418",     # rgb(14,20,24)
+    "amber": "#18120a",     # rgb(24,18,10)
+    "ocean": "#0a1218",     # rgb(10,18,24)
+    "matrix": "#001000",    # rgb(0,16,0)
+    "mono": "#080808",      # rgb(8,8,8)
+}
+
+# Meter gradient stops. `default`, `amber`, `ocean`, and `matrix` are built
+# from foregrounds harvested off the live binary; where a theme yielded
+# fewer than four distinct foregrounds the gaps are interpolated within its
+# harvested hue family, and those are marked. `color` and `mono` emit no
+# truecolor foregrounds at all -- they draw with the terminal's own ANSI
+# palette, so matching them means naming ANSI colours rather than hex.
+METER_PALETTES: dict[str, MeterPalette] = {
+    "default": MeterPalette(
+        dim="#8c96a0",      # harvested rgb(140,150,160)
+        text="#c6eee8",     # harvested rgb(198,238,232)
+        accent="#6cddd6",   # harvested rgb(108,221,214)
+        peak="#ff6666",     # harvested rgb(255,102,102)
+    ),
+    "color": MeterPalette(
+        dim="bright_black",
+        text="white",
+        accent="cyan",
+        peak="red",
+    ),
+    "amber": MeterPalette(
+        dim="#8c6e28",      # harvested rgb(140,110,40)
+        text="#c99518",     # interpolated
+        accent="#ffbf00",   # harvested rgb(255,191,0)
+        peak="#ffdc78",     # harvested rgb(255,220,120)
+    ),
+    "ocean": MeterPalette(
+        dim="#507882",      # harvested rgb(80,120,130)
+        text="#3aa8bb",     # interpolated
+        accent="#00c8dc",   # harvested rgb(0,200,220)
+        peak="#b9f0f7",     # interpolated
+    ),
+    "matrix": MeterPalette(
+        dim="#007800",      # harvested rgb(0,120,0)
+        text="#00b400",     # interpolated
+        accent="#00ff00",   # interpolated
+        peak="#b4ffb4",     # interpolated
+    ),
+    "mono": MeterPalette(
+        dim="bright_black",
+        text="white",
+        accent="bright_white",
+        peak="bright_yellow",
+    ),
+}
+
+
+def textual_theme(name: str) -> Theme:
+    """A Textual theme matching one of adsb-tui's.
+
+    Registered under a `kcgx-` prefix so these can never collide with
+    Textual's own built-in theme names.
+    """
+    palette = METER_PALETTES[name]
+    fill = _FILL[name]
+    return Theme(
+        name=f"{TEXTUAL_THEME_PREFIX}{name}",
+        primary=palette.accent,
+        secondary=palette.text,
+        warning=palette.peak,
+        error=palette.peak,
+        success=palette.accent,
+        accent=palette.accent,
+        foreground=palette.text,
+        background=fill,
+        surface=fill,
+        panel=fill,
+        dark=True,
+    )
