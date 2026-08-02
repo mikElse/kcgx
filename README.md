@@ -158,6 +158,25 @@ moves while you are reaching for it silences the wrong frequency.
 Activity is measured **before** the compressor, so making quiet feeds louder
 does not make them look busier.
 
+### Matching themes
+
+squelch adopts the radar pane's colour scheme, including its meter gradient.
+It tracks `adsb-tui`'s `t` key within about three seconds.
+
+It does that by *looking at* the radar pane rather than by reading its
+config. `adsb-tui` does not write the theme anywhere when you cycle it —
+measured: two `t` presses and a clean quit leave its TOML byte-identical —
+so the rendered pane is the only truthful source. `kcgx` passes the pane id
+in `KCGX_RADAR_PANE`, and squelch runs `tmux capture-pane -e` every three
+seconds and matches the pane's background colour against the six known
+themes.
+
+Run outside the cockpit, with no `KCGX_RADAR_PANE` set, squelch reads
+`theme` from `adsb-tui.toml` once at startup and stays there. Failing that,
+it uses `default`. Nothing about this can fail loudly: an unreadable pane,
+a missing tmux, or an unrecognised colour all just leave the current theme
+in place.
+
 Transcription was removed — see "History" at the end.
 
 To run it on its own, outside the cockpit:
