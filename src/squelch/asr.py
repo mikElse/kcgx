@@ -72,9 +72,5 @@ class WhisperTranscriber:
         if not segments:
             return Transcript(text="", avg_logprob=0.0)
         text = " ".join(s.text.strip() for s in segments).strip()
-        # Round off IEEE-754 summation noise (e.g. averaging -0.2 and -0.4
-        # lands on -0.30000000000000004, not -0.3); avg_logprob is a
-        # diagnostic score, so 6 decimal digits is far more precision than
-        # meaningful while keeping equality comparisons stable.
-        avg = round(sum(s.avg_logprob for s in segments) / len(segments), 6)
+        avg = sum(s.avg_logprob for s in segments) / len(segments)
         return Transcript(text=text, avg_logprob=avg)
