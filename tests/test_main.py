@@ -434,6 +434,28 @@ def test_the_configured_feed_is_still_used_at_its_own_airport(tmp_path):
     assert [f.ident for f in feeds] == ["kpdx3_twr"]
 
 
+def test_an_empty_icao_does_not_trust_any_feed_as_its_own(tmp_path):
+    """`"anything".startswith("")` is True, so a blank icao must be
+
+    excluded explicitly -- otherwise every configured feed would look like
+    it belonged to the (nonexistent) airport, reopening the wrong-airport-
+    audio hole this task exists to close. A hand-edited config file can
+    reach this: `_checked` only validates that `icao` is a string, not
+    that it's non-empty.
+    """
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert feeds == []
+
+
 def test_an_unreachable_listing_says_it_can_be_retried(tmp_path):
     def blocked(icao):
         raise RuntimeError("HTTP 403")
@@ -486,6 +508,11 @@ def test_a_tower_feed_is_preferred_when_nothing_matches_the_config():
     assert [s.feed.ident for s in sessions if not s.muted] == ["kord_twr"]
 
 
+# Pins the index-0 default and would catch preferred_index returning some
+# other constant, but neither feed here contains "twr"/"tower", so this
+# cannot detect the matching loop being deleted -- it is not evidence that
+# tower-matching works; see test_a_tower_feed_is_preferred_when_nothing_
+# matches_the_config for that.
 def test_the_first_feed_is_used_when_there_is_no_tower():
     feeds = [
         Feed(ident="kord_atis", label="KORD ATIS"),
