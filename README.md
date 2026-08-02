@@ -236,6 +236,11 @@ watching on battery.
   rest. Retention is capped at the most recent 200 messages so memory and
   redraw cost stay flat over a multi-hour session.
 
+Several of these are addressed by a planned batch of upgrades — click-to-mute,
+solo, activity-ordered feeds, theme matching with the radar pane, and an audio
+path with upward compression and an ambient reverb bus. Designed and planned,
+not yet built: see [`docs/`](docs/README.md).
+
 ## History
 
 squelch originally transcribed the audio live, using an ATC-fine-tuned
