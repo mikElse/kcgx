@@ -27,10 +27,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="kcgx-airport", description=__doc__)
     parser.add_argument("mode", choices=("resolve", "pick"))
     parser.add_argument(
-        "query", nargs="?", default="", help="ICAO, or text to prefilter the picker"
+        "query",
+        nargs="*",
+        default=[],
+        help="ICAO, or text to prefilter the picker; may be several words",
     )
     parser.add_argument("--out", help="write the record here instead of stdout")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # `kcgx go chicago heights` reaches us as separate words. With nargs="?"
+    # argparse rejected the extras outright ("unrecognized arguments"), and
+    # bin/kcgx reported that exit 2 as "airport search failed" -- for a query
+    # the usage line invites you to type. Rejoin them into the one string the
+    # rest of the program expects.
+    args.query = " ".join(args.query)
+    return args
 
 
 def format_record(airport: Airport) -> str:

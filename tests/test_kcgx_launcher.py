@@ -8,6 +8,7 @@ adsb-tui, squelch, ffmpeg, or an ASR model.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -28,9 +29,30 @@ pytestmark = pytest.mark.skipif(
 FAKE_ADSB = "sh -c 'sleep 300'"
 FAKE_SQUELCH = "sh -c 'sleep 300'"
 
+# Every test gets a stand-in resolver by default. Without one, each launch
+# would shell out to the real `uv run ... kcgx-airport resolve`, which reads
+# the developer's own ~/.local/state/kcgx/airport -- making the suite depend
+# on machine state, and paying for a uv invocation per test. The one test
+# that *should* run the real thing asks for it explicitly.
+FAKE_AIRPORT_RECORD = "KTST\t1.5\t-2.5\tTest Field"
+FAKE_AIRPORT = f"""#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [ -n "$out" ]; then
+    printf '%s\\n' "{FAKE_AIRPORT_RECORD}" > "$out"
+else
+    printf '%s\\n' "{FAKE_AIRPORT_RECORD}"
+fi
+"""
+
 
 @pytest.fixture
-def cockpit():
+def cockpit(tmp_path):
     """Give each test its own tmux socket and session, and tear both down.
 
     Yields `(run, tmux, session)`. The socket name hangs off `run.socket`
@@ -38,6 +60,10 @@ def cockpit():
     """
     socket = f"kcgx-test-{uuid.uuid4().hex[:8]}"
     session = f"kcgx-test-{uuid.uuid4().hex[:8]}"
+
+    resolver = tmp_path / "kcgx-airport-default"
+    resolver.write_text(FAKE_AIRPORT)
+    resolver.chmod(0o755)
 
     def run(size="200x50", detached=True, launcher=LAUNCHER, args=(), **overrides):
         env = {
@@ -48,6 +74,7 @@ def cockpit():
             "KCGX_SIZE": size,
             "KCGX_ADSB_CMD": FAKE_ADSB,
             "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+            "KCGX_AIRPORT_CMD": str(resolver),
         }
         if size is None:  # exercise the real size-detection path
             del env["KCGX_SIZE"]
@@ -72,6 +99,7 @@ def cockpit():
         )
 
     run.socket = socket
+    run.resolver = str(resolver)
     yield run, tmux, session
 
     subprocess.run(
@@ -244,6 +272,7 @@ def test_accepts_a_real_wide_terminal(cockpit):
         "KCGX_DETACHED": "1",
         "KCGX_ADSB_CMD": FAKE_ADSB,
         "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "KCGX_AIRPORT_CMD": run.resolver,
         "TERM": "xterm-256color",
     }
     env.pop("KCGX_SIZE", None)
@@ -544,6 +573,67 @@ def test_go_reports_a_failed_search_instead_of_calling_it_a_cancel(
     assert result.returncode != 0
     assert result.stderr.strip(), "a silent failure reads exactly like a cancel"
     assert pane_command(tmux, session, 0) == before, "and still change nothing"
+
+
+def test_a_truncated_record_is_a_failure_not_a_cancel(cockpit, airport_stub):
+    """The resolver succeeded but the record is unusable — two fields, no
+    longitude. Reporting that as exit 1 would tell bin/kcgx the user had
+    pressed escape, and `kcgx go` would exit 0 having done nothing and said
+    nothing. Only a decline may look like a decline.
+    """
+    run, tmux, session = cockpit
+    run(
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    before = pane_command(tmux, session, 0)
+
+    result = run(
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5",  # no lon, no label
+    )
+    assert result.returncode != 0, "a short record is not a cancelled pick"
+    assert result.stderr.strip(), "and it must say so"
+    assert pane_command(tmux, session, 0) == before
+
+
+def test_the_popup_binding_actually_runs_the_airport_search(cockpit):
+    """prefix + a is how the search is meant to be reached, and nothing else
+    in the suite reads that binding: a typo in kcgx.tmux.conf, or renaming
+    `kcgx go`, would ship green.
+    """
+    run, tmux, _session = cockpit
+    assert run().returncode == 0  # the launcher is what sources the config
+
+    bound = [
+        line
+        for line in tmux("list-keys", "-T", "prefix").stdout.splitlines()
+        if re.search(r"-T\s+prefix\s+a\s", line)
+    ]
+    assert len(bound) == 1, f"expected exactly one prefix+a binding, got {bound}"
+    assert "display-popup" in bound[0], bound[0]
+    assert "kcgx go" in bound[0], bound[0]
+
+
+def test_the_default_resolver_really_works(cockpit):
+    """Every other test stubs the resolver, so all of them would still pass
+    if `uv run ... kcgx-airport resolve` were broken — the launcher would
+    quietly fall back to unconfigured panes. Run the real one once and
+    require that it produced coordinates.
+
+    Read-only: `resolve` never writes ~/.local/state/kcgx/airport (only
+    `pick` does), so this leaves the developer's remembered airport alone.
+    """
+    run, tmux, session = cockpit
+    assert run(KCGX_AIRPORT_CMD="").returncode == 0
+
+    adsb = pane_command(tmux, session, 0)
+    squelch = pane_command(tmux, session, 1)
+    assert "--site-lat" in adsb and "--site-lon" in adsb, (
+        "the real resolver produced no coordinates: " + adsb
+    )
+    assert re.search(r"--icao [A-Z]{4}\b", squelch), squelch
 
 
 def test_go_without_a_running_cockpit_says_so(cockpit, airport_stub):

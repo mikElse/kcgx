@@ -100,7 +100,10 @@ ICAO="" LAT="" LON="" LABEL=""
 # the four variables empty so callers can degrade instead of guessing.
 airport_record() {
     local out status=0
-    out="$(mktemp)" || return 1
+    # 2, not 1: an unwritable TMPDIR is a failure, and returning 1 would tell
+    # the caller the user had pressed escape -- silently, successfully, and
+    # wrongly. 1 means "declined" and nothing else.
+    out="$(mktemp)" || return 2
     # `cmd || status=$?` rather than `if ! cmd`: inside the body of an `if !`
     # the `!` has already flipped the status, so $? there reads 0 and a
     # cancelled pick (1) would come back as success.
