@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# kcgx — open the cockpit: live traffic, ATC audio with transcription, a shell.
+#
+#   adsb-tui        │  squelch
+#                   ├──────────
+#                   │  $SHELL
+#
+# Every splitter is drag-resizable; the sizes below are starting positions.
+# Run it again from anywhere to reattach to a running cockpit.
+#
+# Environment overrides (mostly test seams):
+#   KCGX_SESSION       session name                    (default: kcgx)
+#   KCGX_SOCKET        tmux socket name, for isolation (default: tmux's own)
+#   KCGX_SIZE          WIDTHxHEIGHT instead of the real terminal
+#   KCGX_DETACHED      build the session but do not attach
+#   KCGX_ADSB_CMD      command for the left pane       (default: adsb-tui)
+#   KCGX_SQUELCH_CMD   command for the squelch pane
+#   KCGX_SQUELCH_COLS  width of the right column       (default: 48)
+#   KCGX_SHELL_ROWS    height of the shell pane        (default: 12)
+#   KCGX_MIN_COLS      refuse to build below this      (default: 100)
+
+set -euo pipefail
+
+SESSION="${KCGX_SESSION:-kcgx}"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONF="$REPO/kcgx.tmux.conf"
+
+SQUELCH_COLS="${KCGX_SQUELCH_COLS:-48}"
+SHELL_ROWS="${KCGX_SHELL_ROWS:-12}"
+MIN_COLS="${KCGX_MIN_COLS:-100}"
+
+die() { printf 'kcgx: %s\n' "$*" >&2; exit 1; }
+
+command -v tmux >/dev/null 2>&1 ||
+    die "tmux not found. Install it with: brew install tmux"
+
+# `split-window -l <cells>` needs tmux 3.1+; older tmux only takes percentages.
+tmux_version="$(tmux -V | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+awk -v v="$tmux_version" 'BEGIN {
+    split(v, p, ".");
+    exit !(p[1] > 3 || (p[1] == 3 && p[2] >= 1))
+}' || die "tmux $tmux_version is too old; kcgx needs 3.1 or newer."
+
+# All tmux calls go through here so the socket and config stay consistent.
+tm() {
+    if [ -n "${KCGX_SOCKET:-}" ]; then
+        tmux -L "$KCGX_SOCKET" -f "$CONF" "$@"
+    else
+        tmux -f "$CONF" "$@"
+    fi
+}
+
+# Already running? Attach instead of building a second one, so squelch keeps its
+# transcript and you don't pay the model load again.
+if tm has-session -t "=$SESSION" 2>/dev/null; then
+    if [ -n "${KCGX_DETACHED:-}" ]; then
+        exit 0
+    fi
+    if [ -n "${TMUX:-}" ]; then
+        exec tm switch-client -t "=$SESSION"
+    fi
+    exec tm attach-session -t "=$SESSION"
+fi
+
+if [ -n "${KCGX_SIZE:-}" ]; then
+    cols="${KCGX_SIZE%%x*}"
+    rows="${KCGX_SIZE##*x}"
+else
+    cols="$(tput cols 2>/dev/null || echo 0)"
+    rows="$(tput lines 2>/dev/null || echo 0)"
+fi
+
+case "$cols$rows" in
+    *[!0-9]* | "") die "could not determine terminal size." ;;
+esac
+
+# Below this there isn't room for both a readable traffic table and squelch's
+# 48-column pane, and the result is worse than not launching.
+if [ "$cols" -lt "$MIN_COLS" ]; then
+    die "terminal is $cols columns; kcgx needs at least $MIN_COLS" \
+        "(squelch alone wants $SQUELCH_COLS)."
+fi
+
+ADSB_CMD="${KCGX_ADSB_CMD:-adsb-tui}"
+# tmux runs the pane command through a shell, so quote the path: a repo cloned
+# somewhere with a space in it would otherwise word-split.
+SQUELCH_CMD="${KCGX_SQUELCH_CMD:-uv run --project '$REPO' squelch}"
+
+tm new-session -d -s "$SESSION" -n cockpit -x "$cols" -y "$rows" "$ADSB_CMD"
+tm split-window -h -l "$SQUELCH_COLS" -t "=$SESSION:cockpit.0" "$SQUELCH_CMD"
+tm split-window -v -l "$SHELL_ROWS" -t "=$SESSION:cockpit.1"
+
+# Land on squelch rather than the shell — it's the pane you read.
+tm select-pane -t "=$SESSION:cockpit.1"
+
+if [ -n "${KCGX_DETACHED:-}" ]; then
+    exit 0
+fi
+
+exec tm attach-session -t "=$SESSION"

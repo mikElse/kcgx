@@ -1,11 +1,70 @@
-# squelch
+# kcgx
+
+A terminal cockpit for watching and listening to air traffic, named for
+Meigs Field — the Chicago lakefront strip that a generation of flight-sim
+pilots took off from, bulldozed in the middle of the night in 2003.
+
+Two pieces live here:
+
+- **`squelch`** — an ATC audio player with live transcription, built to fit
+  a narrow **48 × 42** pane.
+- **`kcgx`** — a launcher that arranges `adsb-tui`, `squelch`, and a shell
+  into one mouse-resizable tmux session.
+
+```
+kcgx        # open the cockpit (or reattach to a running one)
+```
+
+---
+
+## The cockpit (`kcgx`)
+
+`kcgx` starts a tmux session laid out like this, with every splitter
+draggable by mouse:
+
+```
+┌────────────────┬───────────┐
+│                │  squelch  │
+│    adsb-tui    │           │
+│                ├───────────┤
+│                │  ~ $      │
+└────────────────┴───────────┘
+```
+
+The right column starts at exactly 48 columns because that is `squelch`'s
+design width; below it the header truncates and the level meter loses
+resolution. The shell starts short so the transcript keeps most of the
+column. These are starting positions, not constraints — drag them.
+
+**Requires tmux 3.1 or newer** (`brew install tmux`). The session config in
+`kcgx.tmux.conf` is applied with `tmux -f`, so it affects only this session
+and never touches your `~/.tmux.conf`.
+
+**Running it again reattaches** rather than starting a second copy, so
+`squelch` keeps its transcript and you don't pay the model load twice.
+Closing the terminal detaches; the session keeps running.
+
+**Mouse behaviour.** tmux handles drags on pane borders. Clicks and scrolls
+*inside* a pane go to the application if it asked for mouse reporting —
+`squelch` does, so its feed picker stays clickable. `adsb-tui` most likely
+does not, so scrolling over it enters tmux's copy-mode, which gives you
+scrollback over the traffic table.
+
+**When something dies**, its pane stays visible with its final output and
+exit status instead of silently collapsing the layout. `Ctrl-b` then `r`
+respawns the pane under the cursor.
+
+`kcgx` refuses to start below 100 columns, where there isn't room for both
+a readable traffic table and a 48-column pane.
+
+---
+
+## squelch
 
 A terminal ATC audio player: it streams a LiveATC.net feed, plays it through
-your speakers, and shows a live speech-to-text transcript alongside it. The
-whole UI is built to fit in a fixed **48 columns × 42 rows**, so it can sit
-as a narrow side pane next to something else in a terminal multiplexer —
-an ADS-B radar TUI such as `adsb-tui` or `radascii`, for example, showing
-you the traffic on radar while you listen to the tower talk to it.
+your speakers, and shows a live speech-to-text transcript alongside it.
+
+To run it on its own, outside the cockpit:
 
 ```
 tmux split-window -h -l 48 'uv run squelch --feed kpdx3_twr'
