@@ -134,7 +134,15 @@ def _run(
     airports = airports_loader()
 
     if args.mode == "resolve":
-        icao = current_icao()
+        # `known` is what makes a remembered ICAO the dataset no longer has
+        # fall through to squelch.toml and then KPDX instead of failing the
+        # launch. current_icao() owns the order, so it owns the skipping.
+        icao = current_icao(
+            known=lambda code: find(code, airports) is not None,
+            warn=lambda message: print(
+                f"kcgx-airport: {message}; falling back", file=sys.stderr
+            ),
+        )
         airport = find(icao, airports)
         if airport is None:
             print(

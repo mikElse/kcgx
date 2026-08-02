@@ -106,3 +106,96 @@ def test_a_broken_config_still_yields_an_airport(tmp_path):
         raise ValueError("bad toml")
 
     assert current_icao(path=tmp_path / "nope", config_loader=boom) == "KPDX"
+
+
+# -- an ICAO the dataset no longer has --------------------------------------
+
+
+def test_an_unknown_remembered_icao_falls_back_to_the_config(tmp_path):
+    """The spec: "An ICAO in the state file that is no longer in the dataset
+    falls back to the next source and warns, rather than failing to launch."
+
+    Reachable whenever OurAirports reclassifies a field out of the committed
+    subset on regeneration, or from a hand-edited state file. Without the
+    fallback, `resolve` exits 2 and the cockpit launches with no coordinates
+    and no ICAO -- silently degraded on every launch until the user happens
+    to run `kcgx go`.
+    """
+    path = tmp_path / "airport"
+    write_airport("ZZZZ", path=path)
+
+    assert current_icao(
+        path=path,
+        config_loader=lambda: Config(icao="KSEA"),
+        known=lambda icao: icao in {"KSEA", "KPDX"},
+    ) == "KSEA"
+
+
+def test_falling_back_says_which_icao_it_dropped(tmp_path):
+    """Silent degradation is the failure mode this replaces; a fallback the
+    user cannot see is the same bug with a different airport."""
+    path = tmp_path / "airport"
+    write_airport("ZZZZ", path=path)
+    warnings = []
+
+    current_icao(
+        path=path,
+        config_loader=lambda: Config(icao="KSEA"),
+        known=lambda icao: icao != "ZZZZ",
+        warn=warnings.append,
+    )
+
+    assert len(warnings) == 1
+    assert "ZZZZ" in warnings[0]
+
+
+def test_an_unknown_config_icao_falls_back_to_the_default(tmp_path):
+    """The chain is state -> squelch.toml -> KPDX, and every link is checked
+    -- a hand-edited squelch.toml is no more trustworthy than a hand-edited
+    state file."""
+    assert current_icao(
+        path=tmp_path / "nope",
+        config_loader=lambda: Config(icao="ZZZZ"),
+        known=lambda icao: icao == "KPDX",
+    ) == "KPDX"
+
+
+def test_a_known_icao_is_not_warned_about(tmp_path):
+    path = tmp_path / "airport"
+    write_airport("KORD", path=path)
+    warnings = []
+
+    assert current_icao(
+        path=path,
+        config_loader=lambda: Config(icao="KSEA"),
+        known=lambda icao: True,
+        warn=warnings.append,
+    ) == "KORD"
+    assert warnings == []
+
+
+def test_the_last_resort_is_returned_even_if_it_is_unknown(tmp_path):
+    """If nothing validates, hand back KPDX rather than an empty string or a
+    None: `resolve` then reports "KPDX is not in the airport dataset", which
+    names the real problem. Inventing a silent success would not."""
+    assert current_icao(
+        path=tmp_path / "nope",
+        config_loader=lambda: Config(icao="ZZZZ"),
+        known=lambda icao: False,
+    ) == "KPDX"
+
+
+def test_the_config_is_not_read_when_the_state_file_answers(tmp_path):
+    """The sources are evaluated lazily. A squelch.toml that cannot be
+    parsed should cost nothing on a launch that never needed it."""
+    path = tmp_path / "airport"
+    write_airport("KORD", path=path)
+    reads = []
+
+    def config_loader():
+        reads.append(1)
+        return Config(icao="KSEA")
+
+    assert current_icao(path=path, config_loader=config_loader,
+                        known=lambda icao: True) == "KORD"
+    assert reads == [], "read squelch.toml for an answer it already had"
