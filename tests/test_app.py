@@ -21,10 +21,17 @@ class FakeSession:
         self.name = label.replace("KPDX ", "")
         self.muted = muted
         self.state = state
+        self.ambient = False
+        self.soloed = False
+        self.activity = None
 
     def toggle_mute(self):
         self.muted = not self.muted
         return self.muted
+
+    def toggle_ambient(self):
+        self.ambient = not self.ambient
+        return self.ambient
 
 
 def sessions(n=3, **kwargs):
@@ -325,3 +332,59 @@ async def test_feed_row_renders_before_any_level_arrives():
         assert isinstance(row._name_widget, Static)
         text, _ = rendered(app)
         assert any("▁" in line for line in text), "an idle meter reads as a flat line"
+
+
+# -- row states ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_audible_feed_is_expanded_and_a_muted_one_is_compact():
+    app = make_app(3)
+    async with app.run_test(size=SIZE):
+        audible = app._rows[id(app._sessions[0])]
+        muted = app._rows[id(app._sessions[1])]
+        assert app._sessions[0].muted is False
+        assert audible.expanded is True
+        assert audible.has_class("expanded")
+        assert muted.expanded is False
+        assert muted.has_class("compact")
+
+
+@pytest.mark.asyncio
+async def test_unmuting_grows_the_row_and_muting_shrinks_it():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        row = app._rows[id(app._sessions[1])]
+        assert row.outer_size.height == 2, "compact is one line plus its rule"
+        app._selected = 1
+        app._apply_selection()
+        await pilot.press("space")
+        await pilot.pause()
+        assert row.outer_size.height == 6, "expanded is name, meter x3, controls"
+
+
+@pytest.mark.asyncio
+async def test_a_compact_row_shows_no_meter():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        session = app._sessions[1]
+        for level in (-50.0, -20.0, -8.0):
+            app.set_level(session, level)
+        await pilot.pause()
+        row = app._rows[id(session)]
+        assert len(row._history) == 3, "a muted feed keeps metering"
+        assert not row._meter_widget.display, "but does not draw the meter"
+
+
+@pytest.mark.asyncio
+async def test_the_stack_still_fits_48_columns_in_both_states():
+    app = make_app(12)
+    async with app.run_test(size=SIZE) as pilot:
+        for index in (1, 2, 3):
+            app._sessions[index].muted = False
+            app._rows[id(app._sessions[index])].refresh_all()
+        await pilot.pause()
+        # Not `cell_length == 48`: render_strips clips every strip to the
+        # screen width, so that assertion only restates run_test(size=...).
+        # Overflow shows up in a widget's own size. See overflowing().
+        assert overflowing(app) == []
