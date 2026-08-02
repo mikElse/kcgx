@@ -6,9 +6,11 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView, Static
 
 from squelch.config import Config
@@ -18,6 +20,17 @@ from squelch.pipeline import Block
 BLOCKS = "▁▂▃▄▅▆▇█"
 FLOOR_DBFS = -60.0
 METER_WIDTH = 20
+
+# Transcript entries (blocks, warnings, dropped markers) are mounted widgets
+# and Textual never reclaims them on its own. squelch is meant to run for
+# hours against a busy tower feed, which produces thousands of entries: with
+# no cap, RSS grows perfectly linearly (measured ~135 MB at 1000 entries,
+# ~852 MB at 8000) and every `set_level` gets slower, because the cost of a
+# refresh scales with the number of mounted children. That cost lands on the
+# *audio* thread, which blocks inside call_from_thread waiting for it. A few
+# hundred entries is far more scrollback than anyone reads back through in a
+# 48-column pane, so the oldest are dropped once the cap is reached.
+MAX_TRANSCRIPT_ENTRIES = 200
 
 
 def _glyph_for(dbfs: float) -> str:
@@ -42,6 +55,50 @@ def meter_bar(history: Sequence[float], width: int = METER_WIDTH) -> str:
     return BLOCKS[0] * pad + "".join(_glyph_for(level) for level in recent)
 
 
+class TranscriptView(VerticalScroll):
+    """A scroll region that stays pinned to the newest entry.
+
+    Textual's own `anchor()` looks like the tool for this, but the
+    compositor applies an anchor with an *unvalidated* `set_reactive`
+    (`_compositor.py`, "if widget._anchored"), so while the content is
+    shorter than the viewport it drives `scroll_y` to
+    `content_bottom - viewport_height` -- a negative offset the pane then
+    renders as blank. Scrolling from `_mount_entry` does not work either:
+    a freshly `mount()`ed child has not been laid out when the next
+    statement runs, so `max_scroll_y` is still the *previous* value and the
+    scroll lands one entry short -- which is precisely how warn() and
+    mark_dropped() ended up below the fold.
+
+    `_size_updated` is the compositor's post-layout hook, the first point
+    at which `max_scroll_y` reflects what was just mounted. Following is
+    suspended as soon as the user scrolls away (Textual calls
+    `release_anchor` on every user-initiated scroll) and resumes when they
+    scroll back to the bottom, so nobody reading back through the
+    transcript gets yanked to the end by an incoming transmission.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._follow = True
+
+    def release_anchor(self) -> None:
+        super().release_anchor()
+        self._follow = False
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        if new_value >= self.max_scroll_y:
+            self._follow = True
+
+    def _size_updated(self, size, virtual_size, container_size, layout=True):
+        changed = super()._size_updated(size, virtual_size, container_size, layout)
+        if self._follow and self.scroll_y < self.max_scroll_y:
+            # release_anchor=False: this is our own follow, not the user
+            # moving the view, and must not switch following off.
+            self._scroll_to(y=self.max_scroll_y, animate=False, release_anchor=False)
+        return changed
+
+
 class SquelchApp(App):
     CSS_PATH = "squelch.tcss"
     BINDINGS = [
@@ -63,14 +120,35 @@ class SquelchApp(App):
         self._feed_label = feed_label
         self._frequency = frequency
         self._feed_loader = feed_loader
-        self._state = "LIVE"
+        # Not "LIVE": nothing has been received yet, and the pipeline does
+        # not even start until on_mount. Claiming LIVE at construction is a
+        # lie for the whole model-load window -- minutes, on a first run --
+        # and it is exactly the window in which the user most needs to be
+        # told that something is happening rather than nothing.
+        self._state = "STARTING"
         self._muted = False
         self._level = FLOOR_DBFS
         self._history: deque[float] = deque(maxlen=METER_WIDTH)
         self._clock_text = datetime.now().strftime("%H:%M:%S")
         self._pending: Static | None = None
+        # Cached once at mount rather than re-queried on every update:
+        # set_level runs at the meter's cadence for the entire lifetime of
+        # the app, and a DOM query per tick is pure overhead billed to the
+        # audio thread.
+        self._header: Static | None = None
+        self._meter: Static | None = None
+        self._footer: Static | None = None
+        self._transcript: TranscriptView | None = None
+        self._entries: deque[Widget] = deque()
+        self._clock_timer = None
         self.on_mute_change = lambda muted: None
         self.on_feed_selected = lambda feed: None
+        # Called once the app is actually running (from on_mount). The
+        # pipeline thread must not be started before this: its very first
+        # action is to warn about the model download, and a
+        # call_from_thread issued before App.run() raises
+        # RuntimeError("App is not running") and is lost.
+        self.on_start = lambda: None
 
     def compose(self) -> ComposeResult:
         # markup=False everywhere: none of our content (feed labels, key
@@ -79,16 +157,42 @@ class SquelchApp(App):
         # silently swallowed as an unrecognized style tag instead of shown.
         yield Static(id="header", markup=False)
         yield Static(id="meter", markup=False)
-        yield VerticalScroll(id="transcript")
+        yield TranscriptView(id="transcript")
         yield Static(id="footer", markup=False)
 
     def on_mount(self) -> None:
+        self._header = self.query_one("#header", Static)
+        self._meter = self.query_one("#meter", Static)
+        self._footer = self.query_one("#footer", Static)
+        self._transcript = self.query_one("#transcript", TranscriptView)
+        # Anchoring, rather than a scroll_end() after each mount: a manual
+        # scroll runs before the newly mounted child has been laid out, so
+        # it lands one entry short of the bottom and the newest message can
+        # sit just below the fold. Textual re-applies an anchor as part of
+        # its own refresh cycle, after layout, and releases it if the user
+        # deliberately scrolls up -- which is the behaviour wanted anyway.
         self._refresh_header()
         self._refresh_meter()
         self._refresh_footer()
         # The clock has its own slow cadence, independent of how often audio
         # frames arrive -- see _refresh_meter's docstring note below.
-        self.set_interval(1.0, self._tick_clock)
+        self._clock_timer = self.set_interval(1.0, self._tick_clock)
+        self.on_start()
+
+    def on_unmount(self) -> None:
+        # The 1 s clock timer outlives the widgets it refreshes: during
+        # teardown it can fire after #meter has been unmounted, and the
+        # resulting NoMatches propagates out of App.run() -- taking main()'s
+        # shutdown with it, so the PortAudio stream is never closed. Stop
+        # the timer and drop the cached references so any refresh that is
+        # already in flight becomes a no-op.
+        if self._clock_timer is not None:
+            self._clock_timer.stop()
+            self._clock_timer = None
+        self._header = self._meter = self._footer = None
+        self._transcript = None
+        self._entries.clear()
+        self._pending = None
 
     # -- rendering ---------------------------------------------------
     #
@@ -104,6 +208,8 @@ class SquelchApp(App):
     # two widgets that were not changing.
 
     def _refresh_header(self) -> None:
+        if self._header is None:
+            return  # not mounted yet, or already torn down
         left = f" {self._feed_label}  {self._frequency}".rstrip()
         right = f"● {self._state} "
         if len(right) >= 48:
@@ -116,7 +222,7 @@ class SquelchApp(App):
             # only two state strings ("LIVE", "RECONNECTING") but the
             # 48-cell invariant must hold for any state string structurally,
             # not by luck of the two values currently in use.
-            self.query_one("#header", Static).update(right[:48], layout=False)
+            self._header.update(right[:48], layout=False)
             return
         # Hard-truncate rather than pad-and-hope: the 48-column budget is the
         # premise of the layout, and the state text changes width at runtime.
@@ -138,23 +244,25 @@ class SquelchApp(App):
                 left = left[: content_room - 1] + "…"
             else:
                 left = ""
-        self.query_one("#header", Static).update(
-            left.ljust(content_room) + " " + right, layout=False
-        )
+        self._header.update(left.ljust(content_room) + " " + right, layout=False)
 
     def _refresh_meter(self) -> None:
+        if self._meter is None:
+            return
         bar = meter_bar(self._history, width=METER_WIDTH)
         # _clock_text is refreshed on its own 1s timer (_tick_clock), not
         # recomputed here -- this method runs at audio-frame cadence and
         # datetime.now().strftime(...) fifty times a second for a value that
         # only needs to change once a second is wasted work.
-        self.query_one("#meter", Static).update(
+        self._meter.update(
             f" {bar} {self._level:6.1f}dB  {self._clock_text}", layout=False
         )
 
     def _refresh_footer(self) -> None:
+        if self._footer is None:
+            return
         hint = "MUTED" if self._muted else "mute"
-        self.query_one("#footer", Static).update(
+        self._footer.update(
             f" [space] {hint}  [f] feeds  [q] quit", layout=False
         )
 
@@ -180,8 +288,34 @@ class SquelchApp(App):
             Static(block.text, classes="block-text", markup=False),
             classes="block",
         )
-        self.query_one("#transcript", VerticalScroll).mount(widget)
-        self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+        self._mount_entry(widget)
+
+    def _mount_entry(self, widget: Widget) -> None:
+        """Mount one transcript entry and enforce the retention cap.
+
+        Every transcript entry goes through here, not just add_block's:
+        warn() and mark_dropped() used to mount without scrolling at all,
+        so with a transcript already filled their message landed below the
+        viewport and was never seen -- pressing `f` with a dead network
+        looked exactly like pressing a key that does nothing. Scrolling is
+        now the transcript's anchor (see on_mount), which applies to
+        everything mounted here uniformly.
+        """
+        transcript = self._transcript
+        if transcript is None:
+            return
+        transcript.mount(widget)
+        self._entries.append(widget)
+        while len(self._entries) > MAX_TRANSCRIPT_ENTRIES:
+            self._drop(self._entries.popleft())
+
+    def _drop(self, widget: Widget) -> None:
+        if widget is self._pending:
+            self._pending = None
+        try:
+            widget.remove()
+        except Exception:
+            pass
 
     def mark_pending(self) -> None:
         if self._pending is not None:
@@ -196,18 +330,39 @@ class SquelchApp(App):
         self._pending = Static(
             "░ transcribing…", classes="block block-text", markup=False
         )
-        self.query_one("#transcript", VerticalScroll).mount(self._pending)
+        self._mount_entry(self._pending)
 
     def mark_dropped(self) -> None:
         self._clear_pending()
-        self.query_one("#transcript", VerticalScroll).mount(
+        self._mount_entry(
             Static("⚠ transmission lost", classes="block block-text", markup=False)
         )
 
+    def mark_blank(self) -> None:
+        """The model returned no words for the pending utterance.
+
+        Nothing is mounted: a blank transcription is not a transcript, and
+        rendering an empty entry would present "the model heard nothing" as
+        though it were something the controller said. All that is required
+        is that the placeholder comes back down -- otherwise mark_pending's
+        guard silently swallows every later utterance for the rest of the
+        run. Routine (squelch clicks transcribe to nothing), and universal
+        in the model-unavailable degraded mode.
+        """
+        self._clear_pending()
+
     def _clear_pending(self) -> None:
-        if self._pending is not None:
-            self._pending.remove()
-            self._pending = None
+        pending, self._pending = self._pending, None
+        if pending is None:
+            return
+        try:
+            self._entries.remove(pending)
+        except ValueError:
+            pass
+        try:
+            pending.remove()
+        except Exception:
+            pass
 
     def set_level(self, dbfs: float) -> None:
         self._level = dbfs
@@ -220,7 +375,11 @@ class SquelchApp(App):
     # all, so the header never claims "● LIVE" while nothing is actually
     # playing. Anything not in this map still falls back to "LIVE", which
     # matches every state the Pipeline itself ever reports.
-    _STATE_LABELS = {"reconnecting": "RECONNECTING", "offline": "OFFLINE"}
+    _STATE_LABELS = {
+        "reconnecting": "RECONNECTING",
+        "offline": "OFFLINE",
+        "starting": "STARTING",
+    }
 
     def set_state(self, state: str) -> None:
         self._state = self._STATE_LABELS.get(state, "LIVE")
@@ -236,10 +395,37 @@ class SquelchApp(App):
     def action_show_feeds(self) -> None:
         if self._feed_loader is None:
             return
+        self._load_feeds()
+
+    @work(thread=True, exclusive=True, group="feeds")
+    def _load_feeds(self) -> None:
+        """Fetch the feed list off the event loop.
+
+        The production loader is an HTTP GET with a 15 s timeout. Called
+        straight from the action handler it blocks Textual's event loop for
+        the whole timeout -- and because the audio thread reaches the UI via
+        call_from_thread, which waits on that same loop, *playback* stops
+        too. Pressing `f` on a flaky network used to freeze the whole app
+        for a quarter of a minute. The injected-loader seam is unchanged;
+        only where it is called from has moved.
+        """
+        assert self._feed_loader is not None
         try:
             feeds = self._feed_loader()
         except Exception:
             feeds = []
+        try:
+            self.call_from_thread(self._present_feeds, feeds)
+        except Exception:
+            # Pressing `f` and then `q` while the fetch is in flight leaves
+            # this worker holding a result for an app that has already gone:
+            # call_from_thread then raises "App is not running". There is
+            # nobody left to show a picker to, so this is nothing to report
+            # -- but uncaught it surfaces as a worker traceback printed
+            # after the app has exited.
+            pass
+
+    def _present_feeds(self, feeds: list[Feed]) -> None:
         if not feeds:
             self.warn("could not load feeds")
             return
@@ -257,7 +443,7 @@ class SquelchApp(App):
         Textual, which makes it awkward to assert against and easy to render
         outside the 48-column budget.
         """
-        self.query_one("#transcript", VerticalScroll).mount(
+        self._mount_entry(
             Static(f"⚠ {message}", classes="block block-text", markup=False)
         )
 

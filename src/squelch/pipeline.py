@@ -12,6 +12,11 @@ through `_emit`, which swallows exceptions from the callback itself.
 Shutdown is similarly bounded: the sentinel handoff to the worker never
 blocks, so `run()` returns within `shutdown_timeout` even if the
 transcriber never returns.
+
+The reader yields `bytes | None` (see `StreamReader.frames`): a `None` is
+a heartbeat emitted while a reconnect backoff is being waited out. It means
+"no audio this tick", not "silence" -- it is reported as `reconnecting` and
+reaches neither the speaker nor the segmenter.
 """
 
 from __future__ import annotations
@@ -22,7 +27,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from squelch.vad import rms_dbfs
+from squelch.vad import SILENCE_FLOOR_DBFS, rms_dbfs
+
+# Frames arrive every 20 ms (50 Hz). Marshalling a level onto the UI thread
+# that often is both wasteful -- every call is a `call_from_thread` round
+# trip billed to the *audio* thread -- and useless: the meter is a 20-sample
+# window, so at 50 Hz it turns over two and a half times a second and reads
+# as noise rather than a waveform. Emitting one reading per 5 frames gives
+# 10 Hz, a two-second window, and a fifth of the marshalling cost. The
+# reading emitted is the loudest of the group, so a short transient is
+# still seen rather than being missed between samples.
+LEVEL_DECIMATION = 5
 
 
 @dataclass(frozen=True)
@@ -38,6 +53,14 @@ class Events:
     on_block: Callable[[Block], None]
     on_state: Callable[[str], None]
     on_dropped: Callable[[], None]
+    # A transcription that comes back blank still has to resolve the
+    # "░ transcribing…" placeholder that on_pending put on screen. It is
+    # deliberately *not* on_block with empty text (that would render an
+    # empty transcript entry) and deliberately not on_dropped (nothing was
+    # lost -- the model simply heard no words, which is routine for a
+    # squelch click). Without it the placeholder is permanent, and
+    # mark_pending's guard then suppresses every later utterance.
+    on_blank: Callable[[], None]
 
 
 _SENTINEL = object()
@@ -55,6 +78,7 @@ class Pipeline:
         now: Callable[[], datetime] = datetime.now,
         queue_size: int = 8,
         shutdown_timeout: float = 30.0,
+        level_every: int = LEVEL_DECIMATION,
     ) -> None:
         self._reader = reader
         self._segmenter = segmenter
@@ -66,6 +90,9 @@ class Pipeline:
         self._stopped = False
         self._last_state = ""
         self._shutdown_timeout = shutdown_timeout
+        self._level_every = max(1, level_every)
+        self._level_count = 0
+        self._level_peak = SILENCE_FLOOR_DBFS
 
     def run(self) -> None:
         worker = threading.Thread(target=self._worker, daemon=True)
@@ -74,11 +101,19 @@ class Pipeline:
             for frame in self._reader.frames():
                 if self._stopped:
                     break
+                if frame is None:
+                    # No audio this tick: the reader is waiting out a
+                    # reconnect backoff and is only checking in so we can
+                    # keep the pane honest. Nothing may be written to the
+                    # speaker or fed to the segmenter -- a `None` is not
+                    # silence, it is the absence of a sample -- but the
+                    # state and the meter must both keep moving.
+                    self._report_state("reconnecting")
+                    self._emit_level(SILENCE_FLOOR_DBFS, force=True)
+                    continue
+                self._report_state("live")
                 self._player.write(frame)
-                self._emit(self._events.on_level, rms_dbfs(frame))
-                self._report_state(
-                    "reconnecting" if self._reader.reconnecting else "live"
-                )
+                self._emit_level(rms_dbfs(frame))
                 utterance = self._segmenter.feed(frame)
                 if utterance is not None:
                     self._emit(self._events.on_pending)
@@ -96,6 +131,17 @@ class Pipeline:
     def stop(self) -> None:
         self._stopped = True
         self._reader.stop()
+
+    def _emit_level(self, dbfs: float, *, force: bool = False) -> None:
+        """Peak-hold and decimate level readings -- see LEVEL_DECIMATION."""
+        self._level_peak = max(self._level_peak, dbfs)
+        self._level_count += 1
+        if not force and self._level_count < self._level_every:
+            return
+        peak = self._level_peak
+        self._level_count = 0
+        self._level_peak = SILENCE_FLOOR_DBFS
+        self._emit(self._events.on_level, peak)
 
     def _report_state(self, state: str) -> None:
         if state != self._last_state:
@@ -166,8 +212,14 @@ class Pipeline:
                 # not vanish either — a lost transmission is visible.
                 self._emit(self._events.on_dropped)
                 continue
-            if transcript.text.strip():
+            text = transcript.text.strip()
+            if text:
                 self._emit(
                     self._events.on_block,
-                    Block(started_at=started_at, text=transcript.text.strip()),
+                    Block(started_at=started_at, text=text),
                 )
+            else:
+                # Blank result. on_pending already mounted a placeholder for
+                # this utterance and only add_block/mark_dropped/mark_blank
+                # take it back down -- staying quiet here strands it forever.
+                self._emit(self._events.on_blank)

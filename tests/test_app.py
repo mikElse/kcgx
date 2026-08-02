@@ -1,10 +1,16 @@
 from datetime import datetime
 
 import pytest
+from textual.containers import VerticalScroll
 from textual.geometry import Size
 from textual.widgets import Static
 
-from squelch.app import SquelchApp, meter_bar
+from squelch.app import (
+    MAX_TRANSCRIPT_ENTRIES,
+    SquelchApp,
+    TranscriptView,
+    meter_bar,
+)
 from squelch.config import Config
 from squelch.pipeline import Block
 
@@ -442,3 +448,277 @@ async def test_long_label_truncates_with_ellipsis_not_collision():
                     "ellipsis must be followed by a separating space, not "
                     "glued straight into the state glyph"
                 )
+
+
+# -- final-fix regression tests -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_header_does_not_claim_live_before_any_audio():
+    """A freshly constructed app has received nothing; it must not say LIVE.
+
+    Regression test: `_state` was initialised to "LIVE", so the pane read
+    "● LIVE" from the very first frame drawn -- through the entire model
+    load, which on a first run is a ~1.5 GB download taking minutes. A
+    blank transcript under a confident "LIVE" reads as a broken feed, and
+    the natural reaction is to kill it.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        text, strips = rendered(app)
+        joined = "\n".join(text)
+        assert "LIVE" not in joined, (
+            "the header claimed LIVE before a single frame had arrived"
+        )
+        assert "STARTING" in joined
+        assert all(s.cell_length == 48 for s in strips)
+
+
+@pytest.mark.asyncio
+async def test_on_start_runs_once_the_app_is_running():
+    """The pipeline hook must fire from on_mount, not before App.run().
+
+    Regression test: `__main__` used to start the pipeline thread and only
+    then call `app.run()`. The thread's first statement is a warn(), which
+    reaches `call_from_thread` before the loop is up, raises
+    RuntimeError("App is not running"), and is swallowed -- so the
+    "loading transcription model" message was lost 100% of the time. A hook
+    invoked from on_mount is by construction after the app is running, and
+    that is what this asserts: the warn issued from inside on_start is
+    actually on screen.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    app.on_start = lambda: app.warn("loading transcription model")
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        text, _strips = rendered(app)
+        assert "loading transcription model" in "\n".join(text)
+
+
+@pytest.mark.asyncio
+async def test_blank_transcription_resolves_the_pending_placeholder():
+    """mark_blank must take the placeholder down without faking a transcript.
+
+    Regression test: nothing cleared `_pending` when a transcription came
+    back empty, and `mark_pending`'s guard then made every later utterance
+    a no-op -- the pane was stuck showing "░ transcribing…" for the rest of
+    the run, with no further transcripts ever appearing.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        app.mark_pending()
+        await pilot.pause()
+        assert "transcribing" in "\n".join(rendered(app)[0])
+
+        app.mark_blank()
+        await pilot.pause()
+        text, _strips = rendered(app)
+        joined = "\n".join(text)
+        assert "transcribing" not in joined, "the placeholder was never removed"
+        assert "░" not in joined
+        assert app._pending is None
+
+        # And the next real utterance must not be swallowed by the guard.
+        app.mark_pending()
+        app.add_block(
+            Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text="cleared to land")
+        )
+        await pilot.pause()
+        assert "cleared to land" in "\n".join(rendered(app)[0])
+
+
+@pytest.mark.asyncio
+async def test_transcript_entries_are_capped():
+    """Mounted transcript widgets must not grow without bound.
+
+    Regression test: every block mounted a Vertical plus two Statics and
+    nothing ever removed them. Over a multi-hour session on a busy feed
+    that is thousands of live widgets -- measured ~852 MB RSS at 8000
+    blocks -- and the per-update cost lands on the audio thread, which
+    blocks inside call_from_thread waiting for the UI.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        overflow = 50
+        for i in range(MAX_TRANSCRIPT_ENTRIES + overflow):
+            app.add_block(
+                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
+            )
+        await pilot.pause()
+        transcript = app.query_one("#transcript", VerticalScroll)
+        assert len(transcript.children) == MAX_TRANSCRIPT_ENTRIES, (
+            f"{MAX_TRANSCRIPT_ENTRIES + overflow} entries were mounted and "
+            f"{len(transcript.children)} are still live -- the oldest must "
+            "be removed as new ones arrive"
+        )
+
+        text, strips = rendered(app)
+        joined = "\n".join(text)
+        assert f"call {MAX_TRANSCRIPT_ENTRIES + overflow - 1}" in joined, (
+            "the newest entry must still be visible"
+        )
+        assert "call 0" not in joined, "the oldest entry must be gone"
+        assert all(s.cell_length == 48 for s in strips)
+
+
+@pytest.mark.asyncio
+async def test_chrome_widgets_are_cached_not_requeried():
+    """set_level runs for the app's whole lifetime; it must not query the DOM.
+
+    A DOM query per meter tick is pure overhead billed to the audio thread
+    (set_level is reached via call_from_thread, which the audio thread
+    blocks on).
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        queries = []
+        original = app.query_one
+
+        def counting_query_one(*args, **kwargs):
+            queries.append(args)
+            return original(*args, **kwargs)
+
+        app.query_one = counting_query_one
+        for _ in range(20):
+            app.set_level(-25.0)
+        app.set_state("live")
+        app.action_toggle_mute()
+        await pilot.pause()
+        assert queries == [], (
+            f"chrome updates must use cached widget references, got {queries!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_warn_is_scrolled_into_view_on_a_full_transcript():
+    """A warning below the fold is a warning nobody sees.
+
+    Regression test: add_block scrolled the transcript to the end but
+    warn() and mark_dropped() mounted without scrolling. Once the
+    transcript had filled the pane, "could not load feeds" landed below the
+    viewport -- so pressing `f` with a dead network looked exactly like
+    pressing a key that does nothing.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for i in range(30):  # comfortably more than the ~38-row transcript
+            app.add_block(
+                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
+            )
+        await pilot.pause()
+        app.warn("could not load feeds")
+        await pilot.pause()
+        text, strips = rendered(app)
+        assert "could not load feeds" in "\n".join(text), (
+            "the warning was mounted below the viewport and never scrolled "
+            "into view"
+        )
+        assert all(s.cell_length == 48 for s in strips)
+
+
+@pytest.mark.asyncio
+async def test_dropped_marker_is_scrolled_into_view_on_a_full_transcript():
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for i in range(30):
+            app.add_block(
+                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
+            )
+        await pilot.pause()
+        app.mark_dropped()
+        await pilot.pause()
+        text, _strips = rendered(app)
+        assert "transmission lost" in "\n".join(text)
+
+
+@pytest.mark.asyncio
+async def test_clock_tick_after_teardown_does_not_raise():
+    """The 1 s interval timer outlives the widgets it refreshes.
+
+    Regression test: `_tick_clock` -> `_refresh_meter` -> `query_one("#meter")`
+    raised `NoMatches` when the timer fired during shutdown, after the
+    widget had been unmounted. That exception propagated out of App.run(),
+    so `main()` never reached `player.stop()` and the PortAudio stream was
+    left open.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+    # The app is fully torn down here -- exactly the state the timer can
+    # fire in.
+    app._tick_clock()
+    app.set_level(-20.0)
+    app.set_state("reconnecting")
+    app.warn("late warning with nowhere to go")
+
+
+@pytest.mark.asyncio
+async def test_clock_timer_is_stopped_on_unmount():
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        assert app._clock_timer is not None
+    assert app._clock_timer is None, "the clock timer must be stopped at unmount"
+
+
+@pytest.mark.asyncio
+async def test_long_startup_warnings_stay_within_48_columns():
+    """The new startup messages are long; the pane budget still holds."""
+    from squelch.__main__ import FFMPEG_MISSING, MODEL_LOADING, feed_selection_hint
+    from squelch.feeds import Feed
+
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for message in (
+            MODEL_LOADING,
+            FFMPEG_MISSING,
+            feed_selection_hint(Feed(ident="kpdx3_twr", label="Portland Tower")),
+        ):
+            app.warn(message)
+            await pilot.pause()
+        app.set_state("offline")
+        await pilot.pause()
+        text, strips = rendered(app)
+        assert all(s.cell_length == 48 for s in strips)
+        joined = "\n".join(text)
+        # The messages wrap, so match on fragments that survive wrapping.
+        assert "ffmpeg not found on PATH" in joined
+        assert "restart with" in joined
+
+
+@pytest.mark.asyncio
+async def test_scrolling_up_suspends_following_and_returning_resumes_it():
+    """Reading back through the transcript must not be interrupted.
+
+    The follow-the-newest behaviour that fixes the invisible-warning bug
+    must not become its own annoyance: a user who has deliberately scrolled
+    up stays where they are until they scroll back to the bottom.
+    """
+    app = SquelchApp(Config(), feed_label="Portland Tower", frequency="118.10")
+    async with app.run_test(size=SIZE) as pilot:
+        for i in range(30):
+            app.add_block(
+                Block(started_at=datetime(2026, 8, 2, 14, 31, 42), text=f"call {i}")
+            )
+        await pilot.pause()
+        transcript = app.query_one("#transcript", TranscriptView)
+        assert transcript.scroll_y == transcript.max_scroll_y
+
+        transcript.scroll_to(y=0, animate=False)
+        await pilot.pause()
+        assert transcript._follow is False
+        app.warn("a warning that must not yank the view")
+        await pilot.pause()
+        assert transcript.scroll_y == 0, (
+            "an incoming message must not scroll a user who has deliberately "
+            "scrolled up"
+        )
+
+        transcript.scroll_to(y=transcript.max_scroll_y, animate=False)
+        await pilot.pause()
+        assert transcript._follow is True
+        app.warn("and now following resumes")
+        await pilot.pause()
+        assert "and now following resumes" in "\n".join(rendered(app)[0])
