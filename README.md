@@ -36,9 +36,16 @@ design width; below it the header truncates and the level meter loses
 resolution. The shell starts short so the transcript keeps most of the
 column. These are starting positions, not constraints — drag them.
 
-**Requires tmux 3.1 or newer** (`brew install tmux`). The session config in
-`kcgx.tmux.conf` is applied with `tmux -f`, so it affects only this session
-and never touches your `~/.tmux.conf`.
+**Requires tmux 3.1 or newer** (`brew install tmux`). Settings live in
+`kcgx.tmux.conf` and are never read from — or written to — your
+`~/.tmux.conf`.
+
+The config is both passed with `tmux -f` and sourced explicitly on every
+launch. The second part matters: `-f` is only honoured when the command
+*starts* the tmux server, and is ignored outright if one is already running.
+Sourcing explicitly means the settings apply whether or not a server was up,
+and that editing `kcgx.tmux.conf` takes effect on your next `kcgx` rather
+than requiring you to kill the server.
 
 **Running it again reattaches** rather than starting a second copy, so
 `squelch` keeps its transcript and you don't pay the model load twice.

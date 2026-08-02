@@ -33,7 +33,7 @@ def cockpit():
     socket = f"kcgx-test-{uuid.uuid4().hex[:8]}"
     session = f"kcgx-test-{uuid.uuid4().hex[:8]}"
 
-    def run(size="200x50", **overrides):
+    def run(size="200x50", detached=True, **overrides):
         env = {
             **os.environ,
             "KCGX_SOCKET": socket,
@@ -45,6 +45,9 @@ def cockpit():
         }
         if size is None:  # exercise the real size-detection path
             del env["KCGX_SIZE"]
+        if not detached:  # let it reach the exec/attach branch
+            del env["KCGX_DETACHED"]
+        env.pop("TMUX", None)
         env.update({k: str(v) for k, v in overrides.items()})
         return subprocess.run(
             [str(LAUNCHER)], env=env, capture_output=True, text=True, timeout=30
@@ -142,6 +145,35 @@ def test_narrow_terminal_message_names_squelch_width(cockpit):
     assert "48" in cockpit(size="80x50").stderr
 
 
+def test_config_applies_even_when_a_tmux_server_is_already_running(cockpit):
+    """Regression: `tmux -f` is only read when it *starts* the server.
+
+    With a server already up, -f is ignored, so mouse mode and remain-on-exit
+    silently never applied — the two things the cockpit exists for. Every other
+    test uses a private socket and therefore always got a fresh server, which
+    is exactly why the suite missed this.
+    """
+    pre = subprocess.run(
+        ["tmux", "-L", cockpit.socket, "new-session", "-d", "-s", "pre", "sleep 60"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert pre.returncode == 0, pre.stderr
+
+    assert cockpit().returncode == 0
+    assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
+    assert "on" in cockpit.tmux("show-options", "-g", "remain-on-exit").stdout
+
+
+def test_config_is_reapplied_so_edits_take_effect_without_killing_the_server(cockpit):
+    """Editing kcgx.tmux.conf should not require killing a running server."""
+    assert cockpit().returncode == 0
+    cockpit.tmux("set-option", "-g", "mouse", "off")
+    assert cockpit().returncode == 0  # reattach path
+    assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
+
+
 def test_session_config_enables_mouse(cockpit):
     """Mouse mode is the feature; verify the config actually reached tmux."""
     cockpit()
@@ -228,6 +260,27 @@ def test_accepts_a_real_wide_terminal(cockpit):
     widths = {i: int(v) for i, v in pane_field(cockpit, "pane_width").items()}
     assert widths[0] + widths[1] + 1 == 222, f"session not sized to the pty: {widths}"
     assert widths[1] == 48
+
+
+def test_attach_path_runs_tmux_rather_than_a_shell_function(cockpit):
+    """Regression: the attach branch used `exec tm ...`, but `exec` bypasses
+    shell functions and searches PATH, so it died with `exec: tm: not found`.
+
+    Run without a tty so tmux refuses to attach — a *tmux* failure is fine and
+    expected here; a shell "not found" is the bug.
+    """
+    assert cockpit().returncode == 0  # build the session first
+    result = cockpit(detached=False)
+    assert "not found" not in result.stderr, result.stderr
+    assert "tm:" not in result.stderr, result.stderr
+
+
+def test_switch_client_path_runs_tmux_rather_than_a_shell_function(cockpit):
+    """Same bug on the other branch: running kcgx from inside tmux."""
+    assert cockpit().returncode == 0
+    result = cockpit(detached=False, TMUX="/tmp/fake-tmux-socket,1234,0")
+    assert "not found" not in result.stderr, result.stderr
+    assert "tm:" not in result.stderr, result.stderr
 
 
 def test_reports_missing_tmux_with_an_actionable_message(tmp_path):
