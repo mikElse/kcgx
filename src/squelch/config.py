@@ -17,6 +17,12 @@ class ConfigError(ValueError):
 class Config:
     icao: str = "KPDX"
     feed: str = "kpdx3_twr"
+    # Above this, a frame counts as busy for the five-minute activity
+    # ranking. ATC feeds sit on a noise floor around -50 dBFS with speech
+    # peaking -20 to -10, so this separates the two with margin on both
+    # sides. Must be written as a decimal: `_checked` derives the expected
+    # type from the default, so a bare `-40` is rejected as an int.
+    activity_threshold_dbfs: float = -40.0
 
 
 def load_config(path: Path | None = None) -> Config:

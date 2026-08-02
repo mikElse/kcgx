@@ -15,9 +15,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from squelch.activity import ActivityTracker
 from squelch.audio import SILENCE_FLOOR_DBFS, Player, StreamReader
 from squelch.feeds import Feed, resolve_stream
 from squelch.pipeline import Events, Pipeline
+
+# A compact row draws no meter, so it emits no display levels at all. An
+# expanded row decimates by 2 for 25 Hz -- fast enough to read as a
+# waveform, and the cost now scales with what you are listening to rather
+# than with how many feeds exist.
+EXPANDED_DECIMATION = 2
+COMPACT_DECIMATION = 0
+
 
 # Feed labels all start with the airport's ICAO ("KPDX Tower (Both)"), which
 # is already in the global header. Stripping it buys five columns back for
@@ -53,6 +62,7 @@ class FeedSession:
         *,
         muted: bool = True,
         icao: str = "",
+        activity_threshold: float = -40.0,
         resolve: Callable[[str], str] = resolve_stream,
         reader_factory: Callable[..., Any] = StreamReader,
         player_factory: Callable[[], Any] = Player,
@@ -67,6 +77,7 @@ class FeedSession:
         # rather than absent -- the UI is the same either way.
         self.ambient = False
         self.level = SILENCE_FLOOR_DBFS
+        self._activity = ActivityTracker(activity_threshold)
         self._player = player_factory()
         self._player.muted = muted
         self._resolve = resolve
@@ -84,10 +95,36 @@ class FeedSession:
 
     @muted.setter
     def muted(self, value: bool) -> None:
-        # Gated at Player.write, so the stream, the reader and the level
-        # calculation all keep running -- muting silences a feed without
-        # making it stop being watched.
+        # Gated at Player.write, so the stream, the reader and the activity
+        # count all keep running -- muting silences a feed without making it
+        # stop being watched. What it does change is the *display* rate: a
+        # muted feed is compact and draws no meter, so emitting levels for
+        # it would be marshalling work nobody renders.
         self._player.muted = bool(value)
+        self._apply_display_rate()
+
+    def _apply_display_rate(self) -> None:
+        if self._pipeline is None:
+            return
+        # Optional, and deliberately so: the display rate is a redraw
+        # optimisation, and a pipeline that cannot change it should keep
+        # playing at whatever rate it has. Letting an AttributeError out
+        # here would take a whole feed down over a cosmetic knob, which is
+        # exactly what per-feed isolation exists to prevent.
+        switch = getattr(self._pipeline, "set_level_every", None)
+        if switch is None:
+            return
+        switch(COMPACT_DECIMATION if self.muted else EXPANDED_DECIMATION)
+
+    @property
+    def activity(self) -> float:
+        return self._activity.fraction()
+
+    def _on_activity(self, dbfs: float) -> None:
+        # Stays on this thread: the tracker is arithmetic, and marshalling a
+        # 10 Hz reading per feed onto the UI thread would cost more than the
+        # ranking is worth.
+        self._activity.push(dbfs)
 
     def toggle_mute(self) -> bool:
         self.muted = not self.muted
@@ -135,8 +172,12 @@ class FeedSession:
             Events(
                 on_level=lambda dbfs: self._set_level(dbfs),
                 on_state=lambda state: self._set_state(state),
+                on_activity=self._on_activity,
             ),
         )
+        # A session that started unmuted needs its rate now that there is a
+        # pipeline to set it on.
+        self._apply_display_rate()
         self._pipeline.run()
         # run() only returns when the reader stops, which for a live feed
         # means we asked it to.
