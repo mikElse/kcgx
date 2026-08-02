@@ -426,3 +426,122 @@ async def test_clicking_the_ambient_control_does_not_toggle_mute():
         await pilot.pause()
         assert session.ambient is True
         assert session.muted is True, "the ambient control is not the mute control"
+
+
+# -- solo ------------------------------------------------------------------
+
+
+def mix(app):
+    return [s.muted for s in app._sessions]
+
+
+@pytest.mark.asyncio
+async def test_solo_mutes_every_other_feed():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        app._selected = 2
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        assert mix(app) == [True, True, False, True]
+
+
+@pytest.mark.asyncio
+async def test_solo_restores_the_prior_mix_including_other_unmuted_feeds():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        app._sessions[3].muted = False
+        before = mix(app)
+        assert before == [False, True, True, False]
+        app._selected = 2
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        await pilot.press("S")
+        await pilot.pause()
+        assert mix(app) == before
+
+
+@pytest.mark.asyncio
+async def test_moving_the_solo_then_disengaging_returns_to_the_pre_solo_mix():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        before = mix(app)
+        app._selected = 1
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        app._selected = 3
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        assert mix(app) == [True, True, True, False]
+        await pilot.press("S")
+        await pilot.pause()
+        assert mix(app) == before
+
+
+@pytest.mark.asyncio
+async def test_muting_by_hand_during_solo_cancels_it():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        app._selected = 1
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        assert app._solo.active is True
+        app._selected = 3
+        app._apply_selection()
+        await pilot.press("space")
+        await pilot.pause()
+        assert app._solo.active is False, "a manual mute is a new intent"
+
+
+@pytest.mark.asyncio
+async def test_the_soloed_row_is_marked():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app._selected = 1
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        assert app._rows[id(app._sessions[1])].has_class("soloed")
+        assert not app._rows[id(app._sessions[0])].has_class("soloed")
+
+
+@pytest.mark.asyncio
+async def test_solo_expands_only_the_soloed_row():
+    """Expansion follows audibility, so solo reshapes the whole stack."""
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        app._selected = 2
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        heights = [app._rows[id(s)].outer_size.height for s in app._sessions]
+        assert heights == [2, 2, 6, 2]
+
+
+# -- ambient ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_toggles_ambient_on_the_selected_feed_only():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        assert [s.ambient for s in app._sessions] == [True, False, False]
+
+
+@pytest.mark.asyncio
+async def test_ambient_does_not_change_mute():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app._selected = 1
+        app._apply_selection()
+        before = mix(app)
+        await pilot.press("a")
+        await pilot.pause()
+        assert mix(app) == before
+        assert app._rows[id(app._sessions[1])].has_class("ambient")

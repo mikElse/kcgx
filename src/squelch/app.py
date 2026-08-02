@@ -21,6 +21,7 @@ from textual.worker import NoActiveWorker, get_current_worker
 
 from squelch.config import Config
 from squelch.feeds import Feed
+from squelch.solo import Solo
 from squelch.rows import (
     BLOCKS,
     FLOOR_DBFS,
@@ -99,6 +100,8 @@ class SquelchApp(App):
         ("up", "cursor_up", "Up"),
         ("down", "cursor_down", "Down"),
         ("space", "toggle_mute", "Mute"),
+        ("S", "toggle_solo", "Solo"),
+        ("a", "toggle_ambient", "Ambient"),
         ("f", "show_feeds", "Feeds"),
         ("q", "quit", "Quit"),
     ]
@@ -115,6 +118,9 @@ class SquelchApp(App):
         self._sessions = list(sessions)
         self._feed_loader = feed_loader
         self._selected = 0
+        self._solo = Solo()
+        for session in self._sessions:
+            session.soloed = False
         self._clock_text = datetime.now().strftime("%H:%M:%S")
         self._header: Static | None = None
         self._footer: Static | None = None
@@ -224,23 +230,55 @@ class SquelchApp(App):
         session = self.selected_session
         if session is None:
             return
+        if self._solo.active:
+            # The user has muted something by hand, so the mix solo recorded
+            # is no longer the one they want back.
+            self._solo.cancel()
+            self._clear_solo_marks()
         session.toggle_mute()
-        row = self._rows.get(id(session))
-        if row is not None:
-            row.refresh_all()
+        self._refresh_row(session)
 
     def action_toggle_solo(self) -> None:
-        # Task 8 wires the real state machine.
-        pass
+        session = self.selected_session
+        if session is None:
+            return
+        if self._solo.is_soloed(id(session)):
+            restored = self._solo.disengage()
+            if restored is not None:
+                self._apply_mix(restored)
+        else:
+            states = {id(s): s.muted for s in self._sessions}
+            self._apply_mix(self._solo.engage(id(session), states))
+        self._clear_solo_marks()
+        self._refresh_rows()
 
     def action_toggle_ambient(self) -> None:
         session = self.selected_session
         if session is None:
             return
         session.toggle_ambient()
+        self._refresh_row(session)
+
+    def _apply_mix(self, states: dict) -> None:
+        for session in self._sessions:
+            if id(session) in states:
+                session.muted = states[id(session)]
+
+    def _clear_solo_marks(self) -> None:
+        for session in self._sessions:
+            session.soloed = self._solo.is_soloed(id(session))
+
+    def _refresh_row(self, session) -> None:
+        # refresh_all rather than refresh_name: a mute change flips the row
+        # between compact and expanded, so the meter has to be redrawn or
+        # cleared along with the text.
         row = self._rows.get(id(session))
         if row is not None:
             row.refresh_all()
+
+    def _refresh_rows(self) -> None:
+        for session in self._sessions:
+            self._refresh_row(session)
 
     def on_row_clicked(self, message: RowClicked) -> None:
         session = message.row.session

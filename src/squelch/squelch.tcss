@@ -84,3 +84,14 @@ FeedPicker > ListView {
     border: solid $primary;
     background: $surface;
 }
+
+/* Controls read as lit or dim by the row's own state. The row already dims
+   wholesale when muted, so these only need to mark what is *on*. */
+.feed.soloed .feed-controls {
+    text-style: bold;
+}
+
+.feed.ambient .feed-name,
+.feed.ambient .feed-controls {
+    color: $secondary;
+}
