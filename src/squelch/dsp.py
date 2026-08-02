@@ -186,3 +186,138 @@ def pan_gains(position: float) -> tuple[float, float]:
     if position == 0.0:
         return -left * CENTRE_GAIN, -right * CENTRE_GAIN
     return left, right
+
+
+RT60_S = 0.100
+LOWPASS_HZ = 1200.0
+
+# Schroeder topology: four parallel combs into two series allpasses. An FDN
+# buys nothing for a 100 ms tail. Every delay exceeds BLOCK so a block never
+# feeds back into itself -- that constraint, not the classic Freeverb
+# values, is what set these numbers.
+COMB_DELAYS_L = (405, 431, 463, 492)
+COMB_DELAYS_R = (413, 439, 471, 500)
+# Right-channel delays differ from the left's, which is the whole source of
+# stereo width here.
+ALLPASS_DELAYS_L = (283, 347)
+ALLPASS_DELAYS_R = (291, 355)
+# 0.3, not the classic Schroeder 0.5. A diffuser normally uses a delay of a
+# few milliseconds, where g=0.5 rings for far less than the reverb tail. The
+# "every delay > BLOCK" rule forces these lines to at least 257 samples
+# (16 ms), and at that length g=0.5 rings for ~100 ms on its own -- measured:
+# the allpass pair alone decayed only 48 dB over 200 ms while the combs
+# managed 123 dB, so the diffusers, not the combs, set the tail length. 0.3
+# brings them inside the RT60 budget the combs are tuned to.
+ALLPASS_FEEDBACK = 0.3
+
+
+def comb_feedback(delay: int, rt60: float = RT60_S) -> float:
+    """Feedback for a comb of `delay` samples to decay 60 dB in `rt60`."""
+    return 10 ** (-3.0 * delay / (rt60 * SAMPLE_RATE))
+
+
+def lowpass_coefficient(hz: float) -> float:
+    """One-pole coefficient for a cutoff, at the engine's sample rate."""
+    return math.exp(-2.0 * math.pi * hz / SAMPLE_RATE)
+
+
+class _Comb:
+    """A lowpass-damped feedback comb.
+
+    Vectorised on the guarantee that `delay > BLOCK`: every sample this
+    block needs from the delay line was written before the block started.
+    """
+
+    def __init__(self, delay: int, damping: float) -> None:
+        self._line = np.zeros(delay, dtype=np.float32)
+        self._delay = delay
+        self._index = 0
+        self._feedback = comb_feedback(delay)
+        self._damping = damping
+        self._store = 0.0
+        self._scratch = np.zeros(BLOCK, dtype=np.float32)
+
+    def process(self, block: np.ndarray, out: np.ndarray) -> None:
+        n = len(block)
+        read = self._index
+        end = read + n
+        if end <= self._delay:
+            delayed = self._line[read:end]
+        else:
+            split = self._delay - read
+            self._scratch[:split] = self._line[read:]
+            self._scratch[split:n] = self._line[: end - self._delay]
+            delayed = self._scratch[:n]
+        np.copyto(out[:n], delayed)
+        # One-pole damping on both the output and the feedback path.
+        #
+        # Freeverb damps only the feedback and emits the raw delayed sample,
+        # which works because its feedback is ~0.84 and the filter compounds
+        # over dozens of passes. At RT60 100 ms the feedback here is 0.17,
+        # so a signal makes about four passes and feedback-only damping is
+        # inaudible -- measured: 3 kHz came out no quieter than 400 Hz, so
+        # the 1.2 kHz roll-off existed on paper only. Emitting the damped
+        # value makes it a real one-pole lowpass on the tail, which is what
+        # "presence without intelligibility" actually requires.
+        damped = self._store
+        for i in range(n):
+            damped = (1.0 - self._damping) * out[i] + self._damping * damped
+            out[i] = damped
+            value = block[i] + self._feedback * damped
+            self._line[(read + i) % self._delay] = value
+        self._store = damped
+        self._index = end % self._delay
+
+
+class _Allpass:
+    def __init__(self, delay: int) -> None:
+        self._line = np.zeros(delay, dtype=np.float32)
+        self._delay = delay
+        self._index = 0
+
+    def process(self, block: np.ndarray, out: np.ndarray) -> None:
+        n = len(block)
+        for i in range(n):
+            slot = (self._index + i) % self._delay
+            buffered = self._line[slot]
+            value = block[i] + ALLPASS_FEEDBACK * buffered
+            out[i] = buffered - ALLPASS_FEEDBACK * value
+            self._line[slot] = value
+        self._index = (self._index + n) % self._delay
+
+
+class Reverb:
+    """A short, dark, fully-wet room.
+
+    100% wet by design: ambient feeds are heard only as reverb, never as
+    direct signal. Combined with the 1.2 kHz roll-off and the 100 ms tail
+    the result is presence without intelligibility, which is the point of
+    the ambient bus.
+    """
+
+    def __init__(self) -> None:
+        damping = lowpass_coefficient(LOWPASS_HZ)
+        self._combs_l = [_Comb(d, damping) for d in COMB_DELAYS_L]
+        self._combs_r = [_Comb(d, damping) for d in COMB_DELAYS_R]
+        self._allpass_l = [_Allpass(d) for d in ALLPASS_DELAYS_L]
+        self._allpass_r = [_Allpass(d) for d in ALLPASS_DELAYS_R]
+        self._acc = np.zeros(BLOCK, dtype=np.float32)
+        self._one = np.zeros(BLOCK, dtype=np.float32)
+
+    def process(self, left, right, out_l, out_r) -> None:
+        self._side(left, out_l, self._combs_l, self._allpass_l)
+        self._side(right, out_r, self._combs_r, self._allpass_r)
+
+    def _side(self, block, out, combs, allpasses) -> None:
+        n = len(block)
+        acc = self._acc[:n]
+        one = self._one[:n]
+        acc[:] = 0.0
+        for comb in combs:
+            comb.process(block, one)
+            acc += one
+        acc /= len(combs)
+        for allpass in allpasses:
+            allpass.process(acc, one)
+            acc[:] = one
+        np.copyto(out[:n], acc)
