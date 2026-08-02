@@ -114,11 +114,6 @@ def test_a_record_is_four_tab_separated_fields():
     assert fields[3] == "Portland International Airport, Portland, OR"
 
 
-def test_a_record_contains_no_tabs_inside_its_label():
-    """bash reads this with IFS=$'\\t'; a tab in the label would shift fields."""
-    assert format_record(ORD).count("\t") == 3
-
-
 def test_whitespace_in_the_label_cannot_shift_fields():
     """A literal tab or newline in a future dataset regeneration must not
     shift lat/lon into a name fragment -- bin/kcgx reads this with
