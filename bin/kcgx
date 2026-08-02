@@ -171,14 +171,41 @@ status_cmd() {
 # Panes are found by role, not by index. Inserting the status pane renumbers
 # squelch from 1 to 2 while its pane id stays the same, and retargeting the
 # wrong pane fails silently -- the cockpit looks fine and points elsewhere.
+#
+# A role that resolves to nothing is fatal rather than empty, because tmux does
+# not treat an empty target as an error: `respawn-pane -t ""` resolves to the
+# *active* pane and exits 0. A cockpit built before these tags existed carries
+# none, so `kcgx go` against one would rebuild whichever pane the user last
+# clicked -- twice, once per respawn -- while both real panes kept the old
+# airport, and still print the new one and exit 0.
 pane_for_role() {  # $1=adsb|status|squelch
-    tm list-panes -t "=$SESSION:cockpit" -F '#{@kcgx_role} #{pane_id}' |
-        awk -v role="$1" '$1 == role { print $2; exit }'
+    local id
+    id="$(tm list-panes -t "=$SESSION:cockpit" -F '#{@kcgx_role} #{pane_id}' |
+        awk -v role="$1" '$1 == role { print $2; exit }')"
+    [ -n "$id" ] ||
+        die "this cockpit has no $1 pane. It was built before kcgx tagged its" \
+            "panes by role; restart it with: kcgx stop, then kcgx"
+    printf '%s' "$id"
 }
 
 retarget() {  # $1=icao $2=lat $3=lon
-    tm respawn-pane -k -t "$(pane_for_role adsb)" "$(adsb_cmd "$2" "$3")"
-    tm respawn-pane -k -t "$(pane_for_role squelch)" "$(squelch_cmd "$1")"
+    local adsb_target squelch_target
+    # Assign, don't inline. `die` inside "$( )" exits only the subshell, and a
+    # failing substitution in *argument* position does not trip `set -e` -- so
+    # `respawn-pane -t "$(pane_for_role adsb)"` would print the message and
+    # carry on with an empty target, which is the exact bug being guarded
+    # against. An assignment's status is the substitution's, so these abort.
+    # It must stay a bare declaration plus assignment, too: `local x="$(...)"`
+    # would not abort, because `local` supplies its own exit status and masks
+    # the substitution's.
+    #
+    # Both are resolved before either is respawned, so a cockpit missing one
+    # role cannot be left half-moved -- radar on the new airport, audio on the
+    # old, which is indistinguishable from the failure this prevents.
+    adsb_target="$(pane_for_role adsb)"
+    squelch_target="$(pane_for_role squelch)"
+    tm respawn-pane -k -t "$adsb_target" "$(adsb_cmd "$2" "$3")"
+    tm respawn-pane -k -t "$squelch_target" "$(squelch_cmd "$1")"
 }
 
 usage() {
@@ -225,7 +252,11 @@ case "${1:-}" in
         # Clicking the status pane makes it tmux's active pane, so without
         # this the arrow keys would drive the status pane instead of
         # squelch's feed list. Also fixes `Ctrl-b a` pressed from adsb-tui.
-        tm select-pane -t "$(pane_for_role squelch)"
+        # Assigned rather than inlined for the reason retarget spells out:
+        # inlined, an unresolvable role would print its message and leave
+        # `select-pane -t ""` to quietly pick the active pane instead.
+        squelch_target="$(pane_for_role squelch)"
+        tm select-pane -t "$squelch_target"
         printf 'kcgx: %s — %s\n' "$ICAO" "$LABEL"
         exit 0
         ;;
