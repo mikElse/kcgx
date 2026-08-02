@@ -22,14 +22,20 @@ pytestmark = pytest.mark.skipif(
     shutil.which("tmux") is None, reason="tmux is not installed"
 )
 
-# Stand-ins that sit still and exit cleanly when killed.
-FAKE_ADSB = "sleep 300"
-FAKE_SQUELCH = "sleep 300"
+# Stand-ins that sit still and exit cleanly when killed. `sh -c` is what
+# makes them tolerate the flags kcgx now appends: the extra words land in
+# $0/$1/... and are ignored.
+FAKE_ADSB = "sh -c 'sleep 300'"
+FAKE_SQUELCH = "sh -c 'sleep 300'"
 
 
 @pytest.fixture
 def cockpit():
-    """Give each test its own tmux socket and session, and tear both down."""
+    """Give each test its own tmux socket and session, and tear both down.
+
+    Yields `(run, tmux, session)`. The socket name hangs off `run.socket`
+    for the few tests that need to plant something on the socket first.
+    """
     socket = f"kcgx-test-{uuid.uuid4().hex[:8]}"
     session = f"kcgx-test-{uuid.uuid4().hex[:8]}"
 
@@ -65,26 +71,24 @@ def cockpit():
             timeout=30,
         )
 
-    run.tmux = tmux
-    run.session = session
     run.socket = socket
-    yield run
+    yield run, tmux, session
 
     subprocess.run(
         ["tmux", "-L", socket, "kill-server"], capture_output=True, timeout=30
     )
 
 
-def panes(cockpit, fmt):
-    result = cockpit.tmux("list-panes", "-t", f"={cockpit.session}:cockpit", "-F", fmt)
+def panes(tmux, session, fmt):
+    result = tmux("list-panes", "-t", f"={session}:cockpit", "-F", fmt)
     assert result.returncode == 0, result.stderr
     return result.stdout.strip().splitlines()
 
 
-def pane_field(cockpit, field):
+def pane_field(tmux, session, field):
     """Map pane index -> field value. Handles panes whose field is empty."""
     out = {}
-    for line in panes(cockpit, "#{pane_index}\t#{" + field + "}"):
+    for line in panes(tmux, session, "#{pane_index}\t#{" + field + "}"):
         index, _, value = line.partition("\t")
         out[int(index)] = value.strip()
     return out
@@ -95,29 +99,33 @@ def test_launcher_is_executable():
 
 
 def test_builds_three_panes(cockpit):
-    assert cockpit().returncode == 0
-    assert len(panes(cockpit, "#{pane_index}")) == 3
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+    assert len(panes(tmux, session, "#{pane_index}")) == 3
 
 
 def test_squelch_column_is_exactly_48_wide(cockpit):
     """48 is squelch's design width; narrower and its header truncates."""
-    cockpit()
-    widths = {i: int(v) for i, v in pane_field(cockpit, "pane_width").items()}
+    run, tmux, session = cockpit
+    run()
+    widths = {i: int(v) for i, v in pane_field(tmux, session, "pane_width").items()}
     assert widths[1] == 48, f"squelch pane is {widths[1]} columns, want 48"
     assert widths[2] == 48, f"shell pane is {widths[2]} columns, want 48"
     assert widths[0] > 48, "adsb-tui should get the remaining width"
 
 
 def test_shell_pane_is_short_so_squelch_keeps_the_column(cockpit):
-    cockpit()
-    heights = {i: int(v) for i, v in pane_field(cockpit, "pane_height").items()}
+    run, tmux, session = cockpit
+    run()
+    heights = {i: int(v) for i, v in pane_field(tmux, session, "pane_height").items()}
     assert heights[2] == 12, f"shell pane is {heights[2]} rows, want 12"
     assert heights[1] > heights[2], "squelch should get more height than the shell"
 
 
 def test_commands_land_in_the_right_panes(cockpit):
-    cockpit()
-    commands = pane_field(cockpit, "pane_start_command")
+    run, tmux, session = cockpit
+    run()
+    commands = pane_field(tmux, session, "pane_start_command")
     # tmux reports the start command quoted.
     assert FAKE_ADSB in commands[0]
     assert FAKE_SQUELCH in commands[1]
@@ -126,27 +134,32 @@ def test_commands_land_in_the_right_panes(cockpit):
 
 def test_second_invocation_attaches_instead_of_duplicating(cockpit):
     """squelch keeps its transcript; you don't pay the model load twice."""
-    assert cockpit().returncode == 0
-    first = panes(cockpit, "#{pane_id}")
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+    first = panes(tmux, session, "#{pane_id}")
 
-    assert cockpit().returncode == 0
-    assert panes(cockpit, "#{pane_id}") == first, "panes were rebuilt, not reattached"
+    assert run().returncode == 0
+    assert panes(tmux, session, "#{pane_id}") == first, (
+        "panes were rebuilt, not reattached"
+    )
 
-    sessions = cockpit.tmux("list-sessions", "-F", "#{session_name}")
-    assert sessions.stdout.count(cockpit.session) == 1
+    sessions = tmux("list-sessions", "-F", "#{session_name}")
+    assert sessions.stdout.count(session) == 1
 
 
 def test_refuses_a_terminal_too_narrow_to_be_useful(cockpit):
-    result = cockpit(size="80x50")
+    run, tmux, session = cockpit
+    result = run(size="80x50")
     assert result.returncode != 0
     assert "80 columns" in result.stderr
     assert "at least 100" in result.stderr
-    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode != 0
+    assert tmux("has-session", "-t", f"={session}").returncode != 0
 
 
 def test_narrow_terminal_message_names_squelch_width(cockpit):
     """The error should say why 100, not just assert it."""
-    assert "48" in cockpit(size="80x50").stderr
+    run, _tmux, _session = cockpit
+    assert "48" in run(size="80x50").stderr
 
 
 def test_config_applies_even_when_a_tmux_server_is_already_running(cockpit):
@@ -157,38 +170,42 @@ def test_config_applies_even_when_a_tmux_server_is_already_running(cockpit):
     test uses a private socket and therefore always got a fresh server, which
     is exactly why the suite missed this.
     """
+    run, tmux, _session = cockpit
     pre = subprocess.run(
-        ["tmux", "-L", cockpit.socket, "new-session", "-d", "-s", "pre", "sleep 60"],
+        ["tmux", "-L", run.socket, "new-session", "-d", "-s", "pre", "sleep 60"],
         capture_output=True,
         text=True,
         timeout=30,
     )
     assert pre.returncode == 0, pre.stderr
 
-    assert cockpit().returncode == 0
-    assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
-    assert "on" in cockpit.tmux("show-options", "-g", "remain-on-exit").stdout
+    assert run().returncode == 0
+    assert tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
+    assert "on" in tmux("show-options", "-g", "remain-on-exit").stdout
 
 
 def test_config_is_reapplied_so_edits_take_effect_without_killing_the_server(cockpit):
     """Editing kcgx.tmux.conf should not require killing a running server."""
-    assert cockpit().returncode == 0
-    cockpit.tmux("set-option", "-g", "mouse", "off")
-    assert cockpit().returncode == 0  # reattach path
-    assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
+    run, tmux, _session = cockpit
+    assert run().returncode == 0
+    tmux("set-option", "-g", "mouse", "off")
+    assert run().returncode == 0  # reattach path
+    assert tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
 
 
 def test_session_config_enables_mouse(cockpit):
     """Mouse mode is the feature; verify the config actually reached tmux."""
-    cockpit()
-    result = cockpit.tmux("show-options", "-g", "mouse")
+    run, tmux, _session = cockpit
+    run()
+    result = tmux("show-options", "-g", "mouse")
     assert result.stdout.split() == ["mouse", "on"], result.stdout
 
 
 def test_session_config_keeps_dead_panes_visible(cockpit):
-    result_setup = cockpit()
+    run, tmux, _session = cockpit
+    result_setup = run()
     assert result_setup.returncode == 0
-    result = cockpit.tmux("show-options", "-g", "remain-on-exit")
+    result = tmux("show-options", "-g", "remain-on-exit")
     assert "on" in result.stdout, result.stdout
 
 
@@ -199,7 +216,8 @@ def test_says_there_is_no_terminal_rather_than_inventing_a_width(cockpit):
     window was 222 wide. Without a terminal there is also nothing to attach
     to, so the honest answer is to say that.
     """
-    result = cockpit(size=None)
+    run, _tmux, _session = cockpit
+    result = run(size=None)
     assert result.returncode != 0
     assert "80 columns" not in result.stderr, (
         "reported a fabricated width instead of admitting there is no terminal: "
@@ -218,10 +236,11 @@ def test_accepts_a_real_wide_terminal(cockpit):
     import struct
     import termios
 
+    run, tmux, session = cockpit
     env = {
         **os.environ,
-        "KCGX_SOCKET": cockpit.socket,
-        "KCGX_SESSION": cockpit.session,
+        "KCGX_SOCKET": run.socket,
+        "KCGX_SESSION": session,
         "KCGX_DETACHED": "1",
         "KCGX_ADSB_CMD": FAKE_ADSB,
         "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
@@ -261,7 +280,7 @@ def test_accepts_a_real_wide_terminal(cockpit):
 
     assert os.waitstatus_to_exitcode(status) == 0, text
     assert "80 columns" not in text
-    widths = {i: int(v) for i, v in pane_field(cockpit, "pane_width").items()}
+    widths = {i: int(v) for i, v in pane_field(tmux, session, "pane_width").items()}
     assert widths[0] + widths[1] + 1 == 222, f"session not sized to the pty: {widths}"
     assert widths[1] == 48
 
@@ -273,16 +292,18 @@ def test_attach_path_runs_tmux_rather_than_a_shell_function(cockpit):
     Run without a tty so tmux refuses to attach — a *tmux* failure is fine and
     expected here; a shell "not found" is the bug.
     """
-    assert cockpit().returncode == 0  # build the session first
-    result = cockpit(detached=False)
+    run, _tmux, _session = cockpit
+    assert run().returncode == 0  # build the session first
+    result = run(detached=False)
     assert "not found" not in result.stderr, result.stderr
     assert "tm:" not in result.stderr, result.stderr
 
 
 def test_switch_client_path_runs_tmux_rather_than_a_shell_function(cockpit):
     """Same bug on the other branch: running kcgx from inside tmux."""
-    assert cockpit().returncode == 0
-    result = cockpit(detached=False, TMUX="/tmp/fake-tmux-socket,1234,0")
+    run, _tmux, _session = cockpit
+    assert run().returncode == 0
+    result = run(detached=False, TMUX="/tmp/fake-tmux-socket,1234,0")
     assert "not found" not in result.stderr, result.stderr
     assert "tm:" not in result.stderr, result.stderr
 
@@ -294,73 +315,81 @@ def test_works_when_invoked_through_a_symlink(cockpit, tmp_path):
     ~/kcgx.tmux.conf. Every other test invokes the launcher by its real path,
     which is precisely why the suite missed it.
     """
+    run, tmux, session = cockpit
     link = tmp_path / "kcgx"
     link.symlink_to(LAUNCHER)
 
-    result = cockpit(launcher=link)
+    result = run(launcher=link)
     assert result.returncode == 0, result.stderr
     assert "No such file" not in result.stderr, result.stderr
-    assert len(panes(cockpit, "#{pane_index}")) == 3
+    assert len(panes(tmux, session, "#{pane_index}")) == 3
 
 
 def test_symlinked_invocation_still_applies_the_config(cockpit, tmp_path):
     """The config path is derived from the same resolution, so prove it too."""
+    run, tmux, _session = cockpit
     link = tmp_path / "kcgx"
     link.symlink_to(LAUNCHER)
 
-    assert cockpit(launcher=link).returncode == 0
-    assert cockpit.tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
+    assert run(launcher=link).returncode == 0
+    assert tmux("show-options", "-g", "mouse").stdout.split() == ["mouse", "on"]
 
 
 def test_stop_kills_a_running_cockpit(cockpit):
-    assert cockpit().returncode == 0
-    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode == 0
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+    assert tmux("has-session", "-t", f"={session}").returncode == 0
 
-    result = cockpit(args=("stop",))
+    result = run(args=("stop",))
     assert result.returncode == 0, result.stderr
-    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode != 0
+    assert tmux("has-session", "-t", f"={session}").returncode != 0
 
 
 def test_stop_is_idempotent_when_nothing_is_running(cockpit):
     """Stopping an already-stopped cockpit is not an error."""
-    result = cockpit(args=("stop",))
+    run, _tmux, _session = cockpit
+    result = run(args=("stop",))
     assert result.returncode == 0, result.stderr
     assert "not running" in (result.stdout + result.stderr).lower()
 
 
 def test_stop_leaves_other_tmux_sessions_alone(cockpit):
     """It must kill our session, not the tmux server — you may have others."""
+    run, tmux, session = cockpit
     other = subprocess.run(
-        ["tmux", "-L", cockpit.socket, "new-session", "-d", "-s", "keepme", "sleep 60"],
+        ["tmux", "-L", run.socket, "new-session", "-d", "-s", "keepme", "sleep 60"],
         capture_output=True,
         text=True,
         timeout=30,
     )
     assert other.returncode == 0, other.stderr
-    assert cockpit().returncode == 0
+    assert run().returncode == 0
 
-    assert cockpit(args=("stop",)).returncode == 0
-    assert cockpit.tmux("has-session", "-t", f"={cockpit.session}").returncode != 0
-    assert cockpit.tmux("has-session", "-t", "=keepme").returncode == 0
+    assert run(args=("stop",)).returncode == 0
+    assert tmux("has-session", "-t", f"={session}").returncode != 0
+    assert tmux("has-session", "-t", "=keepme").returncode == 0
 
 
 def test_stop_does_not_need_a_terminal(cockpit):
     """Unlike launching, stopping has nothing to attach to."""
-    assert cockpit().returncode == 0
-    result = cockpit(args=("stop",), size=None, detached=False)
+    run, _tmux, _session = cockpit
+    assert run().returncode == 0
+    result = run(args=("stop",), size=None, detached=False)
     assert result.returncode == 0, result.stderr
     assert "terminal" not in result.stderr.lower()
 
 
 def test_unknown_subcommand_is_rejected_with_usage(cockpit):
-    result = cockpit(args=("frobnicate",))
+    run, _tmux, _session = cockpit
+    result = run(args=("frobnicate",))
     assert result.returncode != 0
     assert "frobnicate" in result.stderr
     assert "stop" in result.stderr, "should show what it does accept"
 
 
 def test_help_lists_the_subcommands(cockpit):
-    result = cockpit(args=("--help",))
+    run, _tmux, _session = cockpit
+    result = run(args=("--help",))
     assert result.returncode == 0, result.stderr
     combined = result.stdout + result.stderr
     assert "stop" in combined
@@ -386,3 +415,154 @@ def test_reports_missing_tmux_with_an_actionable_message(tmp_path):
     assert result.returncode != 0
     assert "tmux not found" in result.stderr
     assert "brew install tmux" in result.stderr
+
+
+# -- airport retargeting ---------------------------------------------------
+
+
+AIRPORT_STUB = """#!/bin/sh
+# Stand-in for kcgx-airport. Writes a fixed record wherever --out points.
+mode="$1"; shift
+record="$KCGX_TEST_RECORD"
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ -n "$KCGX_TEST_FAIL" ] && exit "$KCGX_TEST_FAIL"
+if [ -n "$out" ]; then printf '%s\\n' "$record" > "$out"; else printf '%s\\n' "$record"; fi
+"""
+
+
+@pytest.fixture
+def airport_stub(tmp_path):
+    path = tmp_path / "kcgx-airport-stub"
+    path.write_text(AIRPORT_STUB)
+    path.chmod(0o755)
+    return path
+
+
+def pane_command(tmux, session, index):
+    return tmux(
+        "display-message", "-p", "-t", f"={session}:cockpit.{index}",
+        "#{pane_start_command}",
+    ).stdout.strip()
+
+
+def test_launch_points_both_panes_at_the_resolved_airport(
+    cockpit, airport_stub
+):
+    run, tmux, session = cockpit
+    run(
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KORD\t41.9786\t-87.9048\tChicago O'Hare",
+    )
+    adsb = pane_command(tmux, session, 0)
+    squelch = pane_command(tmux, session, 1)
+    assert "--site-lat 41.9786" in adsb
+    assert "--site-lon -87.9048" in adsb
+    assert "--icao KORD" in squelch
+
+
+def test_go_moves_both_panes_to_the_new_airport(cockpit, airport_stub):
+    run, tmux, session = cockpit
+    run(
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    assert "--site-lat 45.5887" in pane_command(tmux, session, 0)
+
+    result = run(
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KSEA\t47.4479\t-122.3102\tSeattle-Tacoma",
+    )
+    assert result.returncode == 0, result.stderr
+
+    adsb = pane_command(tmux, session, 0)
+    squelch = pane_command(tmux, session, 1)
+    assert "--site-lat 47.4479" in adsb and "--site-lon -122.3102" in adsb
+    assert "--icao KSEA" in squelch
+    assert "45.5887" not in adsb, "the old airport is still on screen"
+
+
+def test_launch_and_go_build_the_same_command(cockpit, airport_stub):
+    """The two paths must not drift; that is how three earlier bugs happened."""
+    run, tmux, session = cockpit
+    record = "KSEA\t47.4479\t-122.3102\tSeattle-Tacoma"
+    run(KCGX_AIRPORT_CMD=str(airport_stub), KCGX_TEST_RECORD=record)
+    at_launch = (pane_command(tmux, session, 0), pane_command(tmux, session, 1))
+
+    run(args=("go",), KCGX_AIRPORT_CMD=str(airport_stub), KCGX_TEST_RECORD=record)
+    after_go = (pane_command(tmux, session, 0), pane_command(tmux, session, 1))
+
+    assert at_launch == after_go
+
+
+def test_a_cancelled_pick_leaves_the_cockpit_alone(cockpit, airport_stub):
+    run, tmux, session = cockpit
+    run(
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    before = pane_command(tmux, session, 0)
+
+    result = run(
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="unused",
+        KCGX_TEST_FAIL="1",
+    )
+    assert result.returncode == 0, "cancelling is not an error"
+    assert pane_command(tmux, session, 0) == before
+
+
+def test_go_reports_a_failed_search_instead_of_calling_it_a_cancel(
+    cockpit, airport_stub
+):
+    """Exit 1 means the user declined; anything else is a real failure.
+
+    Both leave the cockpit alone, but a failure that says nothing is
+    indistinguishable from pressing escape, and the user is left thinking
+    the search worked and their airport simply wasn't found.
+    """
+    run, tmux, session = cockpit
+    run(
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="KPDX\t45.5887\t-122.598\tPortland International",
+    )
+    before = pane_command(tmux, session, 0)
+
+    result = run(
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="unused",
+        KCGX_TEST_FAIL="2",
+    )
+    assert result.returncode != 0
+    assert result.stderr.strip(), "a silent failure reads exactly like a cancel"
+    assert pane_command(tmux, session, 0) == before, "and still change nothing"
+
+
+def test_go_without_a_running_cockpit_says_so(cockpit, airport_stub):
+    run, _tmux, _session = cockpit
+    result = run(args=("go",), KCGX_AIRPORT_CMD=str(airport_stub),
+                 KCGX_TEST_RECORD="KSEA\t47.4\t-122.3\tSeattle")
+    assert result.returncode != 0
+    assert "not running" in result.stderr.lower()
+
+
+def test_a_broken_resolver_still_opens_the_cockpit(cockpit, airport_stub):
+    """A Python-side failure must not cost you the traffic display."""
+    run, tmux, session = cockpit
+    result = run(
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_RECORD="unused",
+        KCGX_TEST_FAIL="2",
+    )
+    assert result.returncode == 0
+    adsb = pane_command(tmux, session, 0)
+    assert "--site-lat" not in adsb, "no coordinates means fall back to its config"
+    assert "sleep 300" in adsb
