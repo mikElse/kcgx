@@ -214,8 +214,16 @@ class SquelchApp(App):
         self._history.append(dbfs)
         self._refresh_meter()
 
+    # Pipeline-reported states ("live"/"reconnecting") are not the only
+    # states the header needs to show truthfully: Task 9's startup path
+    # calls set_state("offline") when the feed could not be resolved at
+    # all, so the header never claims "● LIVE" while nothing is actually
+    # playing. Anything not in this map still falls back to "LIVE", which
+    # matches every state the Pipeline itself ever reports.
+    _STATE_LABELS = {"reconnecting": "RECONNECTING", "offline": "OFFLINE"}
+
     def set_state(self, state: str) -> None:
-        self._state = "RECONNECTING" if state == "reconnecting" else "LIVE"
+        self._state = self._STATE_LABELS.get(state, "LIVE")
         self._refresh_header()
 
     # -- actions -----------------------------------------------------

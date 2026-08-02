@@ -48,14 +48,26 @@ uv run squelch --icao KSEA           # override the airport used by the feed pic
 ```
 
 **First run downloads the ASR model** (roughly 1.5 GB of CTranslate2
-weights) before transcription starts; this can take several minutes on a
-slow connection. Audio playback does not wait on this — if you want to
-listen immediately, ignore the transcript pane until it fills in. Inference
-itself runs on CPU (CTranslate2 has no Metal backend), so expect a few
-seconds of lag between a transmission ending and its transcript appearing.
+weights) before anything else starts — including audio. Model loading
+happens synchronously, before playback and before the stream is even
+resolved, so on a first run (or a slow connection) the pane will sit quiet
+for however long the download and load take, easily several minutes. This
+is not a hang: squelch prints a message in the transcript pane before it
+starts loading, telling you this is expected, and another once loading
+finishes (or fails and falls back to audio-only). Once the model is
+cached, subsequent runs load it in a few seconds. Inference itself runs on
+CPU (CTranslate2 has no Metal backend), so expect a few seconds of lag
+between a transmission ending and its transcript appearing even after
+startup.
 
 If you resize your terminal, note the UI is laid out for exactly 48×42 and
 does not reflow past that.
+
+The header's `●` indicator is always truthful about playback: `LIVE` while
+streaming normally, `RECONNECTING` while the audio process is being
+respawned after a dropout, and `OFFLINE` if the configured feed could not
+be resolved at all (in which case a warning also appears in the transcript
+pane explaining why).
 
 ## Configuration
 
@@ -110,3 +122,10 @@ pane instead of a crash.
 - No transcript logging to disk, no in-pane search or scrollback.
 - No speaker labelling.
 - Inference is CPU-bound; there is no Metal/GPU acceleration path today.
+- Model loading is synchronous and blocks audio startup (see "Running it"
+  above). The better long-term design is to load the model in the
+  background and hot-swap it into the running pipeline once ready, so
+  audio can start immediately regardless of model load time — deliberately
+  not built in this version, to avoid adding that machinery at the very
+  end of the initial build. The pane tells you what's happening in the
+  meantime instead.
