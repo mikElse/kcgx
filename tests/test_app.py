@@ -50,16 +50,36 @@ def make_app(n=3, **kwargs):
     return SquelchApp(Config(icao="KPDX", feed="kpdx3_twr"), sessions(n, **kwargs))
 
 
+PANE_WIDTH = SIZE[0]
+
+
 def rendered(app):
     """Capture what is actually painted.
 
     Must use the compositor, not screen.render_lines(): in Textual 8.2.8 a
     container's render() returns Blank and children are painted separately,
     so render_lines() reports blank fill for every child widget — which
-    would make the width assertions below pass vacuously.
+    would make the content assertions below pass vacuously.
     """
     strips = app.screen._compositor.render_strips(Size(*SIZE))
     return [s.text for s in strips], strips
+
+
+def overflowing(app):
+    """Widgets laid out wider than squelch's 48-column pane.
+
+    Overflow is invisible to the compositor: render_strips() clips every
+    strip to the screen width, so `all(s.cell_length == 48 ...)` only
+    restates the size passed to run_test(). Appending `#feeds { width: 200; }`
+    to squelch.tcss — a gross overflow of the pane — leaves every such
+    assertion green. A widget that does not fit shows up in its own size,
+    not in what gets painted.
+    """
+    return [
+        (widget.__class__.__name__, widget.id, widget.outer_size.width)
+        for widget in app.screen.query("*")
+        if widget.outer_size.width > PANE_WIDTH
+    ]
 
 
 # -- meter -----------------------------------------------------------------
@@ -108,7 +128,7 @@ async def test_layout_fits_48_columns_at_any_feed_count(count):
     async with app.run_test(size=SIZE):
         _text, strips = rendered(app)
         assert len(strips) == 42
-        assert all(s.cell_length == 48 for s in strips)
+        assert overflowing(app) == []
 
 
 @pytest.mark.asyncio
@@ -118,8 +138,8 @@ async def test_long_names_and_idents_truncate_visibly():
     )
     app = SquelchApp(Config(icao="KPDX"), [session])
     async with app.run_test(size=SIZE):
-        text, strips = rendered(app)
-        assert all(s.cell_length == 48 for s in strips)
+        text, _strips = rendered(app)
+        assert overflowing(app) == []
         joined = "\n".join(text)
         assert "…" in joined, "a real cut must be marked, not silently clipped"
 
@@ -254,8 +274,7 @@ async def test_selection_scrolls_a_feed_past_the_viewport_into_view():
         assert last.feed.ident in joined, (
             "the selection moved to a feed that was never scrolled into view"
         )
-        _text, strips = rendered(app)
-        assert all(s.cell_length == 48 for s in strips)
+        assert overflowing(app) == []
 
 
 # -- messages --------------------------------------------------------------
@@ -290,8 +309,8 @@ async def test_messages_do_not_squeeze_the_feeds_off_screen():
         for i in range(40):
             app.warn(f"message {i}")
         await pilot.pause()
-        text, strips = rendered(app)
-        assert all(s.cell_length == 48 for s in strips)
+        text, _strips = rendered(app)
+        assert overflowing(app) == []
         assert any("Tower (Both)" in line for line in text), (
             "warnings pushed every feed out of the pane"
         )
@@ -331,8 +350,7 @@ async def test_an_empty_feed_list_does_not_crash_the_pane():
         await pilot.press("down")
         await pilot.press("space")
         await pilot.pause()
-        _text, strips = rendered(app)
-        assert all(s.cell_length == 48 for s in strips)
+        assert overflowing(app) == []
 
 
 @pytest.mark.asyncio
