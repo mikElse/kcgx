@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import threading
 from collections.abc import Callable
 from dataclasses import replace
+from typing import Any
 
 from squelch.app import SquelchApp
 from squelch.asr import Transcript, WhisperTranscriber
 from squelch.audio import Player, StreamReader
-from squelch.config import Config, load_config
-from squelch.feeds import fetch_feeds, resolve_stream
+from squelch.config import Config, ConfigError, load_config
+from squelch.feeds import Feed, fetch_feeds, resolve_stream
 from squelch.pipeline import Events, Pipeline
 from squelch.vad import Segmenter
+
+MODEL_LOADING = (
+    "loading transcription model — first run downloads roughly "
+    "1.5 GB and can take several minutes"
+)
+FFMPEG_MISSING = (
+    "ffmpeg not found on PATH — squelch decodes the feed with it. "
+    "Install it (macOS: brew install ffmpeg) and start squelch again."
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -47,68 +58,79 @@ class _NullTranscriber:
         return Transcript(text="", avg_logprob=0.0)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    config = load_config()
-    if args.feed:
-        config = replace(config, feed=args.feed)
-    if args.icao:
-        config = replace(config, icao=args.icao)
+def safe_call(app: Any, func: Callable[..., None], *args: Any) -> None:
+    """Marshal onto the UI thread without ever raising back onto ours.
 
-    app = SquelchApp(
-        config,
-        feed_label=config.feed,
-        feed_loader=lambda: fetch_feeds(config.icao),
-    )
+    Unlike the `Events` callbacks -- which route through `Pipeline._emit`'s
+    own exception-swallowing wrapper -- calls made directly from this module
+    (`warn()`, and the state signals) have no such guard. If the app is not
+    running by the time one of these fires (already quit, or not yet
+    started), `call_from_thread` raises `RuntimeError("App is not
+    running")`. That's harmless -- there is nobody to tell -- but left
+    uncaught it would kill the pipeline thread with a stray traceback.
+    """
+    try:
+        app.call_from_thread(func, *args)
+    except Exception:
+        pass
 
-    player = Player()
-    transcriber = WhisperTranscriber(config.model, compute_type=config.compute_type)
-    app.on_mute_change = lambda muted: setattr(player, "muted", muted)
 
-    events = Events(
-        on_level=lambda d: app.call_from_thread(app.set_level, d),
-        on_pending=lambda: app.call_from_thread(app.mark_pending),
-        on_block=lambda b: app.call_from_thread(app.add_block, b),
-        on_state=lambda s: app.call_from_thread(app.set_state, s),
-        on_dropped=lambda: app.call_from_thread(app.mark_dropped),
-    )
+def feed_selection_hint(feed: Feed) -> str:
+    """What to tell the user when they pick a feed from the overlay.
 
-    def _safe_call(func: Callable[..., None], *call_args) -> None:
-        """Marshal onto the UI thread without ever raising back onto ours.
+    Switching the live stream in place is out of scope for v1, but a picker
+    that silently does nothing is worse than no picker: it reads as a bug.
+    Naming the ident and the exact flag turns a dead end into an instruction.
+    """
+    return f"selected {feed.ident} — restart with: squelch --feed {feed.ident}"
 
-        Unlike the five `Events` callbacks above -- which route through
-        `Pipeline._emit`'s own exception-swallowing wrapper -- calls made
-        directly from this module (`warn()`, and the offline-state signal
-        below) have no such guard. If the app has already quit by the time
-        one of these fires (e.g. `try_start`'s `on_error`, or feed
-        resolution failing right as the user hits `q`), `call_from_thread`
-        raises `RuntimeError("App is not running")`. That's harmless --
-        there is nobody left to warn -- but left uncaught it would kill
-        this background thread with a stray traceback: the same hazard
-        class hardened against in the Pipeline itself (Task 6).
-        """
+
+def build_pipeline_runner(
+    config: Config,
+    *,
+    warn: Callable[[str], None],
+    set_state: Callable[[str], None],
+    player: Any,
+    transcriber: Any,
+    events: Events,
+    resolve: Callable[[str], str] = resolve_stream,
+    reader_factory: Callable[..., Any] = StreamReader,
+    segmenter_factory: Callable[..., Any] = Segmenter,
+    pipeline_factory: Callable[..., Any] = Pipeline,
+    which: Callable[[str], str | None] = shutil.which,
+) -> Callable[[], None]:
+    """Build the callable that runs on the background pipeline thread.
+
+    Every collaborator is injectable because this function is the whole of
+    squelch's wiring and it runs on a daemon thread, where an unhandled
+    exception is invisible: the thread dies, nothing is printed, and the
+    pane sits at its last state with an empty transcript forever.
+    """
+
+    def run() -> None:
         try:
-            app.call_from_thread(func, *call_args)
-        except Exception:
-            pass
+            _run()
+        except Exception as exc:
+            # Everything below the feed-resolution step used to be
+            # unguarded: a bad vad_aggressiveness (ValueError from
+            # webrtcvad), a missing ffmpeg (FileNotFoundError from Popen),
+            # or a read error on the ffmpeg pipe (OSError) all killed this
+            # thread in silence.
+            warn(f"stopped: {type(exc).__name__}: {exc}")
+            set_state("offline")
 
-    def warn(message: str) -> None:
-        _safe_call(app.warn, message)
+    def _run() -> None:
+        if which("ffmpeg") is None:
+            warn(FFMPEG_MISSING)
+            set_state("offline")
+            return
 
-    def run_pipeline() -> None:
         # The model load below is synchronous and blocking: nothing else in
         # this function -- including player.start(), so audio itself --
         # runs until it returns. On a first run that's a ~1.5 GB download
         # plus load, i.e. several minutes of an apparently dead pane if the
-        # user isn't told why. Surfacing that expectation, and its outcome,
-        # is deliberately the only change made here: backgrounding the load
-        # and hot-swapping the transcriber once ready would be the better
-        # long-term fix, but is more machinery than this final task should
-        # introduce (see README's "Known limitations").
-        warn(
-            "loading transcription model — first run downloads roughly "
-            "1.5 GB and can take several minutes"
-        )
+        # user isn't told why.
+        warn(MODEL_LOADING)
         active = transcriber
         if try_start(transcriber.load, warn, "model unavailable — audio only"):
             warn("transcription model ready")
@@ -117,25 +139,91 @@ def main(argv: list[str] | None = None) -> int:
         try_start(player.start, warn, "no audio device — transcribing only")
 
         try:
-            url = resolve_stream(config.feed)
+            url = resolve(config.feed)
         except Exception:
-            warn(f"could not resolve feed {config.feed}")
+            warn(
+                f"could not resolve feed {config.feed} — check the ident "
+                "(press [f] to list this airport's feeds)"
+            )
             # The header must not keep claiming "● LIVE" once nothing is
             # actually playing -- see set_state's "offline" entry.
-            _safe_call(app.set_state, "offline")
+            set_state("offline")
             return
 
-        Pipeline(
-            StreamReader(url),
-            Segmenter(aggressiveness=config.vad_aggressiveness),
+        pipeline_factory(
+            reader_factory(url),
+            segmenter_factory(aggressiveness=config.vad_aggressiveness),
             active,
             player,
             events,
         ).run()
 
-    threading.Thread(target=run_pipeline, daemon=True).start()
-    app.run()
-    player.stop()
+    return run
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    app_factory: Callable[..., Any] = SquelchApp,
+    runner_factory: Callable[..., Callable[[], None]] = build_pipeline_runner,
+) -> int:
+    args = parse_args(argv)
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        # Before the UI exists, so this is the one place a plain stderr
+        # message beats a transcript warning.
+        print(f"squelch: {exc}", file=sys.stderr)
+        return 2
+    if args.feed:
+        config = replace(config, feed=args.feed)
+    if args.icao:
+        config = replace(config, icao=args.icao)
+
+    app = app_factory(
+        config,
+        feed_label=config.feed,
+        feed_loader=lambda: fetch_feeds(config.icao),
+    )
+
+    player = Player()
+    transcriber = WhisperTranscriber(config.model, compute_type=config.compute_type)
+    app.on_mute_change = lambda muted: setattr(player, "muted", muted)
+    # Runs on the UI thread (the picker's dismiss callback), so no marshalling.
+    app.on_feed_selected = lambda feed: app.warn(feed_selection_hint(feed))
+
+    events = Events(
+        on_level=lambda d: app.call_from_thread(app.set_level, d),
+        on_pending=lambda: app.call_from_thread(app.mark_pending),
+        on_block=lambda b: app.call_from_thread(app.add_block, b),
+        on_state=lambda s: app.call_from_thread(app.set_state, s),
+        on_dropped=lambda: app.call_from_thread(app.mark_dropped),
+        on_blank=lambda: app.call_from_thread(app.mark_blank),
+    )
+
+    runner = runner_factory(
+        config,
+        warn=lambda message: safe_call(app, app.warn, message),
+        set_state=lambda state: safe_call(app, app.set_state, state),
+        player=player,
+        transcriber=transcriber,
+        events=events,
+    )
+
+    # Started from on_mount, not here: the runner's first act is to warn
+    # about the model download, and a call_from_thread issued before
+    # App.run() has the loop up raises "App is not running" and is
+    # swallowed -- so on a first run the user watched a blank pane for
+    # minutes with no explanation.
+    app.on_start = lambda: threading.Thread(target=runner, daemon=True).start()
+
+    try:
+        app.run()
+    finally:
+        # Unconditional: an exception escaping the UI (e.g. a timer firing
+        # against an unmounted widget during teardown) must not leave the
+        # PortAudio stream open.
+        player.stop()
     return 0
 
 

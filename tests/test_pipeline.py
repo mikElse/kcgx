@@ -1,9 +1,12 @@
 import struct
 from datetime import datetime
 
+import pytest
+
 from squelch.asr import Transcript
-from squelch.pipeline import Block, Events, Pipeline
-from squelch.vad import FRAME_BYTES, Utterance
+from squelch.audio import StreamReader
+from squelch.pipeline import LEVEL_DECIMATION, Block, Events, Pipeline
+from squelch.vad import FRAME_BYTES, Utterance, rms_dbfs
 
 
 class FakeReader:
@@ -45,23 +48,69 @@ class FakeTranscriber:
         return Transcript(text=self.text, avg_logprob=-0.2)
 
 
+class CountingSegmenter:
+    """Never emits an utterance; just records what it was handed."""
+
+    def __init__(self):
+        self.fed = 0
+
+    def feed(self, frame):
+        assert isinstance(frame, bytes), (
+            "the segmenter must only ever see real audio frames, never a "
+            f"reconnect heartbeat: got {frame!r}"
+        )
+        self.fed += 1
+        return None
+
+    def flush(self):
+        return None
+
+
+class FakePopen:
+    """Stands in for a Popen with a readable stdout (no real ffmpeg)."""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.stdout = self
+
+    def read(self, n):
+        return self._chunks.pop(0) if self._chunks else b""
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 1
+
+
 class FakePlayer:
     def __init__(self):
         self.written = 0
         self.muted = False
 
     def write(self, pcm):
+        assert isinstance(pcm, bytes), (
+            f"only real audio frames may be written, got {pcm!r}"
+        )
         self.written += 1
 
 
 def collect_events():
-    got = {"levels": [], "blocks": [], "states": [], "pending": 0, "dropped": 0}
+    got = {
+        "levels": [],
+        "blocks": [],
+        "states": [],
+        "pending": 0,
+        "dropped": 0,
+        "blank": 0,
+    }
     return got, Events(
         on_level=lambda d: got["levels"].append(d),
         on_pending=lambda: got.__setitem__("pending", got["pending"] + 1),
         on_block=lambda b: got["blocks"].append(b),
         on_state=lambda s: got["states"].append(s),
         on_dropped=lambda: got.__setitem__("dropped", got["dropped"] + 1),
+        on_blank=lambda: got.__setitem__("blank", got["blank"] + 1),
     )
 
 
@@ -72,8 +121,16 @@ def loud_frame():
 def test_pipeline_emits_blocks_and_levels():
     frames = [loud_frame()] * 9
     got, events = collect_events()
+    # level_every=1 disables the meter decimation (see LEVEL_DECIMATION) so
+    # this test still sees one reading per frame; decimation itself is
+    # covered by test_level_updates_are_decimated_to_about_ten_hz.
     p = Pipeline(
-        FakeReader(frames), FakeSegmenter(), FakeTranscriber(), FakePlayer(), events
+        FakeReader(frames),
+        FakeSegmenter(),
+        FakeTranscriber(),
+        FakePlayer(),
+        events,
+        level_every=1,
     )
     p.run()
     assert len(got["blocks"]) == 3
@@ -81,6 +138,35 @@ def test_pipeline_emits_blocks_and_levels():
     assert got["blocks"][0].text == "cleared to land"
     assert len(got["levels"]) == 9
     assert got["pending"] == 3
+
+
+def test_level_updates_are_decimated_to_about_ten_hz():
+    """One reading per LEVEL_DECIMATION frames, holding the group's peak.
+
+    Regression test: the meter was driven at the raw 20 ms frame cadence
+    (50 Hz) into a 20-sample window, so the whole waveform turned over two
+    and a half times a second -- unreadable -- and every one of those
+    updates was a call_from_thread round trip billed to the audio thread.
+    """
+    quiet = struct.pack("<h", 30) * (FRAME_BYTES // 2)
+    # A single loud frame buried among quiet ones: the emitted reading must
+    # be the group's peak, so a short transient is not missed between
+    # samples.
+    frames = [quiet] * (LEVEL_DECIMATION - 1) + [loud_frame()]
+    frames = frames * 4
+    got, events = collect_events()
+    Pipeline(
+        FakeReader(frames), FakeSegmenter(), FakeTranscriber(), FakePlayer(), events
+    ).run()
+
+    assert len(got["levels"]) == 4, (
+        f"{len(frames)} frames at 1-in-{LEVEL_DECIMATION} decimation must "
+        f"produce 4 level updates, got {len(got['levels'])}"
+    )
+    assert all(level == pytest.approx(rms_dbfs(loud_frame())) for level in got["levels"]), (
+        "each emitted reading must be the loudest frame of its group, not "
+        "whichever frame happened to land on the boundary"
+    )
 
 
 def test_pipeline_feeds_player_every_frame():
@@ -92,7 +178,18 @@ def test_pipeline_feeds_player_every_frame():
     assert player.written == 6
 
 
-def test_empty_transcript_is_not_emitted_as_block():
+def test_empty_transcript_is_not_emitted_as_block_but_resolves_the_placeholder():
+    """A blank result must clear the "░ transcribing…" placeholder.
+
+    Regression test: the worker stayed silent when the text was blank, but
+    the placeholder mounted by on_pending is only ever taken down by
+    add_block or mark_dropped. So one blank transcription -- routine; a
+    squelch click transcribes to nothing -- stranded the placeholder
+    forever, and mark_pending's `if self._pending is not None: return`
+    guard then made every later utterance for the rest of the run a no-op.
+    In the degraded audio-only mode (_NullTranscriber returns "" for
+    everything) that happens on the very first transmission.
+    """
     got, events = collect_events()
     Pipeline(
         FakeReader([loud_frame()] * 3),
@@ -101,15 +198,62 @@ def test_empty_transcript_is_not_emitted_as_block():
         FakePlayer(),
         events,
     ).run()
-    assert got["blocks"] == []
+    assert got["blocks"] == [], "a blank result must not look like a transcript"
+    assert got["pending"] == 1
+    assert got["blank"] == 1, (
+        "the placeholder was mounted and never resolved -- every later "
+        "utterance would be silently suppressed"
+    )
 
 
-def test_reconnect_state_is_reported():
-    reader = FakeReader([loud_frame()] * 3)
-    reader.reconnecting = True
+def test_reconnect_state_is_reported_by_a_real_stream_reader():
+    """Drives a real StreamReader through a real reconnect.
+
+    The previous version of this test set `FakeReader.reconnecting = True`
+    permanently -- a state the real reader never occupies -- and so passed
+    against code that could never report the outage at all. The real
+    reader clears the flag on spawn and sets it only while waiting out the
+    backoff, a window in which it used to yield nothing whatsoever, so the
+    Pipeline (parked inside its `for` statement) had no opportunity to
+    observe it. No real ffmpeg and no real sleeping: `spawn` and `sleep`
+    are both injected.
+    """
+    connections = 3
+    remaining = [FakePopen([loud_frame()]) for _ in range(connections)]
+    holder: dict = {}
+
+    def spawn(url):
+        if remaining:
+            return remaining.pop(0)
+        # Out of scripted connections: end the run instead of looping
+        # forever, so the test cannot hang the suite.
+        holder["reader"].stop()
+        return FakePopen([])
+
+    reader = StreamReader("u", spawn=spawn, sleep=lambda s: None)
+    holder["reader"] = reader
+
     got, events = collect_events()
-    Pipeline(reader, FakeSegmenter(), FakeTranscriber(), FakePlayer(), events).run()
-    assert "reconnecting" in got["states"]
+    player = FakePlayer()
+    segmenter = CountingSegmenter()
+    Pipeline(reader, segmenter, FakeTranscriber(), player, events).run()
+
+    assert "reconnecting" in got["states"], (
+        f"the pipeline never observed the outage; states were {got['states']!r}"
+    )
+    assert got["states"][0] == "live"
+    assert "live" in got["states"][1:], "must return to live after reconnecting"
+    assert player.written == connections, (
+        "only real audio frames may reach the speaker -- a reconnect "
+        "heartbeat is the absence of a sample, not silence to play"
+    )
+    assert segmenter.fed == connections, (
+        "heartbeats must never be fed to the segmenter"
+    )
+    # Each 1.0 s backoff heartbeats four times and each heartbeat forces a
+    # level update, so the meter (and with it the pane) keeps moving
+    # through the outage instead of freezing on the last reading.
+    assert len(got["levels"]) >= 8
 
 
 def test_backpressure_drops_instead_of_blocking():
@@ -214,8 +358,15 @@ def test_flaky_level_callback_does_not_abort_audio_loop():
     events.on_level = flaky_on_level
     player = FakePlayer()
     frames = [loud_frame()] * 9
+    # level_every=1 so the callback is exercised on every frame rather than
+    # once per decimation group -- more chances to abort the loop, not fewer.
     Pipeline(
-        FakeReader(frames), FakeSegmenter(), FakeTranscriber(), player, events
+        FakeReader(frames),
+        FakeSegmenter(),
+        FakeTranscriber(),
+        player,
+        events,
+        level_every=1,
     ).run()
 
     assert player.written == 9
