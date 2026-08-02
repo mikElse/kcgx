@@ -155,3 +155,34 @@ class Compressor:
         np.add(ramp, self._applied, out=ramp)
         np.multiply(block, ramp, out=out[:n])
         self._applied = target_linear
+
+
+# The centre feed is phase-inverted and attenuated 6 dB, so an odd number of
+# ambient feeds does not pile a correlated signal up in the middle.
+CENTRE_GAIN = 10 ** (-6.0 / 20)
+
+
+def pan_positions(n: int) -> list[float]:
+    """Positions for `n` ambient feeds, spread left to right across +/-0.5."""
+    if n <= 0:
+        return []
+    half = n // 2
+    if half == 0:
+        # A single ambient feed. The formula below divides by `half`, so
+        # this case is handled here rather than relied upon to fall out.
+        return [0.0]
+    step = 0.5 / half
+    left = [-i * step for i in range(half, 0, -1)]
+    right = [i * step for i in range(1, half + 1)]
+    centre = [0.0] if n % 2 else []
+    return left + centre + right
+
+
+def pan_gains(position: float) -> tuple[float, float]:
+    """Equal-power (-3 dB) gains for a position in [-0.5, 0.5]."""
+    theta = (position + 1.0) * math.pi / 4.0
+    left = math.cos(theta)
+    right = math.sin(theta)
+    if position == 0.0:
+        return -left * CENTRE_GAIN, -right * CENTRE_GAIN
+    return left, right
