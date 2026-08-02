@@ -629,7 +629,12 @@ def test_a_failed_mktemp_is_an_error_not_a_cancel(cockpit, airport_stub, tmp_pat
         KCGX_TEST_RECORD="KSEA\t47.4479\t-122.3102\tSeattle-Tacoma",
     )
     assert result.returncode != 0, "a temp file it could not create is not a cancel"
-    assert result.stderr.strip(), "and it must say so"
+    # Name the message, not just "something on stderr". The loop above skips
+    # any tool shutil.which cannot find, so on a machine missing one of them
+    # bin/kcgx would die earlier -- "tmux not found" is also non-zero with
+    # non-empty stderr, and would satisfy a vaguer assertion for the wrong
+    # reason. Exit 2 is the code this test exists to pin down.
+    assert "airport search failed (exit 2)" in result.stderr, result.stderr
     assert pane_command(tmux, session, 0) == before
 
 
@@ -651,24 +656,32 @@ def test_the_popup_binding_actually_runs_the_airport_search(cockpit):
     assert "kcgx go" in bound[0], bound[0]
 
 
-def test_the_default_resolver_really_works(cockpit):
+def test_the_default_resolver_really_works(cockpit, tmp_path):
     """Every other test stubs the resolver, so all of them would still pass
     if `uv run ... kcgx-airport resolve` were broken — the launcher would
     quietly fall back to unconfigured panes. Run the real one once and
-    require that it produced coordinates.
+    require that it produced the right coordinates.
 
-    Read-only: `resolve` never writes ~/.local/state/kcgx/airport (only
-    `pick` does), so this leaves the developer's remembered airport alone.
+    The state file is one this test wrote, not the developer's: reading the
+    real one would make this test red whenever it happened to hold an ICAO
+    the dataset does not have — a failure that says nothing about the
+    resolver. A known ICAO also lets this assert exact coordinates instead
+    of merely "some".
     """
     run, tmux, session = cockpit
-    assert run(KCGX_AIRPORT_CMD="").returncode == 0
+    state = tmp_path / "resolver-state" / "airport"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("KORD\n")
+
+    assert run(KCGX_AIRPORT_CMD="", KCGX_STATE_PATH=str(state)).returncode == 0
 
     adsb = pane_command(tmux, session, 0)
     squelch = pane_command(tmux, session, 1)
-    assert "--site-lat" in adsb and "--site-lon" in adsb, (
+    assert "--site-lat 41.9786" in adsb, (
         "the real resolver produced no coordinates: " + adsb
     )
-    assert re.search(r"--icao [A-Z]{4}\b", squelch), squelch
+    assert "--site-lon -87.9048" in adsb, adsb
+    assert "--icao KORD" in squelch, squelch
 
 
 def test_a_real_pick_moves_the_cockpit_and_is_remembered(cockpit, tmp_path):
