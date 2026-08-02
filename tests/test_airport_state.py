@@ -49,6 +49,26 @@ def test_an_unwritable_state_file_does_not_raise(tmp_path):
     write_airport("KSEA", path=blocker / "airport")  # must not raise
 
 
+def test_an_undecodable_state_file_is_not_an_error(tmp_path):
+    """A truncated write, disk corruption, or a stray binary must fall
+    through the same as a missing or unreadable file -- UnicodeDecodeError
+    is a ValueError subclass, not an OSError, so it needs its own guard."""
+    path = tmp_path / "airport"
+    path.write_bytes(b"\xff\xfe\x00KORD")
+    assert read_airport(path=path) is None
+
+
+def test_an_undecodable_state_file_falls_through_to_the_config(tmp_path):
+    """The fallback chain is the whole point: `current_icao` must not raise
+    just because the state file it checked first turned out to be
+    corrupt."""
+    path = tmp_path / "airport"
+    path.write_bytes(b"\xff\xfe\x00KORD")
+    assert current_icao(
+        path=path, config_loader=lambda: Config(icao="KSEA")
+    ) == "KSEA"
+
+
 # -- the KCGX_STATE_PATH seam ----------------------------------------------
 
 
