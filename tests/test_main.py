@@ -351,3 +351,48 @@ def test_no_cache_and_a_blocked_fetch_still_opens_the_configured_feed(tmp_path):
     )
     assert [f.ident for f in feeds] == ["kpdx3_twr"]
     assert warnings
+
+
+# -- the picker's loader ---------------------------------------------------
+
+
+def test_picker_refreshes_but_falls_back_to_the_cache(tmp_path):
+    """Pressing `f` is an explicit refresh, so it tries the network first.
+
+    But the listing is refused three times in four, and a picker that
+    usually says "could not load feeds" is useless — the cache is a far
+    better answer than an error.
+    """
+    from squelch.__main__ import picker_feeds
+    from squelch.feeds import write_cached_feeds
+
+    write_cached_feeds("KPDX", FEEDS, directory=tmp_path)
+
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    assert (
+        picker_feeds(Config(icao="KPDX"), fetch=blocked, cache_dir=tmp_path) == FEEDS
+    )
+
+
+def test_picker_prefers_a_successful_refresh_and_recaches_it(tmp_path):
+    from squelch.__main__ import picker_feeds
+    from squelch.feeds import read_cached_feeds, write_cached_feeds
+
+    write_cached_feeds("KPDX", [Feed("old", "Old")], directory=tmp_path)
+    fresh = picker_feeds(
+        Config(icao="KPDX"), fetch=lambda icao: FEEDS, cache_dir=tmp_path
+    )
+    assert fresh == FEEDS
+    assert read_cached_feeds("KPDX", directory=tmp_path) == FEEDS
+
+
+def test_picker_returns_empty_when_there_is_no_cache_and_no_network(tmp_path):
+    """Empty is what makes the app say 'could not load feeds'."""
+    from squelch.__main__ import picker_feeds
+
+    def blocked(icao):
+        raise RuntimeError("HTTP 403")
+
+    assert picker_feeds(Config(icao="KPDX"), fetch=blocked, cache_dir=tmp_path) == []
