@@ -5,10 +5,14 @@ Two modes, both emitting one tab-separated record:
     icao<TAB>lat<TAB>lon<TAB>label
 
 The record goes to --out when given, stdout otherwise. Textual draws on
-stdout, so a caller capturing the record with $(...) would swallow the
-picker's own rendering and show an empty popup -- bin/kcgx always passes
---out. stdout stays available for the modes that draw nothing, which is
-what keeps this usable by hand.
+*stderr* (its driver writes to sys.__stderr__), so bin/kcgx can safely
+send our stdout to /dev/null to keep a printed record out of the popup --
+but it must leave stderr alone or the picker renders into nothing. That is
+also why bin/kcgx always passes --out: capturing the record with $(...)
+would work for the drawing, but a record on stdout and a UI on stderr
+sharing one terminal is not a contract worth having. stdout stays
+available for the modes that draw nothing, which keeps this usable by
+hand.
 """
 
 from __future__ import annotations

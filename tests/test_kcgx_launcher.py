@@ -721,6 +721,107 @@ def test_a_real_pick_moves_the_cockpit_and_is_remembered(cockpit, tmp_path):
     assert state.read_text().strip() == "KORD", "the pick was not remembered"
 
 
+STDERR_SENTINEL = "PICKER-DREW-THIS"
+
+# Stands in for the picker's *rendering*, not its record: it writes a marker
+# to stderr the way Textual writes its frames there, and delivers the record
+# through --out the way the real thing does.
+DRAWING_STUB = f"""#!/bin/sh
+printf '{STDERR_SENTINEL}\\n' >&2
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+printf 'KSEA\t47.4479\t-122.3102\tSeattle-Tacoma\\n' > "$out"
+"""
+
+
+def run_on_a_pty(launcher, args, env):
+    """Run `launcher` with a real terminal on all three standard fds.
+
+    Returns everything the terminal saw. A pipe would not do: the question
+    is what a user sitting in `tmux display-popup` sees, and stdout and
+    stderr are only distinguishable from the launcher's side.
+    """
+    import fcntl
+    import struct
+    import termios
+
+    controller, follower = os.openpty()
+    fcntl.ioctl(follower, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 64, 0, 0))
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child process
+        os.setsid()
+        fcntl.ioctl(follower, termios.TIOCSCTTY, 0)
+        for target in (0, 1, 2):
+            os.dup2(follower, target)
+        os.close(controller)
+        os.close(follower)
+        os.execve(str(launcher), [str(launcher), *args], env)
+    os.close(follower)
+
+    output = b""
+    try:
+        while True:
+            chunk = os.read(controller, 4096)
+            if not chunk:
+                break
+            output += chunk
+    except OSError:
+        pass
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status), output.decode(errors="replace")
+
+
+def test_the_picker_can_draw_on_the_terminal(cockpit, tmp_path):
+    """Regression: `go` ran the airport command as `>/dev/null 2>&1`, on the
+    documented belief that Textual draws on stdout. It draws on *stderr*
+    (textual/drivers/linux_driver.py: `self._file = sys.__stderr__`), so
+    `2>&1` sent the entire popup to /dev/null and the picker opened blank.
+    stdin was never redirected, so blind keypresses still worked: pressing
+    enter on the invisible list selected the first airport alphabetically
+    and retargeted the cockpit to Honiara, Solomon Islands.
+
+    Nothing in the suite pinned that redirection in either direction, which
+    is how nine task reviews walked past it. stdout stays redirected on
+    purpose -- that is what keeps a record printed to stdout out of the
+    popup -- so this asserts only that stderr reaches the terminal.
+    """
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+
+    stub = tmp_path / "kcgx-airport-drawing"
+    stub.write_text(DRAWING_STUB)
+    stub.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "KCGX_SOCKET": run.socket,
+        "KCGX_SESSION": session,
+        "KCGX_DETACHED": "1",
+        "KCGX_ADSB_CMD": FAKE_ADSB,
+        "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+        "KCGX_AIRPORT_CMD": str(stub),
+        "TERM": "xterm-256color",
+    }
+    env.pop("KCGX_SIZE", None)
+    env.pop("TMUX", None)
+
+    code, seen = run_on_a_pty(LAUNCHER, ("go",), env)
+    assert code == 0, seen
+    assert STDERR_SENTINEL in seen, (
+        "the picker's rendering never reached the terminal, so the popup is "
+        "blank and any keypress is blind: " + repr(seen)
+    )
+    # And the record still arrived, i.e. the retarget was not paid for by
+    # letting the record leak into the popup.
+    assert "--icao KSEA" in pane_command(tmux, session, 1)
+
+
 def test_go_without_a_running_cockpit_says_so(cockpit, airport_stub):
     run, _tmux, _session = cockpit
     result = run(args=("go",), KCGX_AIRPORT_CMD=str(airport_stub),

@@ -111,7 +111,13 @@ airport_record() {
     # `cmd || status=$?` rather than `if ! cmd`: inside the body of an `if !`
     # the `!` has already flipped the status, so $? there reads 0 and a
     # cancelled pick (1) would come back as success.
-    "${AIRPORT_CMD[@]}" "$@" --out "$out" >/dev/null 2>&1 || status=$?
+    # stdout only. Textual draws on *stderr* (its driver writes to
+    # sys.__stderr__), so redirecting stderr would send the whole picker to
+    # /dev/null: a blank popup, with stdin still connected, so enter would
+    # blindly select the first airport alphabetically. stdout is redirected
+    # because that is where a record goes when --out is omitted, and a
+    # record printed into the popup is the corruption we do care about.
+    "${AIRPORT_CMD[@]}" "$@" --out "$out" >/dev/null || status=$?
     if [ "$status" -ne 0 ]; then
         rm -f "$out"
         return "$status"

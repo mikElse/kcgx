@@ -1449,10 +1449,14 @@ Two modes, both emitting one tab-separated record:
     icao<TAB>lat<TAB>lon<TAB>label
 
 The record goes to --out when given, stdout otherwise. Textual draws on
-stdout, so a caller capturing the record with $(...) would swallow the
-picker's own rendering and show an empty popup -- bin/kcgx always passes
---out. stdout stays available for the modes that draw nothing, which is
-what keeps this usable by hand.
+*stderr* (its driver writes to sys.__stderr__), so bin/kcgx can safely
+send our stdout to /dev/null to keep a printed record out of the popup --
+but it must leave stderr alone or the picker renders into nothing. That is
+also why bin/kcgx always passes --out: capturing the record with $(...)
+would work for the drawing, but a record on stdout and a UI on stderr
+sharing one terminal is not a contract worth having. stdout stays
+available for the modes that draw nothing, which keeps this usable by
+hand.
 """
 
 from __future__ import annotations
@@ -2309,9 +2313,15 @@ attempts, tower preference) → Task 7; retarget and layout → Task 8;
 out-of-scope items are absent by construction.
 
 **Known deviation from the spec** — the spec's Entry point section was
-amended during planning: the record goes to `--out` rather than stdout,
-because Textual draws on stdout and `$(...)` would swallow the picker's
-rendering.
+amended during planning: the record goes to `--out` rather than stdout.
+The reason given here at plan time — "Textual draws on stdout" — was
+wrong; Textual's driver writes to `sys.__stderr__`. Corrected during final
+review, along with the spec and the module docstring that repeated it. The
+`--out` decision stands on its own (a record and a UI must not share one
+stream), but the false premise had also produced `>/dev/null 2>&1` in
+`bin/kcgx`, which sent the entire picker to /dev/null while leaving stdin
+connected: a blank popup that still answered a blind enter. See
+`test_the_picker_can_draw_on_the_terminal`.
 
 **Verified at plan time** — the search algorithm in Task 3 was prototyped
 against the real 4,737-row dataset and all thirteen of its planned
