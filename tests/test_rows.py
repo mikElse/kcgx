@@ -228,3 +228,73 @@ def test_out_of_range_coordinates_are_safe():
     assert control_at(-1, 0, expanded=False) is None
     assert control_at(999, 4, expanded=True) is None
     assert control_at(0, -3, expanded=True) is None
+
+
+from rich.text import Text
+
+from squelch.rows import (
+    DEFAULT_PALETTE,
+    MeterPalette,
+    gradient_style,
+    meter_text,
+)
+
+PALETTE = MeterPalette(dim="dim", text="white", accent="green", peak="red")
+
+
+def test_silence_uses_the_dim_stop():
+    assert gradient_style(0, PALETTE) == "dim"
+
+
+def test_a_peak_uses_the_peak_stop():
+    assert gradient_style(METER_STEPS - 1, PALETTE) == "red"
+
+
+def test_the_gradient_climbs_through_every_stop():
+    seen = [gradient_style(step, PALETTE) for step in range(METER_STEPS)]
+    assert set(seen) == {"dim", "white", "green", "red"}
+
+
+def test_the_gradient_never_goes_backwards():
+    order = ["dim", "white", "green", "red"]
+    seen = [order.index(gradient_style(s, PALETTE)) for s in range(METER_STEPS)]
+    assert seen == sorted(seen), "louder must never render cooler"
+
+
+def test_meter_text_is_three_lines():
+    text = meter_text([-20.0] * 10, PALETTE, width=10)
+    assert isinstance(text, Text)
+    assert text.plain.count("\n") == 2
+
+
+def test_meter_text_matches_the_plain_renderer():
+    history = [-50.0, -20.0, -5.0]
+    plain = "\n".join(meter_rows(history, width=3))
+    assert meter_text(history, PALETTE, width=3).plain == plain
+
+
+def test_meter_text_colours_a_loud_column_differently_from_a_quiet_one():
+    text = meter_text([-96.0, 0.0], PALETTE, width=2)
+    styles = {str(span.style) for span in text.spans}
+    assert "dim" in styles
+    assert "red" in styles
+
+
+def test_the_default_palette_defines_every_stop():
+    for stop in ("dim", "text", "accent", "peak"):
+        assert getattr(DEFAULT_PALETTE, stop)
+
+
+def test_every_default_palette_stop_is_a_style_rich_can_resolve():
+    """Regression guard: Textual CSS variables are not Rich styles.
+
+    The meter is coloured per cell through rich.Text, which resolves style
+    strings itself and has never heard of `$text-disabled`. A palette
+    written in Textual variables parses fine and then raises MissingStyle
+    at render time, taking down every test that paints a row.
+    """
+    from rich.style import Style
+
+    for stop in ("dim", "text", "accent", "peak"):
+        value = getattr(DEFAULT_PALETTE, stop)
+        Style.parse(value)  # raises rich.errors.StyleSyntaxError if bogus

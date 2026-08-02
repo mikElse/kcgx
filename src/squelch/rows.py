@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
+from dataclasses import dataclass
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.message import Message
@@ -167,6 +169,71 @@ def meter_rows(
     )
 
 
+@dataclass(frozen=True)
+class MeterPalette:
+    """The four colour stops the meter climbs through.
+
+    Supplied by the active theme, so the meter recolours when the radar
+    pane's theme changes. Rich style strings, not Textual CSS: these are
+    applied per cell, which stylesheets cannot express.
+    """
+
+    dim: str
+    text: str
+    accent: str
+    peak: str
+
+
+# Rich style strings, resolved by Rich itself -- *not* Textual CSS
+# variables. `$text-disabled` and friends mean nothing here and raise
+# MissingStyle at render time, because these are applied per cell through
+# rich.Text rather than through the stylesheet.
+#
+# These values are adsb-tui's `default` theme, so squelch already matches
+# the radar pane before any theme sampling exists to tell it otherwise.
+DEFAULT_PALETTE = MeterPalette(
+    dim="#8c96a0",
+    text="#c6eee8",
+    accent="#6cddd6",
+    peak="#ff6666",
+)
+
+# Step boundaries for each stop, over METER_STEPS (24). Roughly: the bottom
+# third is noise floor, the middle is ordinary speech, the top is a strong
+# signal, and the last few steps are approaching clipping.
+_GRADIENT_STOPS = ((8, "dim"), (16, "text"), (21, "accent"), (METER_STEPS, "peak"))
+
+
+def gradient_style(step: int, palette: MeterPalette) -> str:
+    for boundary, name in _GRADIENT_STOPS:
+        if step < boundary:
+            return getattr(palette, name)
+    return palette.peak
+
+
+def meter_text(
+    history: Sequence[float],
+    palette: MeterPalette,
+    width: int = METER_WIDTH,
+) -> Text:
+    """The three meter rows, with each column coloured by its own level.
+
+    Built as one `Text` with per-cell spans rather than three styled
+    widgets: the colour has to follow the sample, and a sample spans all
+    three rows.
+    """
+    recent = list(history)[-width:]
+    steps = [0] * (width - len(recent)) + [level_step(level) for level in recent]
+    rows = meter_rows(history, width=width)
+    text = Text(no_wrap=True)
+    for row_index, row in enumerate(rows):
+        if row_index:
+            text.append("\n")
+        for column, glyph in enumerate(row):
+            text.append(glyph, style=gradient_style(steps[column], palette))
+    return text
+
+
 def _fit(text: str, width: int) -> str:
     """Fit `text` into exactly `width` cells, marking truncation visibly.
 
@@ -209,9 +276,12 @@ class FeedRow(Vertical):
     feeds that exist.
     """
 
-    def __init__(self, session, **kwargs) -> None:
+    def __init__(
+        self, session, *, palette: MeterPalette = DEFAULT_PALETTE, **kwargs
+    ) -> None:
         super().__init__(**kwargs)
         self.session = session
+        self.palette = palette
         self._history: deque[float] = deque(maxlen=METER_WIDTH)
         self._name_widget: Static | None = None
         self._meter_widget: Static | None = None
@@ -305,4 +375,6 @@ class FeedRow(Vertical):
     def refresh_meter(self) -> None:
         if self._meter_widget is None or not self.expanded:
             return
-        self._meter_widget.update("\n".join(meter_rows(self._history)), layout=False)
+        self._meter_widget.update(
+            meter_text(self._history, self.palette), layout=False
+        )
