@@ -7,7 +7,6 @@ import pytest
 from squelch.__main__ import (
     FFMPEG_MISSING,
     build_sessions,
-    feed_selection_hint,
     load_feeds,
     main,
     parse_args,
@@ -139,13 +138,6 @@ def test_building_no_sessions_does_not_crash():
 
 
 # -- misc ------------------------------------------------------------------
-
-
-def test_feed_selection_hint_points_at_the_row_not_a_restart():
-    """Every feed is already open, so selecting one is a lookup, not a switch."""
-    hint = feed_selection_hint(Feed(ident="ksea_twr", label="KSEA Tower"))
-    assert "ksea_twr" in hint
-    assert "space" in hint
 
 
 def test_safe_call_swallows_an_app_that_is_not_running():

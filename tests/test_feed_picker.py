@@ -3,7 +3,6 @@ import threading
 import pytest
 from textual.geometry import Size
 
-from squelch.__main__ import feed_selection_hint
 from squelch.app import FeedPicker, SquelchApp
 from squelch.config import Config
 from squelch.feeds import Feed
@@ -34,9 +33,20 @@ FEEDS = [
 ]
 
 
-def make_app():
+def _sessions(n):
+    """n open sessions. The first len(FEEDS) carry FEEDS' own idents, so a
+    pick in the picker resolves to a real row."""
+    out = []
+    for i in range(n):
+        feed = FEEDS[i % len(FEEDS)]
+        ident = feed.ident if i < len(FEEDS) else f"{feed.ident}_{i}"
+        out.append(_FakeSession(ident, f"Feed {i}"))
+    return out
+
+
+def make_app(n=0):
     return SquelchApp(
-        Config(), [], feed_loader=lambda: FEEDS,
+        Config(), _sessions(n), feed_loader=lambda: FEEDS,
     )
 
 
@@ -63,6 +73,20 @@ def rendered(app):
     # this exact helper shape.
     strips = app.screen._compositor.render_strips(Size(*SIZE))
     return [s.text for s in strips], strips
+
+
+def overflowing(app):
+    """Widgets laid out wider than the 48-column pane.
+
+    Same rationale as tests/test_app.py's helper: render_strips clips every
+    strip to the screen width, so a cell_length assertion cannot fail. A
+    widget that does not fit shows up in its own size.
+    """
+    return [
+        (widget.__class__.__name__, widget.id, widget.outer_size.width)
+        for widget in app.screen.query("*")
+        if widget.outer_size.width > SIZE[0]
+    ]
 
 
 @pytest.mark.asyncio
@@ -274,30 +298,24 @@ async def test_pressing_f_three_times_stacks_only_one_picker():
 
 
 @pytest.mark.asyncio
-async def test_selection_hint_names_the_ident_and_the_flag():
-    """Selecting a feed must tell the user what to do about it.
+async def test_picking_a_feed_jumps_to_its_row_end_to_end():
+    """Selecting a feed must have a visible effect.
 
-    Restarting the stream in place is out of scope for v1, but the picker
-    used to be wired to a no-op default that `__main__` never replaced --
-    selecting a feed produced no visible effect whatsoever. `main()` now
-    installs `feed_selection_hint`; this exercises that same wiring end to
-    end through the real picker.
+    The picker used to be wired to a no-op default that `__main__` replaced
+    with a hint message; it is now a jump list, and the app wires its own
+    default. This drives the whole path through the real picker: two rows
+    down from the top is FEEDS[1], and the selection must land on the
+    session carrying that ident -- not merely change to *something*.
     """
-    app = make_app()
-    app.on_feed_selected = lambda feed: app.warn(feed_selection_hint(feed))
+    app = make_app(3)
     async with app.run_test(size=SIZE) as pilot:
+        assert app._selected == 0
         await open_picker(pilot, app)
         await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
-        text, strips = rendered(app)
-        joined = "\n".join(text)
-        assert "kpdx_gnd" in joined, "the message must name the chosen feed"
-        assert "space" in joined, (
-            "every feed is already open, so the hint must point at the row's "
-            "mute key rather than a restart flag"
-        )
-        assert all(s.cell_length == 48 for s in strips)
+        assert app.selected_session.feed.ident == FEEDS[1].ident
+        assert overflowing(app) == []
 
 
 def test_feed_worker_never_raises_when_the_app_has_gone():
@@ -316,3 +334,40 @@ def test_feed_worker_never_raises_when_the_app_has_gone():
     with pytest.raises(RuntimeError):
         app.call_from_thread(app._present_feeds, FEEDS)  # the raw hazard
     SquelchApp._load_feeds.__wrapped__(app)  # must not raise
+
+
+# -- jump list -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_feed_moves_the_selection_to_its_row():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        assert app._selected == 0
+        app.jump_to_feed(app._sessions[2].feed)
+        await pilot.pause()
+        assert app.selected_session is app._sessions[2]
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_feed_that_is_not_open_warns_rather_than_jumping():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.jump_to_feed(Feed(ident="knowhere_twr", label="Nowhere Tower"))
+        await pilot.pause()
+        assert app._selected == 0
+        assert len(app._entries) == 1, "an unopenable feed must say so"
+        assert "knowhere_twr" in "\n".join(rendered(app)[0])
+
+
+@pytest.mark.asyncio
+async def test_the_picker_still_shows_idents_as_secondary_text():
+    """Idents leave the row but not the picker -- squelch.toml still takes one."""
+    app = make_app(1)
+    async with app.run_test(size=SIZE) as pilot:
+        await open_picker(pilot, app)
+        assert "kpdx_gnd" in "\n".join(rendered(app)[0])
+        labels = app.screen.query(".picker-ident")
+        assert len(labels) == len(FEEDS), (
+            "every picker row must mark its ident as secondary text"
+        )

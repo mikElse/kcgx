@@ -129,7 +129,7 @@ class SquelchApp(App):
         self._rows: dict[int, FeedRow] = {}
         self._entries: deque[Widget] = deque()
         self._clock_timer = None
-        self.on_feed_selected = lambda feed: None
+        self.on_feed_selected = self.jump_to_feed
         # Called once the app is actually running (from on_mount). Sessions
         # must not be started before this: their first act can be a warning,
         # and a call_from_thread issued before App.run() has the loop up
@@ -213,6 +213,21 @@ class SquelchApp(App):
             # Keep the selection on screen when it moves past the viewport --
             # the whole point of a scrollable stack.
             self._feed_list.scroll_to_widget(row, animate=False)
+
+    def jump_to_feed(self, feed) -> None:
+        """Move the selection to `feed`'s row.
+
+        The picker used to exist to report an ident, which stopped making
+        sense when the row stopped showing one. What it is good for now is
+        finding a frequency quickly -- which matters more once activity
+        sorting is moving rows around.
+        """
+        for index, session in enumerate(self._sessions):
+            if session.feed.ident == feed.ident:
+                self._selected = index
+                self._apply_selection()
+                return
+        self.warn(f"{feed.ident} is not open")
 
     def action_cursor_down(self) -> None:
         if not self._sessions:
@@ -415,6 +430,7 @@ class FeedPicker(ModalScreen):
                         f"{_fit(f.label, _PICKER_LABEL_WIDTH)} "
                         f"{_fit(f.ident, _PICKER_IDENT_WIDTH)}",
                         markup=False,
+                        classes="picker-ident",
                     )
                 )
                 for f in self._feeds
