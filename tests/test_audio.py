@@ -3,13 +3,15 @@ import subprocess
 
 import pytest
 
+import numpy as np
+
 from squelch.audio import (
     FRAME_BYTES,
     RECONNECT_TICK_S,
-    Player,
     StreamReader,
     backoff_delays,
     ffmpeg_command,
+    pcm_to_float,
     rms_dbfs,
 )
 
@@ -242,66 +244,6 @@ def test_kill_reaps_process_after_wait_timeout():
     )
 
 
-class FakeStream:
-    """A PortAudio-ish stream that records the order of operations."""
-
-    def __init__(self):
-        self.calls = []
-
-    def write(self, pcm):
-        self.calls.append("write")
-
-    def stop(self):
-        self.calls.append("stop")
-
-    def close(self):
-        self.calls.append("close")
-
-
-def test_player_stop_detaches_stream_before_closing_it():
-    """A concurrent write() must see None, not a stream mid-close.
-
-    Regression test: stop() used to call `self._stream.stop()` while
-    `self._stream` still referenced the live stream, so the audio thread
-    could enter write() and hand PCM to PortAudio during (or after) the
-    close. The check is done from inside the stream's own stop(), which is
-    the exact instant the race window used to be open.
-    """
-    player = Player()
-    stream = FakeStream()
-    observed = {}
-
-    def stop():
-        observed["stream_attr"] = player._stream
-        stream.calls.append("stop")
-
-    stream.stop = stop
-    player._stream = stream
-    player.stop()
-
-    assert observed["stream_attr"] is None, (
-        "the stream reference must be cleared before the stream is stopped, "
-        "so a write() racing this call short-circuits instead of writing "
-        "into a stream being torn down"
-    )
-    assert stream.calls == ["stop", "close"]
-
-
-def test_player_stop_is_idempotent_and_never_raises():
-    """stop() runs from main()'s finally clause; it must not add a crash."""
-
-    class ExplodingStream(FakeStream):
-        def stop(self):
-            raise RuntimeError("PortAudio is unhappy")
-
-    player = Player()
-    player.stop()  # never started
-    player._stream = ExplodingStream()
-    player.stop()
-    player.stop()
-    assert player._stream is None
-
-
 # rms_dbfs moved here from vad.py when the segmenter was removed; it only
 # ever lived there to break a circular import the segmenter created.
 
@@ -327,3 +269,30 @@ def test_rms_dbfs_orders_signals_correctly():
 
 def test_rms_dbfs_handles_an_empty_buffer():
     assert rms_dbfs(b"") <= -90.0
+
+
+# -- PCM conversion --------------------------------------------------------
+
+
+def test_pcm_converts_to_normalised_floats():
+    import struct
+
+    pcm = struct.pack("<hhhh", 0, 16384, -16384, 32767)
+    out = np.zeros(4, dtype=np.float32)
+    assert pcm_to_float(pcm, out) == 4
+    assert out[0] == 0.0
+    assert out[1] == pytest.approx(0.5, abs=1e-3)
+    assert out[2] == pytest.approx(-0.5, abs=1e-3)
+    assert out[3] == pytest.approx(1.0, abs=1e-3)
+
+
+def test_a_short_buffer_takes_what_fits():
+    import struct
+
+    pcm = struct.pack("<hhhh", 100, 200, 300, 400)
+    out = np.zeros(2, dtype=np.float32)
+    assert pcm_to_float(pcm, out) == 2
+
+
+def test_empty_pcm_yields_nothing():
+    assert pcm_to_float(b"", np.zeros(4, dtype=np.float32)) == 0

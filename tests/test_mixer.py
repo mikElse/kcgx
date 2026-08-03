@@ -323,3 +323,64 @@ def test_stop_is_safe_before_start_and_twice():
     mixer.start(stream_factory=lambda **kw: FakeStream(**kw))
     mixer.stop()
     mixer.stop()
+
+
+class RecordingStream:
+    """A PortAudio-ish stream that records the order of operations."""
+
+    def __init__(self, **kwargs):
+        self.calls = []
+
+    def start(self):
+        self.calls.append("start")
+
+    def stop(self):
+        self.calls.append("stop")
+
+    def close(self):
+        self.calls.append("close")
+
+
+def test_stop_detaches_the_stream_before_closing_it():
+    """A concurrent callback must see None, not a stream mid-close.
+
+    Carried over from Player, which owned one stream per feed before the
+    mixer owned one for all of them. The race is the same and the stakes
+    are higher: the callback can be inside render() when the UI thread
+    calls stop(), and PortAudio is not obliged to survive being closed
+    underneath it. The check runs from inside the stream's own stop(),
+    which is the exact instant the window used to be open.
+    """
+    mixer = Mixer()
+    stream = RecordingStream()
+    observed = {}
+
+    def stop():
+        observed["stream_attr"] = mixer._stream
+        stream.calls.append("stop")
+
+    stream.stop = stop
+    mixer._stream = stream
+    mixer.stop()
+
+    assert observed["stream_attr"] is None, (
+        "the stream reference must be cleared before the stream is stopped, "
+        "so a callback racing this call short-circuits instead of rendering "
+        "into a stream being torn down"
+    )
+    assert stream.calls == ["stop", "close"]
+
+
+def test_stop_is_idempotent_and_never_raises():
+    """stop() runs from main()'s finally clause; it must not add a crash."""
+
+    class ExplodingStream(RecordingStream):
+        def stop(self):
+            raise RuntimeError("PortAudio is unhappy")
+
+    mixer = Mixer()
+    mixer.stop()  # never started
+    mixer._stream = ExplodingStream()
+    mixer.stop()
+    mixer.stop()
+    assert mixer._stream is None
