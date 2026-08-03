@@ -31,15 +31,33 @@ MAKEUP_DB = 6.0
 # Without this, 4:1 upward compression below -12 dBFS boosts a -50 dBFS
 # noise floor by ~28 dB and hiss becomes the loudest thing in the pane.
 RANGE_LIMIT_DB = 12.0
-GATE_OPEN_DBFS = -40.0
-# Deliberately equal to the open point: a single gate threshold at -40, set
-# on request. This removes the hysteresis that used to hold the gate open
-# down to -46, so a signal sitting near -40 can now toggle the gate between
-# blocks. The gate ramp (see `process`, which eases `_gate` toward its
-# target on the release constant) is what damps that into a slew rather
-# than a 12 dB step -- it is now the only thing standing between a hovering
-# signal and audible chatter, so do not remove it as well.
-GATE_CLOSE_DBFS = -40.0
+# Measured against five minutes of live KPDX tower and ground on
+# 2026-08-02 (tools/gate_tune.py). LiveATC squelches at the source: 87% of
+# blocks sit at exactly -96 dBFS, digital silence, with a ~70 dB gap up to
+# speech. There is no analog noise floor for the gate to reject, so the
+# -40 this used to sit at was not protecting against anything -- it was
+# sitting *inside* the range transmissions pass through, and re-triggering
+# about once per transmission.
+#
+# Toggles per minute on tower, against a true transmission count of 5.8
+# (measured at -70, below anything on the feed):
+#
+#     -40 single        12.2    110% spurious
+#     -40/-46 hyst       9.0     55% spurious
+#     -55 single         6.6     14% spurious
+#
+# Hence -55, and hence a single threshold: moving the gate out of the
+# signal's way beats hysteresis at the wrong level. Open and close are
+# deliberately equal, set on request; the gate ramp in `process` is what
+# damps a crossing into a slew rather than a step, and is now the only
+# thing doing so.
+#
+# The tradeoff this accepts: a feed carrying a genuine open-squelch noise
+# floor above -55 dBFS would no longer be gated. None of KPDX's feeds do.
+# If a future airport's does, raise this rather than reinstating the
+# hysteresis -- the measurement above is what to re-run.
+GATE_OPEN_DBFS = -55.0
+GATE_CLOSE_DBFS = -55.0
 ATTACK_S = 0.005
 RELEASE_S = 0.150
 
