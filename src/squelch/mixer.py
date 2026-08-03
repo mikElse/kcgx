@@ -28,7 +28,36 @@ from squelch.ringbuffer import RingBuffer
 
 AMBIENT_GAIN_DB = -8.0
 AMBIENT_GAIN = 10 ** (AMBIENT_GAIN_DB / 20)
-BUFFER_SECONDS = 0.5
+# How far behind live a feed may fall before the ring buffer starts
+# dropping to catch up. Measured against a live KPDX tower feed on
+# 2026-08-02, and this number is not arbitrary -- it was 0.5, which was
+# roughly a third of what the source needs, and the result was audible as a
+# constant stutter:
+#
+#   LiveATC does not trickle. 93% of ffmpeg's reads arrive less than 1 ms
+#   after the previous one, in bursts separated by gaps of up to 2.5 s,
+#   each burst carrying ~1.2 s of audio. A burst larger than the buffer
+#   overflows it, `RingBuffer.write` drops the oldest samples to make room,
+#   and the buffer then drains and starves until the next burst.
+#
+#   At 0.5 s: 61% of blocks reached the device as silence, 64% of the
+#   audio that arrived was discarded, and the worst hole was 1.9 s. Words
+#   were cut mid-syllable, because the drop is oldest-first.
+#
+# The source also averages ~1.05x the device clock -- it sends slightly
+# faster than realtime -- so it will fill whatever it is given and this is
+# a latency target, not a free ceiling. Measured lag behind live, and the
+# audio that survives:
+#
+#     0.5 s   36% kept   61% silent   0.0 s behind
+#     2.0 s   90% kept    6% silent   ~1.0 s behind
+#     4.0 s   95% kept  0.6% silent   ~1.5 s behind
+#     8.0 s   99% kept    0% silent   ~5.0 s behind
+#
+# 4 s is the knee: three times the typical burst, so overflow becomes rare,
+# while staying close enough to live to sit beside a radar pane showing the
+# same aircraft. Costs 256 KB per feed, 3 MB across twelve.
+BUFFER_SECONDS = 4.0
 SILENCE_FLOOR_DBFS = -96.0
 
 
@@ -58,6 +87,7 @@ class Mixer:
         block: int = BLOCK,
         volume: float = 1.0,
         ambient_enabled: bool = True,
+        buffer_seconds: float = BUFFER_SECONDS,
     ) -> None:
         self._block = block
         # Read by the callback without synchronisation, like `muted` and
@@ -65,7 +95,9 @@ class Mixer:
         # that lands one block late is not observable.
         self.volume = float(volume)
         self._ambient_enabled = bool(ambient_enabled)
-        self._capacity = int(SAMPLE_RATE * BUFFER_SECONDS)
+        # Floored at one block: a capacity below the callback's own read
+        # size starves on every single block, which is silence, not audio.
+        self._capacity = max(block, int(SAMPLE_RATE * buffer_seconds))
         self._channels: list[Channel] = []
         self._reverb = Reverb()
         self._stream = None

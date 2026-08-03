@@ -8,7 +8,7 @@ tests are about a single feed failing without taking the others with it.
 import numpy as np
 import pytest
 
-from squelch.dsp import BLOCK, block_dbfs
+from squelch.dsp import BLOCK, SAMPLE_RATE, block_dbfs
 from squelch.mixer import AMBIENT_GAIN_DB, Mixer
 
 
@@ -535,3 +535,131 @@ def test_a_mixer_built_from_the_shipped_config_does_nothing_to_the_signal():
     out = render(mixer)
     assert np.allclose(out[:, 0], written, atol=1e-6)
     assert np.allclose(out[:, 1], written, atol=1e-6)
+
+
+# -- how much audio survives the buffer ------------------------------------
+#
+# The mixer replaced twelve blocking `RawOutputStream.write` calls with one
+# callback pulling from a ring buffer. That moved the elasticity that used
+# to live in the device's own buffer into `BUFFER_SECONDS`, and it was set
+# to 0.5 -- about a third of what a LiveATC burst carries. The result was
+# 61% of blocks reaching the device as silence. These pin the fix.
+
+
+# Gaps between bursts, in seconds, cycled deterministically. Shaped after
+# the measured feed: a median around a second with occasional long gaps,
+# the worst observed being 2.5 s.
+BURST_GAPS = (0.6, 1.0, 2.5, 0.8, 1.4, 0.7, 2.0, 1.1)
+# The feed sends slightly faster than the device clock, which is what lets
+# a buffer build the backlog that covers the next gap. Measured at 1.049x.
+SOURCE_RATE = 1.05
+
+
+def burst_source(seconds):
+    """Arrival times and sizes matching a measured LiveATC feed.
+
+    93% of ffmpeg's reads arrive less than 1 ms after the previous one, so
+    a burst is modelled as instantaneous -- at a 16 ms block rate it is.
+
+    Each burst carries the audio that accumulated since the last one, which
+    is the detail that matters: a source delivering less than that is
+    simply slower than realtime and starves at *any* buffer size, which is
+    what an earlier version of this helper accidentally modelled.
+    """
+    events = []
+    at = 0.0
+    index = 0
+    while at < seconds:
+        gap = BURST_GAPS[index % len(BURST_GAPS)]
+        index += 1
+        at += gap
+        events.append((at, int(gap * SOURCE_RATE * SAMPLE_RATE)))
+    return events
+
+
+def drain(mixer, channel, events, seconds, *, settle_s=20.0):
+    """Run the real callback cadence against a bursty producer.
+
+    Returns (blocks, silent_blocks, samples_dropped). No wall clock and no
+    device: block N stands for time N * BLOCK / SAMPLE_RATE.
+
+    The first `settle_s` is excluded from the counts. The source runs only
+    5% faster than the device clock, so backlog accrues at 0.05 s per
+    second and covering a 2.5 s gap takes the better part of a minute from
+    an empty buffer -- whereas the real feed opens with a multi-second
+    burst that seeds it at once. Counting the ramp would measure a startup
+    artefact of this helper rather than whether the audio stutters.
+    """
+    period = BLOCK / SAMPLE_RATE
+    out = out_buffer()
+    pending = list(events)
+    dropped = blocks = silent = 0
+    for index in range(int(seconds / period)):
+        now = index * period
+        while pending and pending[0][0] <= now:
+            _at, count = pending.pop(0)
+            written = channel.buffer.write(frame(0.5, count))
+            if now >= settle_s:
+                dropped += written
+        counting = now >= settle_s
+        if counting:
+            blocks += 1
+            if channel.buffer.available == 0:
+                silent += 1
+        mixer.render(out)
+    return blocks, silent, dropped
+
+
+def test_the_buffer_holds_more_than_one_burst():
+    """The governing constraint, stated directly.
+
+    A buffer smaller than a burst cannot do anything but discard most of
+    it -- no arrival timing, no prefill, and no drop policy can rescue it.
+    """
+    from squelch.mixer import BUFFER_SECONDS
+
+    assert BUFFER_SECONDS >= 2.4, "a burst is ~1.2 s; hold at least two"
+
+
+def test_a_bursty_feed_is_not_chopped_into_silence():
+    mixer = Mixer(ambient_enabled=False)
+    channel = mixer.add_channel()
+    channel.muted = False
+    blocks, silent, _dropped = drain(mixer, channel, burst_source(90.0), 90.0)
+    # The gaps between bursts are covered by the backlog the burst left.
+    assert silent / blocks < 0.01, (
+        f"{100 * silent / blocks:.0f}% of blocks reached the device as silence"
+    )
+
+
+def test_a_bursty_feed_does_not_have_most_of_it_thrown_away():
+    mixer = Mixer(ambient_enabled=False)
+    channel = mixer.add_channel()
+    channel.muted = False
+    _blocks, _silent, dropped = drain(mixer, channel, burst_source(90.0), 90.0)
+    written = sum(count for at, count in burst_source(90.0) if at >= 20.0)
+    assert dropped / written < 0.06, (
+        f"{100 * dropped / written:.0f}% of the audio was dropped on overflow"
+    )
+
+
+def test_half_a_second_of_buffer_would_still_fail_both():
+    """The regression, reproduced -- so the two tests above are known to be
+    capable of failing, rather than passing on a technicality."""
+    mixer = Mixer(ambient_enabled=False, buffer_seconds=0.5)
+    channel = mixer.add_channel()
+    channel.muted = False
+    blocks, silent, dropped = drain(mixer, channel, burst_source(90.0), 90.0)
+    written = sum(count for at, count in burst_source(90.0) if at >= 20.0)
+    assert silent / blocks > 0.30
+    assert dropped / written > 0.30
+
+
+def test_the_capacity_follows_the_configured_seconds():
+    assert Mixer(buffer_seconds=2.0).add_channel().buffer.capacity == 2 * SAMPLE_RATE
+
+
+def test_a_capacity_below_one_block_is_floored():
+    """Otherwise every read starves and the feed is silence, not audio."""
+    channel = Mixer(buffer_seconds=0.0).add_channel()
+    assert channel.buffer.capacity >= BLOCK

@@ -282,6 +282,7 @@ failing later inside the audio pipeline.
 | `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. The only gain in the signal path. |
 | `ambient_enabled` | `false` | Set `true` for `[A]` routing, panning, and the reverb bus. |
 | `ambient_gain_db` | `-8.0` | Ambient bus level, relative to the dry bus |
+| `buffer_seconds` | `4.0` | How much audio a feed may hold before the ring buffer drops to catch up — in effect, how far behind live you are willing to sit. See "Buffering" below; do not lower it past about 2.5 without measuring. |
 
 The `model`, `compute_type` and `vad_aggressiveness` keys are gone, and so
 are the seven that configured the gate and the compressor — `gate_dbfs`,
@@ -408,6 +409,8 @@ master volume:
 ffmpeg ─► ring buffer ─► sum ─► master volume ─► stereo
 ```
 
+See "Buffering" below for the one number in that chain that matters.
+
 There was, briefly, a per-feed noise gate and an upward compressor between
 the ring buffer and the sum. Both were **removed** on 2026-08-02, along
 with their config keys and their controls. The gate never had anything to
@@ -438,6 +441,48 @@ phase-inverted and 6 dB down so it does not pile up in the middle.
 
 The meter shows the level of what you hear, and the activity ranking
 measures the same signal.
+
+## Buffering
+
+This is the number that decides whether the audio sounds continuous, and
+it is not obvious, so it is written down.
+
+**LiveATC does not trickle.** 93% of ffmpeg's reads arrive less than a
+millisecond after the previous one, in bursts separated by gaps of up to
+2.5 seconds, each burst carrying roughly 1.2 seconds of audio. The stream
+also runs about 1.05× the device clock — slightly faster than realtime.
+
+Each feed's ring buffer absorbs that. When a burst is larger than the
+buffer, `RingBuffer.write` drops the *oldest* samples to make room; the
+buffer then drains and pads with silence until the next burst. So the
+capacity is really a ceiling on **how far behind live a feed may fall
+before it starts discarding audio** — and because the source sends faster
+than realtime, it will fill whatever it is given. It behaves less like a
+DAW's buffer-size setting and more like a video player's: latency traded
+against completeness. CPU is not on the axis at all; the callback copies
+the same 256 samples every 16 ms regardless. Memory is 64 KB per second
+per feed.
+
+Measured against a live KPDX tower feed:
+
+| `buffer_seconds` | audio kept | blocks reaching the device as silence | typical lag |
+|---|---|---|---|
+| 0.5 | 36% | 61% | 0.0 s |
+| 2.0 | 90% | 6% | ~1.0 s |
+| **4.0** | **95%** | **0.6%** | **~1.5 s** |
+| 8.0 | 99% | 0% | ~5.0 s |
+
+4 seconds is the knee: three times the typical burst, so overflow is rare,
+while staying close enough to live to sit beside a radar pane showing the
+same aircraft. Raise it on a lossy connection; lower it to stay tighter to
+live, and expect dropouts below about 2.5.
+
+It shipped at 0.5 for a while, which is well under one burst — the result
+was that roughly two thirds of every feed was discarded before it reached
+the mixer, and words were cut mid-syllable because the drop is
+oldest-first. `tests/test_mixer.py` replays a synthetic burst source
+matching the measurement above and fails if the capacity goes back under a
+burst.
 
 ## Known limitations
 

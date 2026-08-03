@@ -288,6 +288,7 @@ def main(
     mixer = Mixer(
         volume=config.master_volume,
         ambient_enabled=config.ambient_enabled,
+        buffer_seconds=config.buffer_seconds,
     )
     sessions = sessions_builder(feeds, config, events, mixer=mixer)
     # Before the app, so a device failure is already known and is replayed
