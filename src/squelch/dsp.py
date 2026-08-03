@@ -146,6 +146,20 @@ class Compressor:
         self._unit = np.linspace(0.0, 1.0, BLOCK, dtype=np.float32)
         self._ramp = np.zeros(BLOCK, dtype=np.float32)
 
+    def set_gate(self, dbfs: float) -> None:
+        """Move the gate threshold. Safe to call from another thread.
+
+        Rebinding a float is atomic under CPython, and a threshold that
+        takes effect one block late is not observable. Open and close move
+        together: the hysteresis was removed deliberately (see
+        GATE_OPEN_DBFS), so a single number is the whole control.
+        """
+        self._open_at = self._close_at = float(dbfs)
+
+    @property
+    def gate_dbfs(self) -> float:
+        return self._open_at
+
     def process(self, block: np.ndarray, out: np.ndarray) -> None:
         level = block_dbfs(block)
         # Attack when the signal rises, release when it falls -- the

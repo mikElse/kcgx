@@ -31,6 +31,12 @@ class Config:
     compressor_makeup_db: float = 6.0
     compressor_range_db: float = 12.0
     ambient_gain_db: float = -8.0
+    # Applied to the summed stereo output, before the clip. 1.0 is unity;
+    # the overlay shows it as a percentage.
+    master_volume: float = 1.0
+    # The gate threshold, in dBFS. Measured against live KPDX audio -- see
+    # the note beside GATE_OPEN_DBFS in dsp.py before moving it.
+    gate_dbfs: float = -55.0
 
 
 def load_config(path: Path | None = None) -> Config:

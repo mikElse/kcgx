@@ -16,27 +16,51 @@ from squelch.config import Config
 from squelch.config_view import (
     CONTENT_WIDTH,
     FIXED,
+    GATE_FLOOR,
+    GATE_KEY,
+    GATE_STEP,
     INERT,
     LIVE,
+    VOLUME_KEY,
+    VOLUME_STEP,
     ConfigScreen,
+    adjust,
+    adjustable_settings,
     config_rows,
+    flatten,
+    group_heading,
     row_text,
 )
+from squelch.mixer import Mixer
 from squelch.mixer import AMBIENT_GAIN_DB
 
 SIZE = (48, 42)
 
 
+def settings(config=None, **kwargs):
+    return flatten(config_rows(config or Config(), **kwargs))
+
+
 def statuses(config=None):
-    return {s.label: s.status for s in config_rows(config or Config())}
+    return {s.label: s.status for s in settings(config)}
+
+
+def values(config=None, **kwargs):
+    return {s.label: s.value for s in settings(config, **kwargs)}
 
 
 # -- the table -------------------------------------------------------------
 
 
 def test_every_row_fits_the_overlay_exactly():
-    for setting in config_rows(Config()):
+    for setting in settings():
         assert len(row_text(setting)) == CONTENT_WIDTH, setting.label
+        assert len(row_text(setting, selected=True)) == CONTENT_WIDTH, setting.label
+
+
+def test_every_group_heading_fits_too():
+    for group in config_rows(Config()):
+        assert len(group_heading(group.title)) == CONTENT_WIDTH
 
 
 def test_a_long_label_cannot_widen_a_row():
@@ -46,8 +70,8 @@ def test_a_long_label_cannot_widen_a_row():
     assert len(line) == CONTENT_WIDTH
 
 
-def test_the_chatter_threshold_is_the_one_audio_key_that_is_honoured():
-    """build_sessions passes it to every FeedSession; the rest go nowhere."""
+def test_the_chatter_threshold_is_honoured():
+    """build_sessions passes it to every FeedSession."""
     assert statuses()["Chatter threshold"] == LIVE
 
 
@@ -60,36 +84,128 @@ def test_the_compressor_keys_are_marked_inert():
         "Comp ratio",
         "Comp makeup",
         "Comp range limit",
-        "Ambient bus (set)",
+        "Bus level (set)",
     ):
         assert marks[label] == INERT, label
 
 
 def test_what_is_compiled_in_is_marked_fixed():
     marks = statuses()
-    for label in ("Gate", "Reverb decay", "Reverb roll-off", "Ambient bus (in use)"):
+    for label in ("Reverb decay", "Reverb roll-off", "Bus level (in use)"):
         assert marks[label] == FIXED, label
 
 
 def test_the_table_shows_configured_values_not_just_defaults():
-    config = Config(compressor_ratio=2.5, activity_threshold_dbfs=-35.5)
-    values = {s.label: s.value for s in config_rows(config)}
-    assert "2.5" in values["Comp ratio"]
-    assert "-35.5" in values["Chatter threshold"]
+    shown = values(Config(compressor_ratio=2.5, activity_threshold_dbfs=-35.5))
+    assert "2.5" in shown["Comp ratio"]
+    assert "-35.5" in shown["Chatter threshold"]
 
 
 def test_the_ambient_rows_show_the_gap_between_asked_and_applied():
     """The clearest illustration of what `inert` means."""
-    config = Config(ambient_gain_db=-20.0)
-    values = {s.label: s.value for s in config_rows(config)}
-    assert "-20.0" in values["Ambient bus (set)"]
-    assert f"{AMBIENT_GAIN_DB:.1f}" in values["Ambient bus (in use)"]
-    assert values["Ambient bus (set)"] != values["Ambient bus (in use)"]
+    shown = values(Config(ambient_gain_db=-20.0))
+    assert "-20.0" in shown["Bus level (set)"]
+    assert f"{AMBIENT_GAIN_DB:.1f}" in shown["Bus level (in use)"]
+    assert shown["Bus level (set)"] != shown["Bus level (in use)"]
 
 
-def test_the_gate_row_tracks_the_dsp_module():
-    values = {s.label: s.value for s in config_rows(Config())}
-    assert f"{dsp.GATE_OPEN_DBFS:.1f}" in values["Gate"]
+def test_the_gate_row_defaults_to_the_measured_value():
+    assert f"{dsp.GATE_OPEN_DBFS:.1f}" in values()["Gate"]
+
+
+def test_the_gate_row_shows_the_mixer_s_live_value_when_there_is_one():
+    """The gate lives on the mixer once it is running, not in Config."""
+    assert "-30.0" in values(gate_dbfs=-30.0)["Gate"]
+
+
+# -- grouping --------------------------------------------------------------
+
+
+def test_the_settings_are_grouped_by_what_they_shape():
+    titles = [group.title for group in config_rows(Config())]
+    assert titles == ["Output", "Chatter", "Ambient"]
+
+
+def test_the_ambient_group_holds_only_ambient_settings():
+    groups = {g.title: [s.label for s in g.settings] for g in config_rows(Config())}
+    assert groups["Ambient"] == [
+        "Bus level (set)",
+        "Bus level (in use)",
+        "Reverb decay",
+        "Reverb roll-off",
+    ]
+
+
+def test_the_chatter_group_holds_the_gate_and_the_compressor():
+    groups = {g.title: [s.label for s in g.settings] for g in config_rows(Config())}
+    assert "Gate" in groups["Chatter"]
+    assert "Comp ratio" in groups["Chatter"]
+    assert "Reverb decay" not in groups["Chatter"]
+
+
+def test_master_volume_is_alone_at_the_top():
+    first = config_rows(Config())[0]
+    assert first.title == "Output"
+    assert [s.label for s in first.settings] == ["Master volume"]
+
+
+# -- adjustment ------------------------------------------------------------
+
+
+def test_only_volume_and_the_gate_are_adjustable():
+    assert [s.label for s in adjustable_settings(config_rows(Config()))] == [
+        "Master volume",
+        "Gate",
+    ]
+
+
+def test_raising_the_volume():
+    config, _gate = adjust(Config(master_volume=0.5), VOLUME_KEY, 1, gate_dbfs=-55.0)
+    assert config.master_volume == pytest.approx(0.5 + VOLUME_STEP)
+
+
+def test_the_volume_stops_at_unity():
+    config, _ = adjust(Config(master_volume=1.0), VOLUME_KEY, 1, gate_dbfs=-55.0)
+    assert config.master_volume == 1.0
+
+
+def test_the_volume_stops_at_silence():
+    config, _ = adjust(Config(master_volume=0.0), VOLUME_KEY, -1, gate_dbfs=-55.0)
+    assert config.master_volume == 0.0
+
+
+def test_the_volume_does_not_drift_off_the_step():
+    """Repeated presses must not land on 0.30000000000000004 and make the
+    percentage flicker between 30 and 31."""
+    config = Config(master_volume=0.0)
+    for _ in range(7):
+        config, _ = adjust(config, VOLUME_KEY, 1, gate_dbfs=-55.0)
+    for _ in range(3):
+        config, _ = adjust(config, VOLUME_KEY, -1, gate_dbfs=-55.0)
+    assert config.master_volume == pytest.approx(0.20)
+    assert "20%" in values(config)["Master volume"]
+
+
+def test_moving_the_gate():
+    _config, gate = adjust(Config(), GATE_KEY, 1, gate_dbfs=-55.0)
+    assert gate == -55.0 + GATE_STEP
+
+
+def test_the_gate_stops_at_the_floor():
+    _config, gate = adjust(Config(), GATE_KEY, -1, gate_dbfs=GATE_FLOOR)
+    assert gate == GATE_FLOOR
+
+
+def test_adjusting_the_gate_leaves_the_volume_alone():
+    config, gate = adjust(Config(master_volume=0.6), GATE_KEY, 1, gate_dbfs=-55.0)
+    assert config.master_volume == 0.6
+    assert gate != -55.0
+
+
+def test_an_unknown_key_changes_nothing():
+    before = Config()
+    config, gate = adjust(before, "nonsense", 1, gate_dbfs=-55.0)
+    assert config == before and gate == -55.0
 
 
 # -- the screen ------------------------------------------------------------
@@ -193,7 +309,120 @@ async def test_no_row_wraps_onto_a_second_line():
             if line.split("│")[1].strip() in (INERT, FIXED, LIVE)
         ]
         assert orphans == [], f"rows wrapped: {orphans}"
-        for setting in config_rows(Config()):
+        for setting in settings():
             assert any(
                 setting.label in line and setting.status in line for line in painted
             ), f"{setting.label} and its marker are not on one line"
+
+
+# -- the overlay drives the mixer ------------------------------------------
+
+
+def app_with_mixer(mixer=None):
+    return SquelchApp(Config(icao="KPDX"), [], mixer=mixer or Mixer())
+
+
+@pytest.mark.asyncio
+async def test_right_raises_the_master_volume_on_the_mixer():
+    mixer = Mixer(volume=0.5)
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("right")
+        await pilot.pause()
+        assert mixer.volume == pytest.approx(0.5 + VOLUME_STEP)
+
+
+@pytest.mark.asyncio
+async def test_left_lowers_it():
+    mixer = Mixer(volume=0.5)
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("left")
+        await pilot.pause()
+        assert mixer.volume == pytest.approx(0.5 - VOLUME_STEP)
+
+
+@pytest.mark.asyncio
+async def test_down_then_right_moves_the_gate_not_the_volume():
+    mixer = Mixer(volume=0.5, gate_dbfs=-55.0)
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("down")
+        await pilot.press("right")
+        await pilot.pause()
+        assert mixer.gate_dbfs == -55.0 + GATE_STEP
+        assert mixer.volume == 0.5, "the volume must not move with the gate"
+
+
+@pytest.mark.asyncio
+async def test_the_gate_change_reaches_a_running_feed():
+    """The whole point of `adjustable`: it has to touch the audio path."""
+    mixer = Mixer(gate_dbfs=-55.0)
+    channel = mixer.add_channel()
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("down")
+        for _ in range(5):
+            await pilot.press("right")
+        await pilot.pause()
+        assert channel._compressor.gate_dbfs == -50.0
+
+
+@pytest.mark.asyncio
+async def test_the_selection_cannot_run_off_either_end():
+    mixer = Mixer()
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        for _ in range(6):
+            await pilot.press("up")
+        await pilot.pause()
+        assert app.screen.selected.key == VOLUME_KEY
+        for _ in range(6):
+            await pilot.press("down")
+        await pilot.pause()
+        assert app.screen.selected.key == GATE_KEY
+
+
+@pytest.mark.asyncio
+async def test_the_overlay_shows_the_new_value_as_it_changes():
+    mixer = Mixer(volume=0.5)
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.pause()
+        assert any("50%" in line for line in rendered(app)[0])
+        await pilot.press("right")
+        await pilot.pause()
+        assert any("55%" in line for line in rendered(app)[0])
+
+
+@pytest.mark.asyncio
+async def test_adjusting_without_a_mixer_does_not_raise():
+    """The overlay opens outside a real run too."""
+    app = SquelchApp(Config(icao="KPDX"), [])
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("right")
+        await pilot.press("down")
+        await pilot.press("right")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfigScreen)
+
+
+@pytest.mark.asyncio
+async def test_a_mixer_that_raises_does_not_take_the_pane_down():
+    class Angry(Mixer):
+        def set_gate(self, dbfs):
+            raise RuntimeError("no")
+
+    app = app_with_mixer(Angry())
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("right")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfigScreen)
