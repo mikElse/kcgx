@@ -45,7 +45,13 @@ class Config:
     # Off bypasses the compressor entirely -- no gate, no upward boost, no
     # makeup. The feed is heard untouched, which is roughly 13 dB quieter
     # on a typical LiveATC stream.
-    compressor_enabled: bool = True
+    # Off by default: the signal path is the raw decoded feed plus master
+    # volume, which is what it was before any of the shaping existed. Set
+    # true to bring the compressor back.
+    compressor_enabled: bool = False
+    # Off by default for the same reason. [A] still marks a feed, and the
+    # mixer still ignores it -- no pan, no reverb.
+    ambient_enabled: bool = False
 
 
 def load_config(path: Path | None = None) -> Config:

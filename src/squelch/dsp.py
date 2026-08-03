@@ -146,8 +146,12 @@ class Compressor:
         # otherwise drop ~18 dB inside one block.
         self._engaged = 1.0 if enabled else 0.0
         self.gate_open = False
-        self.gain_db = makeup
-        self._applied = 10 ** (makeup / 20)
+        # Seeded from the gain this compressor will actually start on, not
+        # from makeup unconditionally: a compressor constructed bypassed
+        # would otherwise ramp its first block down from +6 dB to unity,
+        # and that block is not the signal that was written in.
+        self.gain_db = makeup if enabled else 0.0
+        self._applied = 10 ** (self.gain_db / 20)
         # Preallocated: the callback may not allocate. `_unit` is a fixed
         # 0..1 ramp; `np.linspace` has no `out=` parameter, so the per-block
         # ramp is built by scaling this instead of generating a new one.
