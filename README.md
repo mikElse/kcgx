@@ -282,7 +282,8 @@ failing later inside the audio pipeline.
 | `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. |
 | `gate_dbfs` | `-55.0` | Gate threshold. Measured against live audio — see the note beside `GATE_OPEN_DBFS` in `dsp.py` before moving it. |
 | `gate_enabled` | `true` | Set `false` to disable the gate. Safe on source-squelched feeds; costs you noise rejection on one with an open-squelch floor. |
-| `compressor_enabled` | `true` | Set `false` to bypass the compressor entirely — unity gain, roughly 13 dB quieter. |
+| `compressor_enabled` | `false` | Set `true` for gate + upward compression + makeup. Adds roughly 13 dB, and its gain moves to do so. |
+| `ambient_enabled` | `false` | Set `true` for `[A]` routing, panning, and the reverb bus. |
 | `compressor_threshold_dbfs` | `-12.0` | Below this, upward compression applies |
 | `compressor_ratio` | `4.0` | Upward compression ratio |
 | `compressor_makeup_db` | `6.0` | Gain applied to every feed |
@@ -335,62 +336,36 @@ what it shapes — **Output**, **Chatter**, **Ambient**.
 
 ```
  Output
- Master volume                75%
+›Master volume                100% ◂ ▸
 
  Chatter
-›Compressor                    on ◂ ▸
- Gate                          on
- Gate threshold        -55.0 dBFS
- Chatter threshold     -40.0 dBFS live
- Comp threshold        -12.0 dBFS inert
+ Compressor                    off off
+ Gate                           on off
+ Gate threshold         -55.0 dBFS off
+ Chatter threshold      -40.0 dBFS live
+ Comp threshold         -12.0 dBFS inert
  ...
 ```
 
-**Master volume**, **Compressor**, **Gate** and **Gate threshold** are
-adjustable: `↑↓` picks one and `◂ ▸` moves it, and the change reaches the running mixer
-immediately — volume scales the summed stereo output before the clip, and
-the gate settings are pushed to every feed's compressor, including feeds
-that start afterwards. Volume moves in 5% steps, the threshold in 1 dB.
+**Master volume is the only control**, because it is the only shaping still
+happening: `◂ ▸` moves it in 5% steps and it reaches the running mixer
+immediately, scaling the summed output before the clip.
 
-**The gate can be switched off entirely**, which is the honest answer if it
-sounds choppy. Measured across five minutes of live KPDX tower, turning it
-off drops gate transitions from 6.6/min to none, and costs nothing: silence
-comes out at −96 dBFS either way, because these feeds are digitally silent
-between transmissions and zeros times any gain are still zeros. The gate
-only earns its keep on a feed with a genuine open-squelch noise floor,
-which upward compression would otherwise lift by up to the range limit.
-Switching it off rides the existing ramp rather than stepping, so it does
-not click mid-transmission. Set `gate_enabled = false` to start that way.
-
-**The compressor can be bypassed entirely.** Off means unity — no gate, no
-upward boost, no makeup — so you hear the feed untouched. Measured on the
-same capture, its gain then never moves at all (standard deviation 0.00 dB
-against 3.04 with it engaged), which makes it the definitive answer to
-"is the compressor doing this?". Bypassing takes the gate with it, so those
-rows read `off` whatever they are set to.
-
-The catch is level: bypass is about **13 dB quieter**, because 13 dB of
-gain is exactly what it was adding. Master volume only attenuates, so use
-your system volume to compare fairly. Toggling slews over the release
-rather than stepping — measured at most 0.61 dB per block mid-transmission
-— so an A/B does not thump. Set `compressor_enabled = false` to start
-bypassed.
-
-Adjustments apply to **the running session only**. Nothing here writes to
-`squelch.toml`; set `master_volume` and `gate_dbfs` there to change what
-squelch starts on.
-
-Everything else is read-only, and each row says why:
+Every other row reports rather than controls, and says which it is:
 
 - **live** — read from `squelch.toml` and actually applied.
-- **inert** — read from `squelch.toml` and not yet wired to the audio path.
+- **inert** — read from `squelch.toml`, applied to nothing.
 - **fixed** — compiled in; not settable at all.
+- **off** — the effect it belongs to is bypassed.
 
-Five compressor and ambient keys are `inert`: `Config` parses them and
-`Channel` builds its compressor from the `dsp.py` defaults regardless. The
-ambient bus is listed twice — what was asked for, and what is running — as
-the plainest illustration of what `inert` means. A modal that let you edit
-those would be a modal that lied, so it does not.
+`Chatter threshold` is the one non-audio row and stays **live**: it decides
+what counts as busy for the row readout and the stack ordering, not how
+anything sounds. Marking it inert would be a lie, and disabling it would
+silently break the sort.
+
+Turning the shaping back on is a config-file change, not a keypress — the
+overlay reports the audio path, and only offers to change the part of it
+that is live.
 
 ### Feed picker
 
@@ -423,42 +398,48 @@ fallbacks says so in the message log.
 One ffmpeg process, one ring buffer, and one thread per feed — twelve of
 each at KPDX — feeding **one** stereo output stream. Bandwidth is trivial at
 roughly 16–32 kbps per feed; the CPU is mostly ffmpeg decode plus one
-mixing callback every 16 ms. Worth watching on battery.
+mixing callback every 16 ms. With the shaping off by default that callback
+is a sum and a multiply — the reverb, whose comb loops are the only part
+of it that is not vectorised, does not run at all. Worth watching on
+battery.
 
 ## Audio shaping
 
+**There is none, by default.** What reaches the device is the decoded feed
+scaled by master volume:
+
 ```
-ffmpeg ─► ring buffer ─► gate ─► upward comp ─┬─► dry bus (centre) ───────────────┐
-                                              │                                   ├─► stereo
-                                              └─► ambient bus (−8 dB, panned) ─► reverb ─┘
+ffmpeg ─► ring buffer ─► (compressor bypassed) ─► sum ─► master volume ─► stereo
 ```
 
-**Upward compression** lifts quiet feeds instead of you riding a gain
-control: 4:1 below −12 dBFS with a 6 dB soft knee and +6 dB makeup. Two
-limits keep it honest — a **12 dB range limit**, and a **gate** at −55 dBFS.
-Without them, 4:1 upward compression boosts a −50 dBFS noise floor by about
-28 dB and hiss becomes the loudest thing in the pane. The gate attenuates
-the *boost*, never the signal, and ramps rather than stepping.
+The compressor and the ambient bus are both shipped disabled, so the signal
+is what came out of ffmpeg until the volume scales it. `[A]` still marks a
+feed and the mixer still ignores it — no panning, no reverb. The reverb is
+not run at all rather than run and added as silence, which saves most of
+the mixer's cost.
 
-The −55 is measured, not assumed. LiveATC squelches at the source: across
-five minutes of live KPDX tower and ground, 87% of blocks sit at exactly
-−96 dBFS with a ~70 dB gap up to speech, so there is no analog noise floor
-to reject. A gate at −40 sits *inside* the range transmissions pass
-through and re-triggers about once per transmission — 12.2 toggles/min
-against a true transmission count of 5.8. At −55 it is 6.6. Re-measure
-with `tools/gate_tune.py` if you move somewhere its feeds behave
-differently.
+The machinery is all still there and still tested; it is switched off, not
+removed. Two config keys bring it back:
 
-**`[A]` routes a feed to the ambient bus**: 8 dB down, panned, and heard
-only through a short dark reverb — 100 ms, fully wet, rolled off above
-1.2 kHz. Ambient feeds are present without being intelligible, which is the
-point. With several on the bus they spread across the stereo field between
-50% left and 50% right; an odd number puts one in the centre, phase-inverted
-and 6 dB down so it does not pile up in the middle.
+```toml
+compressor_enabled = true   # gate, upward compression, makeup
+ambient_enabled = true      # [A] routing, panning, reverb
+```
 
-The meter shows the level **after** compression — what you actually hear.
-The activity ranking measures **before** it, so making a quiet feed louder
-does not make it look busier.
+**Upward compression**, when enabled, lifts quiet feeds instead of you
+riding a gain control: 4:1 below −12 dBFS with a 6 dB soft knee and +6 dB
+makeup, held back by a 12 dB range limit and a gate at −55 dBFS. Measured
+on live KPDX tower audio it adds about 13 dB to speech — and its gain moves
+continuously to do so, which is why it is off by default.
+
+**`[A]` routes a feed to the ambient bus**, when enabled: 8 dB down,
+panned, and heard only through a short dark reverb — 100 ms, fully wet,
+rolled off above 1.2 kHz. Several feeds spread across the stereo field
+between 50% left and 50% right; an odd number puts one in the centre,
+phase-inverted and 6 dB down so it does not pile up in the middle.
+
+The meter shows the level of what you hear, and the activity ranking
+measures the same signal.
 
 ## Known limitations
 

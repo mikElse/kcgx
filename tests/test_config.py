@@ -111,3 +111,32 @@ def test_a_non_numeric_ratio_is_rejected(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert "compressor_ratio" in str(exc.value)
+
+
+def test_the_audio_shaping_ships_disabled():
+    """The signal path is the decoded feed plus master volume, nothing else.
+
+    Pinned as an explicit default rather than left to follow from the
+    overlay's rendering: every status in the config overlay is derived from
+    these flags, so flipping them flips the whole table consistently and no
+    test over there would notice.
+    """
+    config = Config()
+    assert config.compressor_enabled is False
+    assert config.ambient_enabled is False
+
+
+def test_the_shaping_can_be_switched_back_on(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text("compressor_enabled = true\nambient_enabled = true\n")
+    config = load_config(path)
+    assert config.compressor_enabled is True
+    assert config.ambient_enabled is True
+
+
+def test_a_non_boolean_switch_is_rejected(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text('compressor_enabled = "yes"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "compressor_enabled" in str(exc.value)

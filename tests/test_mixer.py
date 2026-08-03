@@ -625,3 +625,84 @@ def test_the_envelope_keeps_tracking_while_bypassed():
     comp.process(loud, out)
     # A stale -96 envelope would ask for the full range limit here.
     assert comp.gain_db < 10.0
+
+
+# -- the ambient bus bypass ------------------------------------------------
+
+
+def test_a_bypassed_ambient_bus_stays_silent_even_when_a_feed_is_routed():
+    """[A] still marks a feed; the mixer just does not act on it."""
+    mixer = Mixer(ambient_enabled=False)
+    channel = mixer.add_channel()
+    channel.muted = True
+    channel.ambient = True
+    for _ in range(8):
+        channel.buffer.write(frame())
+    assert not render(mixer, blocks=8).any()
+
+
+def test_the_ambient_bus_can_be_switched_back_on():
+    mixer = Mixer(ambient_enabled=False)
+    channel = mixer.add_channel()
+    channel.muted = True
+    channel.ambient = True
+    mixer.set_ambient_enabled(True)
+    for _ in range(8):
+        channel.buffer.write(frame())
+    assert render(mixer, blocks=8).any()
+
+
+def test_bypassing_the_ambient_bus_leaves_the_dry_bus_alone():
+    mixer = Mixer(ambient_enabled=False)
+    channel = mixer.add_channel()
+    channel.muted = False
+    channel.buffer.write(frame())
+    assert render(mixer).any()
+
+
+def test_with_everything_bypassed_the_output_is_the_input():
+    """The whole point: what reaches the device is the decoded feed.
+
+    Unity compressor, no ambient bus, unity volume -- so a block written in
+    comes back out sample for sample.
+    """
+    mixer = Mixer(compressor_enabled=False, ambient_enabled=False, volume=1.0)
+    channel = mixer.add_channel()
+    channel.muted = False
+    written = frame(0.3)
+    channel.buffer.write(written)
+    out = render(mixer)
+    assert np.allclose(out[:, 0], written, atol=1e-6)
+    assert np.allclose(out[:, 1], written, atol=1e-6)
+
+
+def test_master_volume_is_the_only_thing_left_shaping_it():
+    mixer = Mixer(compressor_enabled=False, ambient_enabled=False, volume=0.5)
+    channel = mixer.add_channel()
+    channel.muted = False
+    written = frame(0.4)
+    channel.buffer.write(written)
+    out = render(mixer)
+    assert np.allclose(out[:, 0], written * 0.5, atol=1e-6)
+
+
+def test_a_mixer_built_from_the_shipped_config_does_nothing_to_the_signal():
+    """End to end against the real defaults, not hand-passed flags."""
+    from squelch.config import Config as RealConfig
+
+    config = RealConfig()
+    mixer = Mixer(
+        volume=config.master_volume,
+        gate_dbfs=config.gate_dbfs,
+        gate_enabled=config.gate_enabled,
+        compressor_enabled=config.compressor_enabled,
+        ambient_enabled=config.ambient_enabled,
+    )
+    channel = mixer.add_channel()
+    channel.muted = False
+    channel.ambient = True  # routed, and still ignored
+    written = frame(0.25)
+    channel.buffer.write(written)
+    out = render(mixer)
+    assert np.allclose(out[:, 0], written, atol=1e-6)
+    assert np.allclose(out[:, 1], written, atol=1e-6)

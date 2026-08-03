@@ -290,6 +290,7 @@ def main(
         gate_dbfs=config.gate_dbfs,
         gate_enabled=config.gate_enabled,
         compressor_enabled=config.compressor_enabled,
+        ambient_enabled=config.ambient_enabled,
     )
     sessions = sessions_builder(feeds, config, events, mixer=mixer)
     # Before the app, so a device failure is already known and is replayed

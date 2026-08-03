@@ -33,7 +33,7 @@ SILENCE_FLOOR_DBFS = -96.0
 class Channel:
     """One feed's slot in the mix."""
 
-    def __init__(self, capacity: int) -> None:
+    def __init__(self, capacity: int, **compressor: object) -> None:
         self.buffer = RingBuffer(capacity)
         # Plain attributes, read by the callback without synchronisation.
         # Rebinding a bool is atomic under CPython, and a change that takes
@@ -41,7 +41,11 @@ class Channel:
         self.muted = True
         self.ambient = False
         self.level_dbfs = SILENCE_FLOOR_DBFS
-        self._compressor = Compressor()
+        # Constructed in its final state rather than built enabled and then
+        # switched: set_enabled ramps, deliberately, so a channel added to a
+        # bypassed mixer would fade the makeup gain out across its first
+        # 150 ms instead of simply not applying it.
+        self._compressor = Compressor(**compressor)
         self._raw = np.zeros(BLOCK, dtype=np.float32)
         self._shaped = np.zeros(BLOCK, dtype=np.float32)
 
@@ -55,6 +59,7 @@ class Mixer:
         gate_dbfs: float | None = None,
         gate_enabled: bool = True,
         compressor_enabled: bool = True,
+        ambient_enabled: bool = True,
     ) -> None:
         self._block = block
         # Read by the callback without synchronisation, like `muted` and
@@ -64,6 +69,7 @@ class Mixer:
         self._gate_dbfs = gate_dbfs
         self._gate_enabled = bool(gate_enabled)
         self._compressor_enabled = bool(compressor_enabled)
+        self._ambient_enabled = bool(ambient_enabled)
         self._capacity = int(SAMPLE_RATE * BUFFER_SECONDS)
         self._channels: list[Channel] = []
         self._reverb = Reverb()
@@ -81,11 +87,14 @@ class Mixer:
         self._ambient_count = -1
 
     def add_channel(self) -> Channel:
-        channel = Channel(self._capacity)
+        settings: dict = {
+            "enabled": self._compressor_enabled,
+            "gate_enabled": self._gate_enabled,
+        }
         if self._gate_dbfs is not None:
-            channel._compressor.set_gate(self._gate_dbfs)
-        channel._compressor.set_gate_enabled(self._gate_enabled)
-        channel._compressor.set_enabled(self._compressor_enabled)
+            settings["gate_open"] = self._gate_dbfs
+            settings["gate_close"] = self._gate_dbfs
+        channel = Channel(self._capacity, **settings)
         self._channels.append(channel)
         return channel
 
@@ -99,6 +108,14 @@ class Mixer:
         self._gate_dbfs = float(dbfs)
         for channel in self._channels:
             channel._compressor.set_gate(self._gate_dbfs)
+
+    def set_ambient_enabled(self, enabled: bool) -> None:
+        """Bypass the ambient bus: no panning, no reverb, no second sum."""
+        self._ambient_enabled = bool(enabled)
+
+    @property
+    def ambient_enabled(self) -> bool:
+        return self._ambient_enabled
 
     def set_compressor_enabled(self, enabled: bool) -> None:
         """Bypass every feed's compressor, or bring it back."""
@@ -167,7 +184,7 @@ class Mixer:
             channel.level_dbfs = block_dbfs(shaped)
             if not channel.muted:
                 dry += shaped
-            if channel.ambient:
+            if channel.ambient and self._ambient_enabled:
                 position = (
                     self._positions[index] if index < len(self._positions) else 0.0
                 )
@@ -180,15 +197,22 @@ class Mixer:
                 amb_r += scratch
                 index += 1
 
-        try:
-            self._reverb.process(amb_l, amb_r, self._wet_l, self._wet_r)
-        except Exception:
-            self._wet_l[:] = 0.0
-            self._wet_r[:] = 0.0
-
-        # 100% wet: the ambient bus contributes only its reverb.
-        np.add(dry, self._wet_l, out=out[:block, 0])
-        np.add(dry, self._wet_r, out=out[:block, 1])
+        if self._ambient_enabled:
+            try:
+                self._reverb.process(amb_l, amb_r, self._wet_l, self._wet_r)
+            except Exception:
+                self._wet_l[:] = 0.0
+                self._wet_r[:] = 0.0
+            # 100% wet: the ambient bus contributes only its reverb.
+            np.add(dry, self._wet_l, out=out[:block, 0])
+            np.add(dry, self._wet_r, out=out[:block, 1])
+        else:
+            # Bypassed: the reverb is not run at all, rather than run and
+            # added as silence. Its comb loops are the one part of this
+            # callback that is not vectorised, so skipping them is most of
+            # the mixer's cost.
+            np.copyto(out[:block, 0], dry)
+            np.copyto(out[:block, 1], dry)
         # Master volume, before the clip so turning it up cannot push the
         # sum past full scale. `out=` because the callback allocates nothing.
         np.multiply(out, self.volume, out=out)
