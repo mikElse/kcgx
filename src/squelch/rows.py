@@ -76,7 +76,7 @@ def control_line(
 ) -> str:
     """The expanded row's control strip, with activity right-aligned."""
     controls = f"{_SOLO}  {_toggle(muted)}  {_AMBIENT}"
-    readout = "" if activity is None else f"busy {round(activity * 100)}%"
+    readout = "" if activity is None else f"Chatter {round(activity * 100)}%"
     return controls + readout.rjust(ROW_WIDTH - len(controls))
 
 

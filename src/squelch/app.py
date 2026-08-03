@@ -282,12 +282,34 @@ class SquelchApp(App):
         # itself acts on the wrong feed.
         self._resorter.note_input()
 
-    def _tick_resort(self) -> None:
-        order = self._resorter.propose(
-            rank(self._sessions, lambda session: session.activity)
+    def _ranked(self) -> list:
+        """Audible feeds on top, each group ordered by activity."""
+        return rank(
+            self._sessions,
+            lambda session: session.activity,
+            audible_of=lambda session: not session.muted,
         )
+
+    def _tick_resort(self) -> None:
+        order = self._resorter.propose(self._ranked())
         if order is not None:
             self.apply_order(order)
+
+    def _reorder_now(self) -> None:
+        """Apply the ranking immediately, skipping the settle delay.
+
+        The debounce exists so that activity drifting underneath you cannot
+        move a row between the moment you decide to click it and the moment
+        you do. A mute change is not that: the row moving is the direct,
+        expected result of the key you just pressed, and waiting fifteen
+        seconds to honour it would read as the feature being broken.
+
+        The Resorter is told what was applied so it does not then spend
+        three rounds proposing the order already on screen.
+        """
+        order = self._ranked()
+        self.apply_order(order)
+        self._resorter.adopt(order)
 
     def apply_order(self, order: list) -> None:
         """Reorder the stack, moving rows rather than remounting them.
@@ -349,6 +371,7 @@ class SquelchApp(App):
             self._clear_solo_marks()
         session.toggle_mute()
         self._refresh_row(session)
+        self._reorder_now()
 
     def action_toggle_solo(self) -> None:
         session = self.selected_session
@@ -363,6 +386,7 @@ class SquelchApp(App):
             self._apply_mix(self._solo.engage(id(session), states))
         self._clear_solo_marks()
         self._refresh_rows()
+        self._reorder_now()
 
     def action_toggle_ambient(self) -> None:
         session = self.selected_session
