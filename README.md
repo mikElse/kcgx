@@ -279,6 +279,8 @@ failing later inside the audio pipeline.
 | `icao`               | `"KPDX"`                                                        | Airport used by the feed picker (`f`) to look up feeds on LiveATC.net |
 | `feed`               | `"kpdx3_twr"`                                                    | The one feed left unmuted at startup |
 | `activity_threshold_dbfs` | `-40.0`                                                    | Level above which a feed counts as busy for the five-minute ranking. Must be written as a decimal (`-40.0`, not `-40`). |
+| `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. |
+| `gate_dbfs` | `-55.0` | Gate threshold. Measured against live audio — see the note beside `GATE_OPEN_DBFS` in `dsp.py` before moving it. |
 | `compressor_threshold_dbfs` | `-12.0` | Below this, upward compression applies |
 | `compressor_ratio` | `4.0` | Upward compression ratio |
 | `compressor_makeup_db` | `6.0` | Gain applied to every feed |
@@ -304,7 +306,7 @@ run.
 | Key     | Action |
 |---------|--------|
 | `↑` `↓` | Move the selection through the stack. |
-| `c`     | Open the config overlay — what the audio path is set to, and which settings are actually honoured. |
+| `c`     | Open the config overlay: master volume and gate are adjustable with `◂ ▸`; the rest shows what is honoured. |
 | `space` | Mute/unmute the selected feed. Its meter keeps running either way. |
 | `S`     | Solo the selected feed — mute every other one. Press again to restore the previous mix. |
 | `a`     | Route the selected feed to the ambient bus. |
@@ -326,17 +328,41 @@ going blank, so a dead feed and a gap in the layout do not look alike.
 
 ### The config overlay
 
-`c` opens a read-only table of every audio setting the design defines,
-each marked with whether it is honoured:
+`c` opens a table of every audio setting the design defines, grouped by
+what it shapes — **Output**, **Chatter**, **Ambient**.
+
+```
+ Output
+ Master volume                75%
+
+ Chatter
+›Gate                  -55.0 dBFS ◂ ▸
+ Chatter threshold     -40.0 dBFS live
+ Comp threshold        -12.0 dBFS inert
+ ...
+```
+
+**Master volume** and **Gate** are adjustable: `↑↓` picks one and `◂ ▸`
+moves it, and the change reaches the running mixer immediately — volume
+scales the summed stereo output before the clip, and the gate is pushed to
+every feed's compressor, including feeds that start afterwards. Volume
+moves in 5% steps, the gate in 1 dB.
+
+Adjustments apply to **the running session only**. Nothing here writes to
+`squelch.toml`; set `master_volume` and `gate_dbfs` there to change what
+squelch starts on.
+
+Everything else is read-only, and each row says why:
 
 - **live** — read from `squelch.toml` and actually applied.
 - **inert** — read from `squelch.toml` and not yet wired to the audio path.
 - **fixed** — compiled in; not settable at all.
 
-Five of the compressor and ambient keys are currently `inert`: `Config`
-parses them and the mixer builds its compressor from the `dsp.py` defaults
-regardless. The overlay shows both what was asked for and what is running,
-rather than implying an edit would do something.
+Five compressor and ambient keys are `inert`: `Config` parses them and
+`Channel` builds its compressor from the `dsp.py` defaults regardless. The
+ambient bus is listed twice — what was asked for, and what is running — as
+the plainest illustration of what `inert` means. A modal that let you edit
+those would be a modal that lied, so it does not.
 
 ### Feed picker
 

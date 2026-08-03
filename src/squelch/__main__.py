@@ -285,7 +285,7 @@ def main(
         ),
     )
 
-    mixer = Mixer()
+    mixer = Mixer(volume=config.master_volume, gate_dbfs=config.gate_dbfs)
     sessions = sessions_builder(feeds, config, events, mixer=mixer)
     # Before the app, so a device failure is already known and is replayed
     # with the other startup warnings once the UI is up.
@@ -295,6 +295,7 @@ def main(
         config,
         sessions,
         feed_loader=lambda: picker_feeds(config),
+        mixer=mixer,
         # Defaults to the real os.environ and subprocess.run, and does
         # nothing at all when KCGX_RADAR_PANE is unset -- so this is safe
         # outside the cockpit.

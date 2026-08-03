@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Sequence
+from typing import Any
 from datetime import datetime
 
 from textual import work
@@ -125,6 +126,7 @@ class SquelchApp(App):
         *,
         feed_loader: Callable[[], list[Feed]] | None = None,
         radar_theme: RadarTheme | None = None,
+        mixer: Any = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -137,6 +139,9 @@ class SquelchApp(App):
         self._level_timer = None
         self._radar_theme = radar_theme
         self._theme_timer = None
+        # The config overlay adjusts the audio path through this. None
+        # outside a real run, where the overlay is read-only.
+        self._mixer = mixer
         for session in self._sessions:
             session.soloed = False
         self._clock_text = datetime.now().strftime("%H:%M:%S")
@@ -489,7 +494,7 @@ class SquelchApp(App):
     # -- config --------------------------------------------------------
 
     def action_show_config(self) -> None:
-        self.push_screen(ConfigScreen(self._config))
+        self.push_screen(ConfigScreen(self._config, mixer=self._mixer))
 
     # -- feed picker ---------------------------------------------------
 

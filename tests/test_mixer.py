@@ -384,3 +384,112 @@ def test_stop_is_idempotent_and_never_raises():
     mixer.stop()
     mixer.stop()
     assert mixer._stream is None
+
+
+# -- master volume ---------------------------------------------------------
+
+
+def loud_channel(mixer):
+    channel = mixer.add_channel()
+    channel.muted = False
+    channel.buffer.write(frame())
+    return channel
+
+
+def test_unity_volume_is_the_default():
+    assert Mixer().volume == 1.0
+
+
+def test_volume_scales_the_output():
+    quiet, loud = Mixer(volume=0.25), Mixer(volume=1.0)
+    for mixer in (quiet, loud):
+        loud_channel(mixer)
+    out_q, out_l = out_buffer(), out_buffer()
+    quiet.render(out_q)
+    loud.render(out_l)
+    assert float(np.abs(out_q).max()) < float(np.abs(out_l).max())
+
+
+def test_zero_volume_is_silence():
+    mixer = Mixer(volume=0.0)
+    loud_channel(mixer)
+    assert not render(mixer).any()
+
+
+def test_volume_can_be_changed_at_runtime():
+    mixer = Mixer()
+    channel = loud_channel(mixer)
+    before = float(np.abs(render(mixer)).max())
+    mixer.volume = 0.1
+    channel.buffer.write(frame())
+    after = float(np.abs(render(mixer)).max())
+    assert after < before
+
+
+def test_volume_cannot_push_the_output_past_full_scale():
+    """Applied before the clip, so turning it up cannot exceed the range."""
+    mixer = Mixer(volume=8.0)
+    for _ in range(4):
+        loud_channel(mixer)
+    out = render(mixer)
+    assert float(np.abs(out).max()) <= 1.0
+
+
+def test_volume_does_not_allocate_in_the_callback():
+    mixer = Mixer(volume=0.5)
+    for _ in range(3):
+        channel = loud_channel(mixer)
+        channel._raw = channel._raw.view(_NoTemporaries)
+        channel._shaped = channel._shaped.view(_NoTemporaries)
+    out = out_buffer()
+    for _ in range(3):
+        for channel in mixer._channels:
+            channel.buffer.write(frame())
+        mixer.render(out)
+
+
+# -- the gate --------------------------------------------------------------
+
+
+def test_the_gate_defaults_to_the_dsp_value():
+    from squelch.dsp import GATE_OPEN_DBFS
+
+    assert Mixer().gate_dbfs == GATE_OPEN_DBFS
+
+
+def test_a_configured_gate_reaches_new_channels():
+    mixer = Mixer(gate_dbfs=-30.0)
+    channel = mixer.add_channel()
+    assert channel._compressor.gate_dbfs == -30.0
+
+
+def test_setting_the_gate_reaches_channels_that_already_exist():
+    mixer = Mixer()
+    channel = mixer.add_channel()
+    mixer.set_gate(-25.0)
+    assert channel._compressor.gate_dbfs == -25.0
+    assert mixer.gate_dbfs == -25.0
+
+
+def test_setting_the_gate_also_reaches_channels_added_afterwards():
+    """Feeds start on their own threads, so some arrive after the change."""
+    mixer = Mixer()
+    mixer.set_gate(-25.0)
+    late = mixer.add_channel()
+    assert late._compressor.gate_dbfs == -25.0
+
+
+def test_the_gate_threshold_changes_what_is_boosted():
+    """A -35 dBFS signal is gated at -30 and open at -50."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor, block_dbfs as level
+
+    def gain_after(threshold):
+        comp = Compressor(gate_open=threshold, gate_close=threshold)
+        out = np.zeros(DSP_BLOCK, dtype=np.float32)
+        tone = np.full(DSP_BLOCK, 10 ** (-35.0 / 20), dtype=np.float32)
+        for _ in range(60):
+            comp.process(tone, out)
+        return comp.gain_db
+
+    assert gain_after(-50.0) > gain_after(-30.0)
