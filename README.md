@@ -282,6 +282,7 @@ failing later inside the audio pipeline.
 | `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. |
 | `gate_dbfs` | `-55.0` | Gate threshold. Measured against live audio — see the note beside `GATE_OPEN_DBFS` in `dsp.py` before moving it. |
 | `gate_enabled` | `true` | Set `false` to disable the gate. Safe on source-squelched feeds; costs you noise rejection on one with an open-squelch floor. |
+| `compressor_enabled` | `true` | Set `false` to bypass the compressor entirely — unity gain, roughly 13 dB quieter. |
 | `compressor_threshold_dbfs` | `-12.0` | Below this, upward compression applies |
 | `compressor_ratio` | `4.0` | Upward compression ratio |
 | `compressor_makeup_db` | `6.0` | Gain applied to every feed |
@@ -337,15 +338,16 @@ what it shapes — **Output**, **Chatter**, **Ambient**.
  Master volume                75%
 
  Chatter
-›Gate                          on ◂ ▸
+›Compressor                    on ◂ ▸
+ Gate                          on
  Gate threshold        -55.0 dBFS
  Chatter threshold     -40.0 dBFS live
  Comp threshold        -12.0 dBFS inert
  ...
 ```
 
-**Master volume**, **Gate** and **Gate threshold** are adjustable: `↑↓`
-picks one and `◂ ▸` moves it, and the change reaches the running mixer
+**Master volume**, **Compressor**, **Gate** and **Gate threshold** are
+adjustable: `↑↓` picks one and `◂ ▸` moves it, and the change reaches the running mixer
 immediately — volume scales the summed stereo output before the clip, and
 the gate settings are pushed to every feed's compressor, including feeds
 that start afterwards. Volume moves in 5% steps, the threshold in 1 dB.
@@ -359,6 +361,20 @@ only earns its keep on a feed with a genuine open-squelch noise floor,
 which upward compression would otherwise lift by up to the range limit.
 Switching it off rides the existing ramp rather than stepping, so it does
 not click mid-transmission. Set `gate_enabled = false` to start that way.
+
+**The compressor can be bypassed entirely.** Off means unity — no gate, no
+upward boost, no makeup — so you hear the feed untouched. Measured on the
+same capture, its gain then never moves at all (standard deviation 0.00 dB
+against 3.04 with it engaged), which makes it the definitive answer to
+"is the compressor doing this?". Bypassing takes the gate with it, so those
+rows read `off` whatever they are set to.
+
+The catch is level: bypass is about **13 dB quieter**, because 13 dB of
+gain is exactly what it was adding. Master volume only attenuates, so use
+your system volume to compare fairly. Toggling slews over the release
+rather than stepping — measured at most 0.61 dB per block mid-transmission
+— so an A/B does not thump. Set `compressor_enabled = false` to start
+bypassed.
 
 Adjustments apply to **the running session only**. Nothing here writes to
 `squelch.toml`; set `master_volume` and `gate_dbfs` there to change what
