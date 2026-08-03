@@ -6,6 +6,10 @@ all -- and it is also the one place per-feed isolation could be lost, since
 a device failure that used to cost one row now costs all audio. Every
 failure path here is therefore written to degrade to silence-for-one rather
 than silence-for-all.
+
+Between a feed's ring buffer and the sum there is now nothing at all: the
+gate and the compressor that used to sit there were removed on 2026-08-02.
+An unmuted feed contributes exactly the samples its decoder wrote.
 """
 
 from __future__ import annotations
@@ -14,9 +18,7 @@ import numpy as np
 
 from squelch.dsp import (
     BLOCK,
-    GATE_OPEN_DBFS,
     SAMPLE_RATE,
-    Compressor,
     Reverb,
     block_dbfs,
     pan_gains,
@@ -31,9 +33,14 @@ SILENCE_FLOOR_DBFS = -96.0
 
 
 class Channel:
-    """One feed's slot in the mix."""
+    """One feed's slot in the mix.
 
-    def __init__(self, capacity: int, **compressor: object) -> None:
+    A pure conduit: samples enter the ring buffer and leave the mix at the
+    value they were decoded at. There is nothing between the two -- no gate,
+    no compressor -- so a channel has no signal-dependent state to go wrong.
+    """
+
+    def __init__(self, capacity: int) -> None:
         self.buffer = RingBuffer(capacity)
         # Plain attributes, read by the callback without synchronisation.
         # Rebinding a bool is atomic under CPython, and a change that takes
@@ -41,13 +48,7 @@ class Channel:
         self.muted = True
         self.ambient = False
         self.level_dbfs = SILENCE_FLOOR_DBFS
-        # Constructed in its final state rather than built enabled and then
-        # switched: set_enabled ramps, deliberately, so a channel added to a
-        # bypassed mixer would fade the makeup gain out across its first
-        # 150 ms instead of simply not applying it.
-        self._compressor = Compressor(**compressor)
         self._raw = np.zeros(BLOCK, dtype=np.float32)
-        self._shaped = np.zeros(BLOCK, dtype=np.float32)
 
 
 class Mixer:
@@ -56,9 +57,6 @@ class Mixer:
         *,
         block: int = BLOCK,
         volume: float = 1.0,
-        gate_dbfs: float | None = None,
-        gate_enabled: bool = True,
-        compressor_enabled: bool = True,
         ambient_enabled: bool = True,
     ) -> None:
         self._block = block
@@ -66,9 +64,6 @@ class Mixer:
         # `ambient`: rebinding a float is atomic under CPython and a gain
         # that lands one block late is not observable.
         self.volume = float(volume)
-        self._gate_dbfs = gate_dbfs
-        self._gate_enabled = bool(gate_enabled)
-        self._compressor_enabled = bool(compressor_enabled)
         self._ambient_enabled = bool(ambient_enabled)
         self._capacity = int(SAMPLE_RATE * BUFFER_SECONDS)
         self._channels: list[Channel] = []
@@ -87,27 +82,9 @@ class Mixer:
         self._ambient_count = -1
 
     def add_channel(self) -> Channel:
-        settings: dict = {
-            "enabled": self._compressor_enabled,
-            "gate_enabled": self._gate_enabled,
-        }
-        if self._gate_dbfs is not None:
-            settings["gate_open"] = self._gate_dbfs
-            settings["gate_close"] = self._gate_dbfs
-        channel = Channel(self._capacity, **settings)
+        channel = Channel(self._capacity)
         self._channels.append(channel)
         return channel
-
-    def set_gate(self, dbfs: float) -> None:
-        """Move every feed's gate threshold at once.
-
-        Applied to channels that already exist as well as to ones added
-        later, so opening the config overlay before every feed has started
-        does not leave the stragglers on the old value.
-        """
-        self._gate_dbfs = float(dbfs)
-        for channel in self._channels:
-            channel._compressor.set_gate(self._gate_dbfs)
 
     def set_ambient_enabled(self, enabled: bool) -> None:
         """Bypass the ambient bus: no panning, no reverb, no second sum."""
@@ -116,32 +93,6 @@ class Mixer:
     @property
     def ambient_enabled(self) -> bool:
         return self._ambient_enabled
-
-    def set_compressor_enabled(self, enabled: bool) -> None:
-        """Bypass every feed's compressor, or bring it back."""
-        self._compressor_enabled = bool(enabled)
-        for channel in self._channels:
-            channel._compressor.set_enabled(self._compressor_enabled)
-
-    @property
-    def compressor_enabled(self) -> bool:
-        return self._compressor_enabled
-
-    def set_gate_enabled(self, enabled: bool) -> None:
-        """Turn every feed's gate off, or back on."""
-        self._gate_enabled = bool(enabled)
-        for channel in self._channels:
-            channel._compressor.set_gate_enabled(self._gate_enabled)
-
-    @property
-    def gate_enabled(self) -> bool:
-        return self._gate_enabled
-
-    @property
-    def gate_dbfs(self) -> float:
-        if self._gate_dbfs is not None:
-            return self._gate_dbfs
-        return GATE_OPEN_DBFS
 
     # -- rendering -----------------------------------------------------
 
@@ -173,27 +124,20 @@ class Mixer:
         scratch = self._scratch[:block]
         for channel in self._channels:
             raw = channel._raw
-            shaped = channel._shaped
             channel.buffer.read_into(raw)
-            try:
-                channel._compressor.process(raw, shaped)
-            except Exception:
-                # One feed's chain must never cost the other eleven their
-                # block. Silence for this feed, this block.
-                shaped[:] = 0.0
-            channel.level_dbfs = block_dbfs(shaped)
+            channel.level_dbfs = block_dbfs(raw)
             if not channel.muted:
-                dry += shaped
+                dry += raw
             if channel.ambient and self._ambient_enabled:
                 position = (
                     self._positions[index] if index < len(self._positions) else 0.0
                 )
                 left, right = pan_gains(position)
-                # Through the scratch buffer: `shaped * scalar` would
-                # allocate a temporary on every feed of every block.
-                np.multiply(shaped, left * AMBIENT_GAIN, out=scratch)
+                # Through the scratch buffer: `raw * scalar` would allocate
+                # a temporary on every feed of every block.
+                np.multiply(raw, left * AMBIENT_GAIN, out=scratch)
                 amb_l += scratch
-                np.multiply(shaped, right * AMBIENT_GAIN, out=scratch)
+                np.multiply(raw, right * AMBIENT_GAIN, out=scratch)
                 amb_r += scratch
                 index += 1
 

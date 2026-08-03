@@ -1,3 +1,5 @@
+from dataclasses import fields
+
 import pytest
 
 from squelch.config import Config, ConfigError, load_config
@@ -82,61 +84,68 @@ def test_a_non_numeric_activity_threshold_is_rejected(tmp_path):
     assert "activity_threshold_dbfs" in str(exc.value)
 
 
-def test_the_audio_defaults_match_the_dsp_module():
-    from squelch import dsp
-
-    config = Config()
-    assert config.compressor_threshold_dbfs == dsp.THRESHOLD_DBFS
-    assert config.compressor_ratio == dsp.RATIO
-    assert config.compressor_makeup_db == dsp.MAKEUP_DB
-    assert config.compressor_range_db == dsp.RANGE_LIMIT_DB
-
-
 def test_the_audio_parameters_can_be_configured(tmp_path):
     path = tmp_path / "squelch.toml"
-    path.write_text(
-        "compressor_threshold_dbfs = -18.0\n"
-        "compressor_ratio = 2.0\n"
-        "ambient_gain_db = -12.0\n"
-    )
+    path.write_text("ambient_gain_db = -12.0\nmaster_volume = 0.5\n")
     config = load_config(path)
-    assert config.compressor_threshold_dbfs == -18.0
-    assert config.compressor_ratio == 2.0
     assert config.ambient_gain_db == -12.0
+    assert config.master_volume == 0.5
 
 
-def test_a_non_numeric_ratio_is_rejected(tmp_path):
+def test_a_non_numeric_gain_is_rejected(tmp_path):
     path = tmp_path / "squelch.toml"
-    path.write_text('compressor_ratio = "hard"\n')
+    path.write_text('ambient_gain_db = "loud"\n')
     with pytest.raises(ConfigError) as exc:
         load_config(path)
-    assert "compressor_ratio" in str(exc.value)
+    assert "ambient_gain_db" in str(exc.value)
 
 
-def test_the_audio_shaping_ships_disabled():
+def test_the_shaping_keys_are_gone_rather_than_ignored():
+    """The gate and the compressor were removed on 2026-08-02.
+
+    Pinned as an absence, not left to be noticed: a key that still parses
+    but drives nothing is exactly the state this change was made to leave
+    behind, and nothing else in the suite fails if one comes back.
+    """
+    names = {field.name for field in fields(Config)}
+    assert not {name for name in names if name.startswith("compressor_")}
+    assert not {name for name in names if name.startswith("gate_")}
+
+
+def test_a_stale_config_file_still_loads(tmp_path):
+    """Unknown keys are ignored, so a config written for the old build
+    starts rather than dying on keys that no longer exist."""
+    path = tmp_path / "squelch.toml"
+    path.write_text(
+        "icao = \"KSEA\"\n"
+        "compressor_enabled = true\n"
+        "gate_dbfs = -55.0\n"
+        "compressor_ratio = 4.0\n"
+    )
+    config = load_config(path)
+    assert config.icao == "KSEA"
+
+
+def test_the_ambient_bus_ships_disabled():
     """The signal path is the decoded feed plus master volume, nothing else.
 
     Pinned as an explicit default rather than left to follow from the
     overlay's rendering: every status in the config overlay is derived from
-    these flags, so flipping them flips the whole table consistently and no
+    this flag, so flipping it flips the whole table consistently and no
     test over there would notice.
     """
-    config = Config()
-    assert config.compressor_enabled is False
-    assert config.ambient_enabled is False
+    assert Config().ambient_enabled is False
 
 
-def test_the_shaping_can_be_switched_back_on(tmp_path):
+def test_the_ambient_bus_can_be_switched_back_on(tmp_path):
     path = tmp_path / "squelch.toml"
-    path.write_text("compressor_enabled = true\nambient_enabled = true\n")
-    config = load_config(path)
-    assert config.compressor_enabled is True
-    assert config.ambient_enabled is True
+    path.write_text("ambient_enabled = true\n")
+    assert load_config(path).ambient_enabled is True
 
 
 def test_a_non_boolean_switch_is_rejected(tmp_path):
     path = tmp_path / "squelch.toml"
-    path.write_text('compressor_enabled = "yes"\n')
+    path.write_text('ambient_enabled = "yes"\n')
     with pytest.raises(ConfigError) as exc:
         load_config(path)
-    assert "compressor_enabled" in str(exc.value)
+    assert "ambient_enabled" in str(exc.value)

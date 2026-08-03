@@ -12,7 +12,6 @@ from dataclasses import replace
 import pytest
 from textual.geometry import Size
 
-from squelch import dsp
 from squelch.app import SquelchApp
 from squelch.config import Config
 from squelch.config_view import (
@@ -26,14 +25,12 @@ from squelch.config_view import (
     ConfigScreen,
     Live,
     adjust,
-    adjustable_settings,
     config_rows,
     flatten,
     group_heading,
     row_text,
 )
 from squelch.mixer import Mixer
-from squelch.mixer import AMBIENT_GAIN_DB
 
 SIZE = (48, 42)
 
@@ -42,7 +39,7 @@ def live(config=None, **kwargs):
     """The live state as the app would build it, with overrides.
 
     Via Live.of rather than the dataclass defaults: those default the
-    effects on, while a real Config now defaults them off, and a helper
+    ambient bus on, while a real Config now defaults it off, and a helper
     that disagreed with the app made every status assertion test the
     helper instead of the overlay.
     """
@@ -88,18 +85,28 @@ def test_the_chatter_threshold_is_honoured():
 
 
 def test_the_table_shows_configured_values_not_just_defaults():
-    shown = values(Config(compressor_ratio=2.5, activity_threshold_dbfs=-35.5))
-    assert "2.5" in shown["Comp ratio"]
+    shown = values(Config(activity_threshold_dbfs=-35.5, ambient_gain_db=-11.5))
     assert "-35.5" in shown["Chatter threshold"]
+    assert "-11.5" in shown["Bus level"]
 
 
-def test_the_gate_row_defaults_to_the_measured_value():
-    assert f"{dsp.GATE_OPEN_DBFS:.1f}" in values()["Gate threshold"]
+def test_the_removed_shaping_has_no_rows_left():
+    """The gate and the compressor are gone, not shown as bypassed.
+
+    A row reporting a setting that no code reads is the failure mode this
+    whole change was about, so their absence is asserted rather than
+    assumed. `settings()` covers every group.
+    """
+    labels = [s.label for s in settings()]
+    assert not [label for label in labels if "Gate" in label]
+    assert not [label for label in labels if "Comp" in label]
 
 
-def test_the_gate_row_shows_the_mixer_s_live_value_when_there_is_one():
-    """The gate lives on the mixer once it is running, not in Config."""
-    assert "-30.0" in values(gate_dbfs=-30.0)["Gate threshold"]
+def test_the_volume_row_shows_the_mixer_s_live_value_when_there_is_one():
+    """Once it is running the mixer is the authority, not Config."""
+    mixer = Mixer(volume=0.35)
+    shown = {s.label: s.value for s in flatten(config_rows(Live.of(Config(), mixer)))}
+    assert "35%" in shown["Master volume"]
 
 
 # -- grouping --------------------------------------------------------------
@@ -120,11 +127,9 @@ def test_the_ambient_group_holds_only_ambient_settings():
     ]
 
 
-def test_the_chatter_group_holds_the_gate_and_the_compressor():
+def test_the_chatter_group_holds_the_chatter_threshold():
     groups = {g.title: [s.label for s in g.settings] for g in config_rows(live())}
-    assert "Gate" in groups["Chatter"]
-    assert "Comp ratio" in groups["Chatter"]
-    assert "Reverb decay" not in groups["Chatter"]
+    assert groups["Chatter"] == ["Chatter threshold"]
 
 
 def test_master_volume_is_alone_at_the_top():
@@ -168,9 +173,6 @@ def test_an_unknown_key_changes_nothing():
     assert adjust(before, "nonsense", 1) == before
 
 
-# -- switching the gate off ------------------------------------------------
-
-
 # -- the screen ------------------------------------------------------------
 
 
@@ -199,8 +201,9 @@ async def test_the_overlay_lists_the_audio_settings():
         await pilot.press("c")
         await pilot.pause()
         joined = "\n".join(rendered(app)[0])
-        assert "Comp ratio" in joined
+        assert "Master volume" in joined
         assert "Chatter threshold" in joined
+        assert "Reverb decay" in joined
 
 
 @pytest.mark.asyncio
@@ -352,17 +355,27 @@ async def test_adjusting_without_a_mixer_does_not_raise():
 @pytest.mark.asyncio
 async def test_a_mixer_that_raises_does_not_take_the_pane_down():
     class Angry(Mixer):
-        def set_gate(self, dbfs):
-            raise RuntimeError("no")
+        # A property, because volume is a plain attribute on the real mixer
+        # and the previous version of this test overrode `set_gate` -- which
+        # no longer exists, so it raised nothing and proved nothing. Armed
+        # only after __init__, which assigns volume itself.
+        armed = False
 
-    app = app_with_mixer(Angry())
+        @property
+        def volume(self):
+            return 1.0
+
+        @volume.setter
+        def volume(self, _value):
+            if self.armed:
+                raise RuntimeError("no")
+
+    mixer = Angry()
+    mixer.armed = True
+    app = app_with_mixer(mixer)
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("c")
         await pilot.press("right")
         await pilot.pause()
         assert isinstance(app.screen, ConfigScreen)
-
-
-# -- switching the compressor off ------------------------------------------
-
 

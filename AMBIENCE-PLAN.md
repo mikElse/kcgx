@@ -2,6 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> ⚠️ **Partly stale as of 2026-08-02.** The per-feed gate and upward
+> compressor were removed from the codebase. Everything below that reads
+> gate or compressor state no longer has anything to read:
+>
+> - **Ducking** was specified to reuse "D's per-feed gate state" and to ramp
+>   on "the compressor's release constant (150 ms)". Neither exists. Ducking
+>   now needs its own transmit detector — `Channel.level_dbfs` against
+>   `activity_threshold_dbfs` is the obvious candidate, since it is already
+>   computed per block and already means "this feed is busy" — and its own
+>   ramp constant.
+> - The signal-chain diagram's `feeds ─► gate ─► comp` stage is now just
+>   `feeds`. The "the bed does not pass through the gate or the compressor"
+>   argument still holds; it is simply no longer a distinction.
+>
+> The rest of the plan — the stems, the manifest, the Poisson triggering,
+> panning, and where the bed sums into the master — is unaffected.
+
 **Goal:** Play a local ambience bed — the sound of the room you are listening *from* — underneath the live feeds. Eight looping and randomly-triggered stems, mixed by squelch at runtime, ducking out of the way when anybody transmits.
 
 **Architecture:** The stems live beside the package but are not in the repo — they are gitignored and fetched (see "The assets"). At startup a worker thread decodes them through ffmpeg to 16 kHz mono float32 and hands them to a `Bed`, which owns one voice per stem. The mixer's callback pulls one stereo block from the bed per cycle and sums it into the master after the dry and ambient buses. The bed is pure NumPy over preallocated buffers, so all of it is tested with no audio device and no network.

@@ -1,11 +1,11 @@
 """The config overlay: what the audio path is set to, and what is honoured.
 
-Master volume is the only adjustable setting, and the only shaping the
-signal path still does. Everything else is bypassed: the compressor runs at
-unity and the ambient bus is neither summed nor reverbed, so what reaches
-the device is the decoded feed scaled by one number.
+Master volume is the only adjustable setting, and the only gain the signal
+path applies. What reaches the device is the decoded feed scaled by one
+number -- there is no gate and no compressor to report on any more, so the
+rows that described them are gone rather than shown as bypassed.
 
-The rest of the table stays visible, each row carrying an honesty marker:
+What is left carries an honesty marker:
 
     live   read from the config and actually applied
     inert  read from the config, applied to nothing
@@ -17,16 +17,16 @@ what counts as busy for the row readout and the stack ordering, not how
 anything sounds. Marking it inert would be a lie, and disabling it would
 silently break the sort.
 
-Bringing the shaping back is a config-file change (`compressor_enabled`,
-`ambient_enabled`), not a keypress: the overlay reports the audio path and
-only offers to change the part of it that is live.
+Bringing the ambient bus back is a config-file change (`ambient_enabled`),
+not a keypress: the overlay reports the audio path and only offers to
+change the part of it that is live.
 
 Adjustments apply to the running session only. Nothing here writes to
 `squelch.toml` -- editing a user's config file is not something a volume
 key should do behind their back.
 
-The table is a pure function of a Config plus the mixer's live gate, so the
-whole thing can be checked without a running app -- the same split
+The table is a pure function of a Config plus what the mixer is running, so
+the whole thing can be checked without a running app -- the same split
 `rows.py` uses.
 """
 
@@ -41,7 +41,6 @@ from textual.widgets import Static
 
 from squelch import dsp
 from squelch.config import Config
-from squelch.mixer import AMBIENT_GAIN_DB
 
 LIVE = "live"
 INERT = "inert"
@@ -60,18 +59,11 @@ LABEL_WIDTH = 21
 VALUE_WIDTH = 12
 
 VOLUME_KEY = "master_volume"
-GATE_KEY = "gate_dbfs"
-GATE_ENABLED_KEY = "gate_enabled"
-COMPRESSOR_KEY = "compressor_enabled"
-# Shown against the threshold when the gate is switched off, so the number
-# is still readable without implying it is doing anything.
+# Shown against a value belonging to an effect that is not running, so the
+# number is still readable without implying it is doing anything.
 OFF = "off"
 
-# Step, floor, and ceiling for each adjustable setting.
 VOLUME_STEP = 0.05
-GATE_STEP = 1.0
-GATE_FLOOR = -96.0
-GATE_CEILING = 0.0
 
 
 @dataclass(frozen=True)
@@ -96,34 +88,22 @@ class Group:
 class Live:
     """What the audio path is actually set to.
 
-    The gate lives on the mixer rather than only in the config, so a caller
-    adjusting anything has to be handed all of it back. A record rather
-    than a widening tuple, now that there are three adjustables.
+    The mixer, not the config, is the authority on anything it can be told
+    to change at runtime -- so a caller adjusting one setting is handed all
+    of them back rather than a widening tuple.
     """
 
     config: Config
-    gate_dbfs: float
-    gate_enabled: bool
-    compressor_enabled: bool = True
     ambient_enabled: bool = True
 
     @classmethod
     def of(cls, config: Config, mixer=None) -> "Live":
         if mixer is None:
-            return cls(
-                config,
-                config.gate_dbfs,
-                config.gate_enabled,
-                config.compressor_enabled,
-                config.ambient_enabled,
-            )
+            return cls(config, config.ambient_enabled)
         # From the mixer, not the config: the overlay has to show what is
         # running, and the two diverge as soon as anyone adjusts anything.
         return cls(
             replace(config, master_volume=mixer.volume),
-            mixer.gate_dbfs,
-            mixer.gate_enabled,
-            mixer.compressor_enabled,
             mixer.ambient_enabled,
         )
 
@@ -131,7 +111,6 @@ class Live:
 def config_rows(live: Live) -> list[Group]:
     """Every audio setting the design defines, grouped by what it shapes."""
     config = live.config
-    gate = live.gate_dbfs
     return [
         Group(
             "Output",
@@ -147,39 +126,13 @@ def config_rows(live: Live) -> list[Group]:
         Group(
             "Chatter",
             (
-                Setting(
-                    "Compressor",
-                    "on" if live.compressor_enabled else OFF,
-                    INERT if live.compressor_enabled else OFF,
-                ),
-                # The gate lives inside the compressor, so bypassing the
-                # compressor takes the gate with it whatever these say.
-                Setting(
-                    "Gate",
-                    "on" if live.gate_enabled else OFF,
-                    INERT if live.compressor_enabled else OFF,
-                ),
-                Setting(
-                    "Gate threshold",
-                    f"{gate:.1f} dBFS",
-                    INERT
-                    if live.gate_enabled and live.compressor_enabled
-                    else OFF,
-                ),
+                # The only row here, and deliberately not an audio setting:
+                # a feed's samples reach the mix untouched, so there is
+                # nothing else about chatter left to report.
                 Setting(
                     "Chatter threshold",
                     f"{config.activity_threshold_dbfs:.1f} dBFS",
                     LIVE,
-                ),
-                Setting(
-                    "Comp threshold",
-                    f"{config.compressor_threshold_dbfs:.1f} dBFS",
-                    INERT,
-                ),
-                Setting("Comp ratio", f"{config.compressor_ratio:.1f}:1", INERT),
-                Setting("Comp makeup", f"+{config.compressor_makeup_db:.1f} dB", INERT),
-                Setting(
-                    "Comp range limit", f"{config.compressor_range_db:.1f} dB", INERT
                 ),
             ),
         ),
@@ -268,8 +221,8 @@ class ConfigScreen(ModalScreen):
         super().__init__()
         self._mixer = mixer
         # Every live value comes from the mixer when there is one. Seeding
-        # some from the mixer and some from the config made a gate change
-        # write the config's stale volume back over the live one.
+        # some from the mixer and some from the config used to make one
+        # adjustment write the config's stale volume back over the live one.
         self._live = Live.of(config, mixer)
         self._selected = 0
         self._body: Static | None = None

@@ -23,34 +23,16 @@ class Config:
     # sides. Must be written as a decimal: `_checked` derives the expected
     # type from the default, so a bare `-40` is rejected as an int.
     activity_threshold_dbfs: float = -40.0
-    # Audio shaping. The range limit and the gate are not decorative: at
-    # 4:1 with no limit, a -50 dBFS noise floor gains ~28 dB and hiss
-    # becomes the loudest thing in the pane.
-    compressor_threshold_dbfs: float = -12.0
-    compressor_ratio: float = 4.0
-    compressor_makeup_db: float = 6.0
-    compressor_range_db: float = 12.0
     ambient_gain_db: float = -8.0
     # Applied to the summed stereo output, before the clip. 1.0 is unity;
-    # the overlay shows it as a percentage.
+    # the overlay shows it as a percentage. The only gain in the signal
+    # path: the per-feed gate and compressor were removed on 2026-08-02,
+    # along with the five `compressor_*` keys and the two `gate_*` keys that
+    # configured them. Unknown keys are ignored, so an old config file that
+    # still sets them loads without complaint.
     master_volume: float = 1.0
-    # The gate threshold, in dBFS. Measured against live KPDX audio -- see
-    # the note beside GATE_OPEN_DBFS in dsp.py before moving it.
-    gate_dbfs: float = -55.0
-    # Off means the compressor's upward boost is never held back. Safe on a
-    # source-squelched feed, where silence is digital; costly on one with an
-    # open-squelch noise floor, which would be lifted by up to the range
-    # limit.
-    gate_enabled: bool = True
-    # Off bypasses the compressor entirely -- no gate, no upward boost, no
-    # makeup. The feed is heard untouched, which is roughly 13 dB quieter
-    # on a typical LiveATC stream.
-    # Off by default: the signal path is the raw decoded feed plus master
-    # volume, which is what it was before any of the shaping existed. Set
-    # true to bring the compressor back.
-    compressor_enabled: bool = False
-    # Off by default for the same reason. [A] still marks a feed, and the
-    # mixer still ignores it -- no pan, no reverb.
+    # Off by default. [A] still marks a feed, and the mixer still ignores
+    # it -- no pan, no reverb.
     ambient_enabled: bool = False
 
 

@@ -150,13 +150,15 @@ def test_a_feed_can_be_on_both_buses():
 # -- metering --------------------------------------------------------------
 
 
-def test_the_channel_reports_its_post_compression_level():
+def test_the_channel_reports_the_level_it_contributes():
+    """Nothing sits between the buffer and the sum, so the meter reads the
+    decoded level exactly -- it used to read it post-makeup."""
     mixer = Mixer()
     channel = mixer.add_channel()
     channel.muted = False
     channel.buffer.write(frame(0.05))
     render(mixer)
-    assert channel.level_dbfs > block_dbfs(frame(0.05)), "makeup gain is included"
+    assert channel.level_dbfs == pytest.approx(block_dbfs(frame(0.05)), abs=0.01)
 
 
 def test_a_muted_channel_still_meters():
@@ -209,7 +211,6 @@ def test_render_creates_no_temporaries():
         channel.ambient = index % 2 == 0
         # Both buses, so the pan path is exercised as well as the dry sum.
         channel._raw = channel._raw.view(_NoTemporaries)
-        channel._shaped = channel._shaped.view(_NoTemporaries)
     out = out_buffer()
     for _ in range(4):
         for channel in mixer._channels:
@@ -256,20 +257,30 @@ def test_render_writes_in_place():
     assert out.__array_interface__["data"][0] == before
 
 
-def test_a_channel_whose_chain_raises_does_not_break_the_block():
-    mixer = Mixer()
-    broken = mixer.add_channel()
-    healthy = mixer.add_channel()
-    broken.muted = healthy.muted = False
-    healthy.buffer.write(frame())
+def test_a_reverb_that_raises_does_not_break_the_block():
+    """The last remaining failure path inside render.
 
-    def explode(_block, _out):
+    There used to be a second one, around each channel's compressor. With
+    the compressor gone a channel is a ring buffer and nothing else, so the
+    reverb is the only thing left in here that can throw -- and a broken
+    ambient bus must still cost the dry bus nothing.
+    """
+    mixer = Mixer()
+    dry = mixer.add_channel()
+    ambient = mixer.add_channel()
+    dry.muted = False
+    ambient.muted = True
+    ambient.ambient = True
+    dry.buffer.write(frame())
+    ambient.buffer.write(frame())
+
+    def explode(*_args):
         raise RuntimeError("boom")
 
-    broken._compressor.process = explode
+    mixer._reverb.process = explode
     out = out_buffer()
     mixer.render(out)
-    assert out.any(), "the healthy feed must still be heard"
+    assert out.any(), "the dry feed must still be heard"
 
 
 # -- the stream ------------------------------------------------------------
@@ -440,191 +451,11 @@ def test_volume_does_not_allocate_in_the_callback():
     for _ in range(3):
         channel = loud_channel(mixer)
         channel._raw = channel._raw.view(_NoTemporaries)
-        channel._shaped = channel._shaped.view(_NoTemporaries)
     out = out_buffer()
     for _ in range(3):
         for channel in mixer._channels:
             channel.buffer.write(frame())
         mixer.render(out)
-
-
-# -- the gate --------------------------------------------------------------
-
-
-def test_the_gate_defaults_to_the_dsp_value():
-    from squelch.dsp import GATE_OPEN_DBFS
-
-    assert Mixer().gate_dbfs == GATE_OPEN_DBFS
-
-
-def test_a_configured_gate_reaches_new_channels():
-    mixer = Mixer(gate_dbfs=-30.0)
-    channel = mixer.add_channel()
-    assert channel._compressor.gate_dbfs == -30.0
-
-
-def test_setting_the_gate_reaches_channels_that_already_exist():
-    mixer = Mixer()
-    channel = mixer.add_channel()
-    mixer.set_gate(-25.0)
-    assert channel._compressor.gate_dbfs == -25.0
-    assert mixer.gate_dbfs == -25.0
-
-
-def test_setting_the_gate_also_reaches_channels_added_afterwards():
-    """Feeds start on their own threads, so some arrive after the change."""
-    mixer = Mixer()
-    mixer.set_gate(-25.0)
-    late = mixer.add_channel()
-    assert late._compressor.gate_dbfs == -25.0
-
-
-def test_the_gate_threshold_changes_what_is_boosted():
-    """A -35 dBFS signal is gated at -30 and open at -50."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor, block_dbfs as level
-
-    def gain_after(threshold):
-        comp = Compressor(gate_open=threshold, gate_close=threshold)
-        out = np.zeros(DSP_BLOCK, dtype=np.float32)
-        tone = np.full(DSP_BLOCK, 10 ** (-35.0 / 20), dtype=np.float32)
-        for _ in range(60):
-            comp.process(tone, out)
-        return comp.gain_db
-
-    assert gain_after(-50.0) > gain_after(-30.0)
-
-
-def test_the_gate_is_enabled_by_default():
-    assert Mixer().gate_enabled is True
-
-
-def test_a_disabled_gate_reaches_new_channels():
-    mixer = Mixer(gate_enabled=False)
-    assert mixer.add_channel()._compressor.gate_enabled is False
-
-
-def test_disabling_reaches_channels_both_sides_of_the_call():
-    mixer = Mixer()
-    early = mixer.add_channel()
-    mixer.set_gate_enabled(False)
-    late = mixer.add_channel()
-    assert early._compressor.gate_enabled is False
-    assert late._compressor.gate_enabled is False
-
-
-def test_a_disabled_gate_stops_holding_the_boost_back():
-    """The whole point: a quiet signal is lifted instead of gated."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor
-
-    def gain_after(**kw):
-        comp = Compressor(**kw)
-        out = np.zeros(DSP_BLOCK, dtype=np.float32)
-        tone = np.full(DSP_BLOCK, 10 ** (-70.0 / 20), dtype=np.float32)
-        for _ in range(120):
-            comp.process(tone, out)
-        return comp.gain_db
-
-    assert gain_after(gate_enabled=False) > gain_after(gate_enabled=True)
-
-
-def test_switching_the_gate_off_does_not_step_the_gain():
-    """It rides the existing ramp, so toggling mid-transmission cannot click."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor
-
-    comp = Compressor()
-    out = np.zeros(DSP_BLOCK, dtype=np.float32)
-    tone = np.full(DSP_BLOCK, 10 ** (-70.0 / 20), dtype=np.float32)
-    for _ in range(120):
-        comp.process(tone, out)
-    before = comp.gain_db
-    comp.set_gate_enabled(False)
-    comp.process(tone, out)
-    assert abs(comp.gain_db - before) < 12.0, "one block cannot jump the range"
-
-
-# -- bypassing the compressor ----------------------------------------------
-
-
-def test_the_compressor_is_enabled_by_default():
-    assert Mixer().compressor_enabled is True
-
-
-def test_a_bypassed_compressor_reaches_channels_both_sides_of_the_call():
-    mixer = Mixer()
-    early = mixer.add_channel()
-    mixer.set_compressor_enabled(False)
-    late = mixer.add_channel()
-    assert early._compressor.enabled is False
-    assert late._compressor.enabled is False
-
-
-def test_a_configured_bypass_reaches_new_channels():
-    assert Mixer(compressor_enabled=False).add_channel()._compressor.enabled is False
-
-
-def test_bypassed_is_unity_not_makeup_only():
-    """The point of the switch is to hear the feed untouched."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor, block_dbfs
-
-    tone = np.full(DSP_BLOCK, 10 ** (-20.0 / 20), dtype=np.float32)
-    comp = Compressor(enabled=False)
-    out = np.zeros(DSP_BLOCK, dtype=np.float32)
-    for _ in range(60):
-        comp.process(tone, out)
-    assert comp.gain_db == 0.0
-    assert block_dbfs(out) == pytest.approx(-20.0, abs=0.2)
-
-
-def test_bypassed_gain_never_moves():
-    """Static by construction: this is what a choppy compressor is not."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor
-
-    comp = Compressor(enabled=False)
-    out = np.zeros(DSP_BLOCK, dtype=np.float32)
-    gains = []
-    for level in (-60.0, -10.0, -45.0, -5.0, -80.0):
-        tone = np.full(DSP_BLOCK, 10 ** (level / 20), dtype=np.float32)
-        for _ in range(10):
-            comp.process(tone, out)
-            gains.append(comp.gain_db)
-    assert set(gains) == {0.0}
-
-
-def test_switching_the_compressor_off_does_not_step_the_gain():
-    """It rides the ramp, so an A/B mid-transmission cannot click."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor
-
-    comp = Compressor()
-    out = np.zeros(DSP_BLOCK, dtype=np.float32)
-    tone = np.full(DSP_BLOCK, 10 ** (-30.0 / 20), dtype=np.float32)
-    for _ in range(60):
-        comp.process(tone, out)
-    before = comp.gain_db
-    comp.set_enabled(False)
-    comp.process(tone, out)
-    assert abs(comp.gain_db - before) < 12.0
-
-
-def test_the_envelope_keeps_tracking_while_bypassed():
-    """So coming back on picks up from a current reading, not a stale one."""
-    from squelch.dsp import BLOCK as DSP_BLOCK
-    from squelch.dsp import Compressor
-
-    comp = Compressor(enabled=False)
-    out = np.zeros(DSP_BLOCK, dtype=np.float32)
-    loud = np.full(DSP_BLOCK, 10 ** (-6.0 / 20), dtype=np.float32)
-    for _ in range(60):
-        comp.process(loud, out)
-    comp.set_enabled(True)
-    comp.process(loud, out)
-    # A stale -96 envelope would ask for the full range limit here.
-    assert comp.gain_db < 10.0
 
 
 # -- the ambient bus bypass ------------------------------------------------
@@ -663,10 +494,11 @@ def test_bypassing_the_ambient_bus_leaves_the_dry_bus_alone():
 def test_with_everything_bypassed_the_output_is_the_input():
     """The whole point: what reaches the device is the decoded feed.
 
-    Unity compressor, no ambient bus, unity volume -- so a block written in
-    comes back out sample for sample.
+    No ambient bus, unity volume -- so a block written in comes back out
+    sample for sample. There is no longer anything else it could pass
+    through.
     """
-    mixer = Mixer(compressor_enabled=False, ambient_enabled=False, volume=1.0)
+    mixer = Mixer(ambient_enabled=False, volume=1.0)
     channel = mixer.add_channel()
     channel.muted = False
     written = frame(0.3)
@@ -677,7 +509,7 @@ def test_with_everything_bypassed_the_output_is_the_input():
 
 
 def test_master_volume_is_the_only_thing_left_shaping_it():
-    mixer = Mixer(compressor_enabled=False, ambient_enabled=False, volume=0.5)
+    mixer = Mixer(ambient_enabled=False, volume=0.5)
     channel = mixer.add_channel()
     channel.muted = False
     written = frame(0.4)
@@ -693,9 +525,6 @@ def test_a_mixer_built_from_the_shipped_config_does_nothing_to_the_signal():
     config = RealConfig()
     mixer = Mixer(
         volume=config.master_volume,
-        gate_dbfs=config.gate_dbfs,
-        gate_enabled=config.gate_enabled,
-        compressor_enabled=config.compressor_enabled,
         ambient_enabled=config.ambient_enabled,
     )
     channel = mixer.add_channel()
