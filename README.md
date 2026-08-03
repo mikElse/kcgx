@@ -328,11 +328,19 @@ ffmpeg ─► ring buffer ─► gate ─► upward comp ─┬─► dry bus (c
 
 **Upward compression** lifts quiet feeds instead of you riding a gain
 control: 4:1 below −12 dBFS with a 6 dB soft knee and +6 dB makeup. Two
-limits keep it honest — a **12 dB range limit**, and a **gate** at −40 dBFS
-that closes at −46. Without them, 4:1 upward compression boosts a −50 dBFS
-noise floor by about 28 dB and hiss becomes the loudest thing in the pane.
-The gate attenuates the *boost*, never the signal, and ramps rather than
-steps, so a signal hovering at the threshold does not chatter.
+limits keep it honest — a **12 dB range limit**, and a **gate** at −55 dBFS.
+Without them, 4:1 upward compression boosts a −50 dBFS noise floor by about
+28 dB and hiss becomes the loudest thing in the pane. The gate attenuates
+the *boost*, never the signal, and ramps rather than stepping.
+
+The −55 is measured, not assumed. LiveATC squelches at the source: across
+five minutes of live KPDX tower and ground, 87% of blocks sit at exactly
+−96 dBFS with a ~70 dB gap up to speech, so there is no analog noise floor
+to reject. A gate at −40 sits *inside* the range transmissions pass
+through and re-triggers about once per transmission — 12.2 toggles/min
+against a true transmission count of 5.8. At −55 it is 6.6. Re-measure
+with `tools/gate_tune.py` if you move somewhere its feeds behave
+differently.
 
 **`[A]` routes a feed to the ambient bus**: 8 dB down, panned, and heard
 only through a short dark reverb — 100 ms, fully wet, rolled off above

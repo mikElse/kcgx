@@ -156,12 +156,12 @@ def test_the_gate_has_a_single_threshold():
     """
     from squelch.dsp import GATE_CLOSE_DBFS, GATE_OPEN_DBFS
 
-    assert GATE_OPEN_DBFS == GATE_CLOSE_DBFS == -40.0
+    assert GATE_OPEN_DBFS == GATE_CLOSE_DBFS == -55.0
 
     comp = Compressor()
     run_blocks(comp, -20.0, 20)
     assert comp.gate_open is True
-    run_blocks(comp, -43.0, 60)
+    run_blocks(comp, -65.0, 60)
     assert comp.gate_open is False, "below the single threshold it shuts"
 
 
@@ -170,18 +170,18 @@ def test_the_gate_ramps_rather_than_steps():
 
     With the hysteresis removed this ramp is the only thing left damping a
     signal that sits near -40, so it is pinned deliberately hard. The
-    levels matter: -60 to -20 cannot detect a missing ramp, because the
-    envelope's own attack smoothing limits the jump and the boost at -20 is
-    only ~7 dB anyway. Crossing from -50 to just under the threshold puts
-    the boost at the 12 dB range limit, so an ungated step is the full 12
-    and the assertion can actually fail.
+    levels matter: a crossing where the boost is small cannot detect a
+    missing ramp, because the envelope's own attack smoothing limits the
+    jump anyway. Crossing from -70 to just above the -55 threshold puts the
+    boost at the 12 dB range limit, so an ungated step is the full 12 and
+    the assertion can actually fail.
     """
     comp = Compressor()
-    run_blocks(comp, -50.0, 40)
+    run_blocks(comp, -70.0, 40)
     quiet_gain = comp.gain_db
     assert comp.gate_open is False
     out = np.zeros(BLOCK, dtype=np.float32)
-    comp.process(tone(-39.0), out)
+    comp.process(tone(-54.0), out)
     assert comp.gate_open is True, "the level must actually cross the threshold"
     assert comp.gain_db - quiet_gain < 12.0, "one block cannot jump the whole range"
 
