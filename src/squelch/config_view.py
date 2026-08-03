@@ -52,6 +52,10 @@ VALUE_WIDTH = 12
 
 VOLUME_KEY = "master_volume"
 GATE_KEY = "gate_dbfs"
+GATE_ENABLED_KEY = "gate_enabled"
+# Shown against the threshold when the gate is switched off, so the number
+# is still readable without implying it is doing anything.
+OFF = "off"
 
 # Step, floor, and ceiling for each adjustable setting.
 VOLUME_STEP = 0.05
@@ -78,13 +82,36 @@ class Group:
     settings: tuple[Setting, ...]
 
 
-def config_rows(config: Config, *, gate_dbfs: float | None = None) -> list[Group]:
-    """Every audio setting the design defines, grouped by what it shapes.
+@dataclass(frozen=True)
+class Live:
+    """What the audio path is actually set to.
 
-    `gate_dbfs` is the mixer's live value when there is one; without a
-    mixer the config's own value is shown, which is what it would start on.
+    The gate lives on the mixer rather than only in the config, so a caller
+    adjusting anything has to be handed all of it back. A record rather
+    than a widening tuple, now that there are three adjustables.
     """
-    gate = config.gate_dbfs if gate_dbfs is None else gate_dbfs
+
+    config: Config
+    gate_dbfs: float
+    gate_enabled: bool
+
+    @classmethod
+    def of(cls, config: Config, mixer=None) -> "Live":
+        if mixer is None:
+            return cls(config, config.gate_dbfs, config.gate_enabled)
+        # From the mixer, not the config: the overlay has to show what is
+        # running, and the two diverge as soon as anyone adjusts anything.
+        return cls(
+            replace(config, master_volume=mixer.volume),
+            mixer.gate_dbfs,
+            mixer.gate_enabled,
+        )
+
+
+def config_rows(live: Live) -> list[Group]:
+    """Every audio setting the design defines, grouped by what it shapes."""
+    config = live.config
+    gate = live.gate_dbfs
     return [
         Group(
             "Output",
@@ -100,7 +127,18 @@ def config_rows(config: Config, *, gate_dbfs: float | None = None) -> list[Group
         Group(
             "Chatter",
             (
-                Setting("Gate", f"{gate:.1f} dBFS", ADJUSTABLE, key=GATE_KEY),
+                Setting(
+                    "Gate",
+                    "on" if live.gate_enabled else OFF,
+                    ADJUSTABLE,
+                    key=GATE_ENABLED_KEY,
+                ),
+                Setting(
+                    "Gate threshold",
+                    f"{gate:.1f} dBFS",
+                    ADJUSTABLE if live.gate_enabled else OFF,
+                    key=GATE_KEY,
+                ),
                 Setting(
                     "Chatter threshold",
                     f"{config.activity_threshold_dbfs:.1f} dBFS",
@@ -141,25 +179,26 @@ def adjustable_settings(groups: list[Group]) -> list[Setting]:
     return [setting for setting in flatten(groups) if setting.adjustable]
 
 
-def adjust(
-    config: Config, key: str, delta: int, *, gate_dbfs: float
-) -> tuple[Config, float]:
+def adjust(live: Live, key: str, delta: int) -> Live:
     """Move one setting by `delta` steps.
 
-    Returns `(config, gate_dbfs)`: the gate lives on the mixer rather than
-    only in the config, so a caller has to be told both. Clamped here
-    rather than in the widget, so the bounds are testable without an app.
+    Clamped here rather than in the widget, so the bounds are testable
+    without an app.
     """
     if key == VOLUME_KEY:
-        volume = min(1.0, max(0.0, config.master_volume + delta * VOLUME_STEP))
+        volume = min(1.0, max(0.0, live.config.master_volume + delta * VOLUME_STEP))
         # Snapped back to the step, or repeated presses drift into
         # 0.30000000000000004 and the readout flickers between 30% and 31%.
         volume = round(volume / VOLUME_STEP) * VOLUME_STEP
-        return replace(config, master_volume=volume), gate_dbfs
+        return replace(live, config=replace(live.config, master_volume=volume))
     if key == GATE_KEY:
-        moved = gate_dbfs + delta * GATE_STEP
-        return config, min(GATE_CEILING, max(GATE_FLOOR, moved))
-    return config, gate_dbfs
+        moved = live.gate_dbfs + delta * GATE_STEP
+        return replace(live, gate_dbfs=min(GATE_CEILING, max(GATE_FLOOR, moved)))
+    if key == GATE_ENABLED_KEY:
+        # Either direction flips it: there are only two states, and making
+        # ◂ mean off and ▸ mean on would leave half the presses inert.
+        return replace(live, gate_enabled=not live.gate_enabled)
+    return live
 
 
 def row_text(setting: Setting, *, selected: bool = False) -> str:
@@ -195,20 +234,16 @@ class ConfigScreen(ModalScreen):
     def __init__(self, config: Config, *, mixer=None) -> None:
         super().__init__()
         self._mixer = mixer
-        # Both live values come from the mixer when there is one, not from
-        # the config: the overlay has to show what is running, and the two
-        # diverge as soon as anyone adjusts anything. Seeding the gate from
-        # the mixer but the volume from the config made every gate change
-        # also write the config's stale volume back over the live one.
-        self._gate = config.gate_dbfs if mixer is None else mixer.gate_dbfs
-        volume = config.master_volume if mixer is None else mixer.volume
-        self._config = replace(config, master_volume=volume)
+        # Every live value comes from the mixer when there is one. Seeding
+        # some from the mixer and some from the config made a gate change
+        # write the config's stale volume back over the live one.
+        self._live = Live.of(config, mixer)
         self._selected = 0
         self._body: Static | None = None
 
     @property
     def groups(self) -> list[Group]:
-        return config_rows(self._config, gate_dbfs=self._gate)
+        return config_rows(self._live)
 
     @property
     def selected(self) -> Setting:
@@ -253,9 +288,7 @@ class ConfigScreen(ModalScreen):
         self._refresh_body()
 
     def action_adjust(self, delta: int) -> None:
-        self._config, self._gate = adjust(
-            self._config, self.selected.key, delta, gate_dbfs=self._gate
-        )
+        self._live = adjust(self._live, self.selected.key, delta)
         self._apply()
         self._refresh_body()
 
@@ -268,8 +301,9 @@ class ConfigScreen(ModalScreen):
         if self._mixer is None:
             return
         try:
-            self._mixer.volume = self._config.master_volume
-            self._mixer.set_gate(self._gate)
+            self._mixer.volume = self._live.config.master_volume
+            self._mixer.set_gate(self._live.gate_dbfs)
+            self._mixer.set_gate_enabled(self._live.gate_enabled)
         except Exception:
             pass
 

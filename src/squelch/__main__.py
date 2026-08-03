@@ -285,7 +285,11 @@ def main(
         ),
     )
 
-    mixer = Mixer(volume=config.master_volume, gate_dbfs=config.gate_dbfs)
+    mixer = Mixer(
+        volume=config.master_volume,
+        gate_dbfs=config.gate_dbfs,
+        gate_enabled=config.gate_enabled,
+    )
     sessions = sessions_builder(feeds, config, events, mixer=mixer)
     # Before the app, so a device failure is already known and is replayed
     # with the other startup warnings once the UI is up.

@@ -123,6 +123,7 @@ class Compressor:
         range_limit: float = RANGE_LIMIT_DB,
         gate_open: float = GATE_OPEN_DBFS,
         gate_close: float = GATE_CLOSE_DBFS,
+        gate_enabled: bool = True,
         attack: float = ATTACK_S,
         release: float = RELEASE_S,
     ) -> None:
@@ -133,6 +134,7 @@ class Compressor:
         self._range = range_limit
         self._open_at = gate_open
         self._close_at = gate_close
+        self._gate_enabled = bool(gate_enabled)
         self._attack = smoothing(attack)
         self._release = smoothing(release)
         self._envelope = SILENCE_FLOOR_DBFS
@@ -145,6 +147,21 @@ class Compressor:
         # ramp is built by scaling this instead of generating a new one.
         self._unit = np.linspace(0.0, 1.0, BLOCK, dtype=np.float32)
         self._ramp = np.zeros(BLOCK, dtype=np.float32)
+
+    def set_gate_enabled(self, enabled: bool) -> None:
+        """Turn the gate off entirely, or back on.
+
+        Off pins the gate open and lets the existing ramp carry it there,
+        so switching does not click. What you lose is the only thing
+        stopping upward compression lifting a noise floor -- which costs
+        nothing on a source-squelched feed, where the floor is digital
+        silence, and costs up to the range limit on one with open squelch.
+        """
+        self._gate_enabled = bool(enabled)
+
+    @property
+    def gate_enabled(self) -> bool:
+        return self._gate_enabled
 
     def set_gate(self, dbfs: float) -> None:
         """Move the gate threshold. Safe to call from another thread.
@@ -167,7 +184,12 @@ class Compressor:
         coefficient = self._attack if level > self._envelope else self._release
         self._envelope = level + coefficient * (self._envelope - level)
 
-        if self._envelope > self._open_at:
+        if not self._gate_enabled:
+            # Pinned open rather than bypassed: the ramp below still runs,
+            # so toggling the gate off mid-transmission slews instead of
+            # stepping the whole range in one block.
+            self.gate_open = True
+        elif self._envelope > self._open_at:
             self.gate_open = True
         elif self._envelope < self._close_at:
             self.gate_open = False
