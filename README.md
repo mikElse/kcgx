@@ -281,6 +281,7 @@ failing later inside the audio pipeline.
 | `activity_threshold_dbfs` | `-40.0`                                                    | Level above which a feed counts as busy for the five-minute ranking. Must be written as a decimal (`-40.0`, not `-40`). |
 | `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. |
 | `gate_dbfs` | `-55.0` | Gate threshold. Measured against live audio — see the note beside `GATE_OPEN_DBFS` in `dsp.py` before moving it. |
+| `gate_enabled` | `true` | Set `false` to disable the gate. Safe on source-squelched feeds; costs you noise rejection on one with an open-squelch floor. |
 | `compressor_threshold_dbfs` | `-12.0` | Below this, upward compression applies |
 | `compressor_ratio` | `4.0` | Upward compression ratio |
 | `compressor_makeup_db` | `6.0` | Gain applied to every feed |
@@ -336,17 +337,28 @@ what it shapes — **Output**, **Chatter**, **Ambient**.
  Master volume                75%
 
  Chatter
-›Gate                  -55.0 dBFS ◂ ▸
+›Gate                          on ◂ ▸
+ Gate threshold        -55.0 dBFS
  Chatter threshold     -40.0 dBFS live
  Comp threshold        -12.0 dBFS inert
  ...
 ```
 
-**Master volume** and **Gate** are adjustable: `↑↓` picks one and `◂ ▸`
-moves it, and the change reaches the running mixer immediately — volume
-scales the summed stereo output before the clip, and the gate is pushed to
-every feed's compressor, including feeds that start afterwards. Volume
-moves in 5% steps, the gate in 1 dB.
+**Master volume**, **Gate** and **Gate threshold** are adjustable: `↑↓`
+picks one and `◂ ▸` moves it, and the change reaches the running mixer
+immediately — volume scales the summed stereo output before the clip, and
+the gate settings are pushed to every feed's compressor, including feeds
+that start afterwards. Volume moves in 5% steps, the threshold in 1 dB.
+
+**The gate can be switched off entirely**, which is the honest answer if it
+sounds choppy. Measured across five minutes of live KPDX tower, turning it
+off drops gate transitions from 6.6/min to none, and costs nothing: silence
+comes out at −96 dBFS either way, because these feeds are digitally silent
+between transmissions and zeros times any gain are still zeros. The gate
+only earns its keep on a feed with a genuine open-squelch noise floor,
+which upward compression would otherwise lift by up to the range limit.
+Switching it off rides the existing ramp rather than stepping, so it does
+not click mid-transmission. Set `gate_enabled = false` to start that way.
 
 Adjustments apply to **the running session only**. Nothing here writes to
 `squelch.toml`; set `master_volume` and `gate_dbfs` there to change what

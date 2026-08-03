@@ -53,6 +53,7 @@ class Mixer:
         block: int = BLOCK,
         volume: float = 1.0,
         gate_dbfs: float | None = None,
+        gate_enabled: bool = True,
     ) -> None:
         self._block = block
         # Read by the callback without synchronisation, like `muted` and
@@ -60,6 +61,7 @@ class Mixer:
         # that lands one block late is not observable.
         self.volume = float(volume)
         self._gate_dbfs = gate_dbfs
+        self._gate_enabled = bool(gate_enabled)
         self._capacity = int(SAMPLE_RATE * BUFFER_SECONDS)
         self._channels: list[Channel] = []
         self._reverb = Reverb()
@@ -80,6 +82,7 @@ class Mixer:
         channel = Channel(self._capacity)
         if self._gate_dbfs is not None:
             channel._compressor.set_gate(self._gate_dbfs)
+        channel._compressor.set_gate_enabled(self._gate_enabled)
         self._channels.append(channel)
         return channel
 
@@ -93,6 +96,16 @@ class Mixer:
         self._gate_dbfs = float(dbfs)
         for channel in self._channels:
             channel._compressor.set_gate(self._gate_dbfs)
+
+    def set_gate_enabled(self, enabled: bool) -> None:
+        """Turn every feed's gate off, or back on."""
+        self._gate_enabled = bool(enabled)
+        for channel in self._channels:
+            channel._compressor.set_gate_enabled(self._gate_enabled)
+
+    @property
+    def gate_enabled(self) -> bool:
+        return self._gate_enabled
 
     @property
     def gate_dbfs(self) -> float:

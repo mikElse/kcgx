@@ -493,3 +493,53 @@ def test_the_gate_threshold_changes_what_is_boosted():
         return comp.gain_db
 
     assert gain_after(-50.0) > gain_after(-30.0)
+
+
+def test_the_gate_is_enabled_by_default():
+    assert Mixer().gate_enabled is True
+
+
+def test_a_disabled_gate_reaches_new_channels():
+    mixer = Mixer(gate_enabled=False)
+    assert mixer.add_channel()._compressor.gate_enabled is False
+
+
+def test_disabling_reaches_channels_both_sides_of_the_call():
+    mixer = Mixer()
+    early = mixer.add_channel()
+    mixer.set_gate_enabled(False)
+    late = mixer.add_channel()
+    assert early._compressor.gate_enabled is False
+    assert late._compressor.gate_enabled is False
+
+
+def test_a_disabled_gate_stops_holding_the_boost_back():
+    """The whole point: a quiet signal is lifted instead of gated."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor
+
+    def gain_after(**kw):
+        comp = Compressor(**kw)
+        out = np.zeros(DSP_BLOCK, dtype=np.float32)
+        tone = np.full(DSP_BLOCK, 10 ** (-70.0 / 20), dtype=np.float32)
+        for _ in range(120):
+            comp.process(tone, out)
+        return comp.gain_db
+
+    assert gain_after(gate_enabled=False) > gain_after(gate_enabled=True)
+
+
+def test_switching_the_gate_off_does_not_step_the_gain():
+    """It rides the existing ramp, so toggling mid-transmission cannot click."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor
+
+    comp = Compressor()
+    out = np.zeros(DSP_BLOCK, dtype=np.float32)
+    tone = np.full(DSP_BLOCK, 10 ** (-70.0 / 20), dtype=np.float32)
+    for _ in range(120):
+        comp.process(tone, out)
+    before = comp.gain_db
+    comp.set_gate_enabled(False)
+    comp.process(tone, out)
+    assert abs(comp.gain_db - before) < 12.0, "one block cannot jump the range"

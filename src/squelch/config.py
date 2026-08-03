@@ -37,6 +37,11 @@ class Config:
     # The gate threshold, in dBFS. Measured against live KPDX audio -- see
     # the note beside GATE_OPEN_DBFS in dsp.py before moving it.
     gate_dbfs: float = -55.0
+    # Off means the compressor's upward boost is never held back. Safe on a
+    # source-squelched feed, where silence is digital; costly on one with an
+    # open-squelch noise floor, which would be lifted by up to the range
+    # limit.
+    gate_enabled: bool = True
 
 
 def load_config(path: Path | None = None) -> Config:
