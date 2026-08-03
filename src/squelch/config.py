@@ -23,6 +23,14 @@ class Config:
     # sides. Must be written as a decimal: `_checked` derives the expected
     # type from the default, so a bare `-40` is rejected as an int.
     activity_threshold_dbfs: float = -40.0
+    # Audio shaping. The range limit and the gate are not decorative: at
+    # 4:1 with no limit, a -50 dBFS noise floor gains ~28 dB and hiss
+    # becomes the loudest thing in the pane.
+    compressor_threshold_dbfs: float = -12.0
+    compressor_ratio: float = 4.0
+    compressor_makeup_db: float = 6.0
+    compressor_range_db: float = 12.0
+    ambient_gain_db: float = -8.0
 
 
 def load_config(path: Path | None = None) -> Config:
