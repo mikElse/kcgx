@@ -10,6 +10,7 @@ import inspect
 
 from kcgx.__main__ import format_record, main, write_airport
 from kcgx.airports import Airport
+from kcgx.picker import QUIT
 
 PDX = Airport("KPDX", "PDX", "Portland International Airport", "Portland",
               "OR", "US", 45.5887, -122.598, "large")
@@ -281,3 +282,27 @@ def test_a_cancelled_pick_is_not_remembered(tmp_path):
         state_writer=remembered.append,
     )
     assert remembered == []
+
+
+def test_quitting_the_picker_exits_3_and_writes_nothing(tmp_path):
+    """3, not 1: declining to move the cockpit and asking to shut it down
+    are opposite intentions, and bin/kcgx acts on them differently."""
+    out = tmp_path / "record"
+    assert run(["pick", "--out", str(out)], picker=lambda a, initial="": QUIT) == 3
+    assert not out.exists()
+
+
+def test_a_quit_is_not_remembered(tmp_path):
+    """Nothing was chosen, so nothing may be persisted."""
+
+    def explode(icao):
+        raise AssertionError(f"must not persist {icao} on quit")
+
+    assert (
+        run(
+            ["pick", "--out", str(tmp_path / "record")],
+            picker=lambda a, initial="": QUIT,
+            state_writer=explode,
+        )
+        == 3
+    )
