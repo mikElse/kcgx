@@ -260,7 +260,6 @@ def main(
 
     app: Any = None
     events = SessionEvents(
-        on_level=lambda session, dbfs: safe_call(app, app.set_level, session, dbfs),
         on_state=lambda session, state: safe_call(app, app.set_state, session, state),
         on_warn=lambda session, message: safe_call(
             app, app.warn_for, session, message

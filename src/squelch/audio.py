@@ -12,6 +12,8 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 
+import numpy as np
+
 Spawner = Callable[[str], subprocess.Popen]
 
 SAMPLE_RATE = 16_000
@@ -175,50 +177,18 @@ class StreamReader:
             pass
 
 
-class Player:
-    """Speaker output. Muting stops audio but never stops transcription."""
+def pcm_to_float(pcm: bytes, out: np.ndarray) -> int:
+    """Decode s16le bytes into normalised floats, in place.
 
-    def __init__(self) -> None:
-        self.muted = False
-        self._stream = None
-
-    def start(self) -> None:
-        import sounddevice
-
-        self._stream = sounddevice.RawOutputStream(
-            samplerate=SAMPLE_RATE, channels=1, dtype="int16"
-        )
-        self._stream.start()
-
-    def write(self, pcm: bytes) -> None:
-        if self._stream is None or self.muted:
-            return
-        try:
-            self._stream.write(pcm)
-        except Exception:
-            pass  # An underrun must never take down the pipeline.
-
-    def toggle_mute(self) -> bool:
-        self.muted = not self.muted
-        return self.muted
-
-    def stop(self) -> None:
-        """Close the output stream. Safe to call twice, or never-then-once.
-
-        The audio thread may still be inside `write()` when the UI thread
-        calls this during shutdown. Nulling `_stream` *first*, through a
-        local reference, means a concurrent `write()` sees `None` and
-        returns instead of writing into a stream that is being closed
-        underneath it; PortAudio is not obliged to survive that.
-        """
-        stream, self._stream = self._stream, None
-        if stream is None:
-            return
-        try:
-            stream.stop()
-            stream.close()
-        except Exception:
-            # Shutdown must not raise: this is called from main()'s finally
-            # clause, and a PortAudio complaint here would mask whatever
-            # actually brought the app down.
-            pass
+    Writes into `out` rather than returning an array: this runs on the feed
+    thread for every frame, and the destination is a preallocated staging
+    buffer.
+    """
+    samples = np.frombuffer(pcm, dtype="<i2")
+    n = min(len(samples), len(out))
+    if n:
+        # Assignment casts int16 to float32; scaling in place afterwards
+        # avoids the dtype juggling `np.multiply(..., out=)` would need.
+        out[:n] = samples[:n]
+        out[:n] *= 1.0 / 32768.0
+    return n

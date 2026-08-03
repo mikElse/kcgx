@@ -12,73 +12,36 @@ import threading
 import pytest
 
 from squelch.feeds import Feed
+from squelch.mixer import Mixer
 from squelch.session import FeedSession, SessionEvents, strip_icao
 
 
-class FakePlayer:
-    def __init__(self, fail_start=False):
-        self.muted = False
-        self.started = False
-        self.stopped = False
-        self.written = []
-        self._fail_start = fail_start
-
-    def start(self):
-        if self._fail_start:
-            raise RuntimeError("no device")
-        self.started = True
-
-    def write(self, pcm):
-        if not self.muted:
-            self.written.append(pcm)
-
-    def stop(self):
-        self.stopped = True
-
-
-class RecordingPipeline:
-    """Stands in for a running pipeline, recording its display rate."""
-
-    def __init__(self):
-        self.level_every = None
-
-    def set_level_every(self, n):
-        self.level_every = n
-
-    def run(self):
-        pass
-
-    def stop(self):
-        pass
+def channel():
+    """A real mixer channel, not a fake: the session/mixer contract is
+    exactly what these tests are for, and a fake would be free to drift."""
+    return Mixer().add_channel()
 
 
 class FakePipeline:
-    """Reports one level and one state, then returns."""
+    """Reports one activity reading and one state, then returns."""
 
-    def __init__(self, reader, player, events):
+    def __init__(self, reader, sink, events):
         self.reader = reader
-        self.player = player
+        self.sink = sink
         self.events = events
         self.stopped = False
-        # Part of the Pipeline contract since the display rate became
-        # switchable: FeedSession sets it as soon as the pipeline exists.
-        self.level_every = None
-
-    def set_level_every(self, n):
-        self.level_every = n
 
     def run(self):
         self.events.on_state("live")
-        self.events.on_level(-12.0)
+        self.events.on_activity(-12.0)
 
     def stop(self):
         self.stopped = True
 
 
 def recorder():
-    got = {"levels": [], "states": [], "warns": []}
+    got = {"states": [], "warns": []}
     return got, SessionEvents(
-        on_level=lambda s, d: got["levels"].append((s.feed.ident, d)),
         on_state=lambda s, st: got["states"].append((s.feed.ident, st)),
         on_warn=lambda s, m: got["warns"].append((s.feed.ident, m)),
     )
@@ -91,7 +54,7 @@ def make(feed=None, **overrides):
         icao="KPDX",
         resolve=lambda ident: f"https://example.test/{ident}",
         reader_factory=lambda url: object(),
-        player_factory=FakePlayer,
+        channel=channel(),
         pipeline_factory=FakePipeline,
     )
     kwargs.update(overrides)
@@ -117,23 +80,22 @@ def test_name_has_the_icao_stripped():
     assert session.name == "Tower (Both)"
 
 
-def test_runs_the_pipeline_and_reports_level_and_state():
+def test_runs_the_pipeline_and_reports_state_and_activity():
     session, got = make()
     session.run()
     assert ("kpdx3_twr", "live") in got["states"]
-    assert ("kpdx3_twr", -12.0) in got["levels"]
-    assert session.level == -12.0
+    assert session.activity == 1.0, "-12 dBFS is well above the busy threshold"
 
 
 def test_muting_gates_audio_but_not_the_stream():
-    """The meter must keep running while a feed is muted."""
-    session, got = make(muted=True)
+    """The meter and the ranking must keep running while a feed is muted."""
+    session, _got = make(muted=True)
     session.run()
     assert session.muted is True
-    assert got["levels"], "a muted feed must still report levels"
+    assert session.activity == 1.0, "a muted feed must still be measured"
 
 
-def test_toggle_mute_flips_the_player_gate():
+def test_toggle_mute_flips_the_channel_gate():
     session, _ = make(muted=True)
     assert session.toggle_mute() is False
     assert session.muted is False
@@ -148,14 +110,6 @@ def test_a_feed_that_cannot_resolve_goes_offline_and_says_so():
     session.run()
     assert session.state == "offline"
     assert got["warns"] == [("kpdx3_twr", "could not resolve feed")]
-
-
-def test_a_missing_audio_device_warns_but_keeps_metering():
-    """One unavailable device must not take down every feed at once."""
-    session, got = make(player_factory=lambda: FakePlayer(fail_start=True))
-    session.run()
-    assert any("no audio device" in m for _ident, m in got["warns"])
-    assert got["levels"], "the meter is still worth having without audio"
 
 
 def test_an_unexpected_failure_is_reported_not_swallowed():
@@ -190,11 +144,15 @@ def test_one_failing_feed_does_not_affect_the_others():
         icao="KPDX",
         resolve=resolve,
         reader_factory=lambda url: object(),
-        player_factory=FakePlayer,
         pipeline_factory=FakePipeline,
     )
     sessions = [
-        FeedSession(Feed(ident=ident, label=f"KPDX {ident}"), events, **common)
+        FeedSession(
+            Feed(ident=ident, label=f"KPDX {ident}"),
+            events,
+            channel=channel(),
+            **common,
+        )
         for ident in ("good_one", "broken", "good_two")
     ]
     for session in sessions:
@@ -209,8 +167,8 @@ def test_one_failing_feed_does_not_affect_the_others():
     assert ("good_one", "live") in reported
     assert ("good_two", "live") in reported
     assert got["warns"] == [("broken", "could not resolve feed")]
-    live_levels = {ident for ident, _ in got["levels"]}
-    assert live_levels == {"good_one", "good_two"}
+    measured = {s.feed.ident for s in sessions if s.activity > 0.0}
+    assert measured == {"good_one", "good_two"}
 
 
 def test_start_runs_on_its_own_thread_and_stop_is_safe():
@@ -279,25 +237,40 @@ def test_activity_ignores_levels_below_the_threshold():
     assert session.activity == 0.0
 
 
-def test_unmuting_raises_the_display_rate():
-    session, _ = make()
-    fake = RecordingPipeline()
-    session._pipeline = fake
+def test_muting_a_session_mutes_its_channel():
+    ch = channel()
+    session, _ = make(channel=ch)
     session.muted = False
-    assert fake.level_every == 2, "an expanded row draws a meter at 25 Hz"
-
-
-def test_muting_stops_display_levels_entirely():
-    session, _ = make()
-    fake = RecordingPipeline()
-    session._pipeline = fake
-    session.muted = False
+    assert ch.muted is False
     session.muted = True
-    assert fake.level_every == 0, "a compact row draws no meter"
+    assert ch.muted is True
 
 
-def test_switching_the_rate_before_the_pipeline_exists_is_safe():
-    """Mute can be toggled between construction and the thread starting."""
-    session, _ = make()
-    assert session._pipeline is None
+def test_ambient_routing_reaches_the_channel():
+    ch = channel()
+    session, _ = make(channel=ch)
+    session.toggle_ambient()
+    assert ch.ambient is True
+
+
+def test_a_session_reports_the_channel_s_level():
+    ch = channel()
+    session, _ = make(channel=ch)
+    ch.level_dbfs = -18.0
+    assert session.level == -18.0
+
+
+def test_a_session_without_a_channel_still_constructs():
+    """Sessions are built before the mixer opens its device."""
+    session, _ = make(channel=None)
     session.muted = False
+    assert session.muted is False
+    session.write(b"\x00\x00" * 320)
+
+
+def test_frames_reach_the_channel_s_ring_buffer():
+    ch = channel()
+    session, _ = make(channel=ch)
+    assert ch.buffer.available == 0
+    session.write(b"\x00\x40" * 320)
+    assert ch.buffer.available == 320
