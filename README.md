@@ -250,6 +250,11 @@ failing later inside the audio pipeline.
 | `icao`               | `"KPDX"`                                                        | Airport used by the feed picker (`f`) to look up feeds on LiveATC.net |
 | `feed`               | `"kpdx3_twr"`                                                    | The one feed left unmuted at startup |
 | `activity_threshold_dbfs` | `-40.0`                                                    | Level above which a feed counts as busy for the five-minute ranking. Must be written as a decimal (`-40.0`, not `-40`). |
+| `compressor_threshold_dbfs` | `-12.0` | Below this, upward compression applies |
+| `compressor_ratio` | `4.0` | Upward compression ratio |
+| `compressor_makeup_db` | `6.0` | Gain applied to every feed |
+| `compressor_range_db` | `12.0` | Maximum upward gain |
+| `ambient_gain_db` | `-8.0` | Ambient bus level, relative to the dry bus |
 
 The `model`, `compute_type` and `vad_aggressiveness` keys are gone. An
 existing config that still sets them keeps working — unknown keys are
@@ -308,17 +313,44 @@ fallbacks says so in the message log.
 
 ## Cost
 
-One ffmpeg process, one PortAudio output stream, and one thread per feed —
-twelve of each at KPDX. Twelve simultaneous output streams were verified to
-open and run on macOS (CoreAudio mixes them). Bandwidth is trivial at
-roughly 16–32 kbps per feed; the CPU is mostly ffmpeg decode. Worth
-watching on battery.
+One ffmpeg process, one ring buffer, and one thread per feed — twelve of
+each at KPDX — feeding **one** stereo output stream. Bandwidth is trivial at
+roughly 16–32 kbps per feed; the CPU is mostly ffmpeg decode plus one
+mixing callback every 16 ms. Worth watching on battery.
+
+## Audio shaping
+
+```
+ffmpeg ─► ring buffer ─► gate ─► upward comp ─┬─► dry bus (centre) ───────────────┐
+                                              │                                   ├─► stereo
+                                              └─► ambient bus (−8 dB, panned) ─► reverb ─┘
+```
+
+**Upward compression** lifts quiet feeds instead of you riding a gain
+control: 4:1 below −12 dBFS with a 6 dB soft knee and +6 dB makeup. Two
+limits keep it honest — a **12 dB range limit**, and a **gate** at −40 dBFS
+that closes at −46. Without them, 4:1 upward compression boosts a −50 dBFS
+noise floor by about 28 dB and hiss becomes the loudest thing in the pane.
+The gate attenuates the *boost*, never the signal, and ramps rather than
+steps, so a signal hovering at the threshold does not chatter.
+
+**`[A]` routes a feed to the ambient bus**: 8 dB down, panned, and heard
+only through a short dark reverb — 100 ms, fully wet, rolled off above
+1.2 kHz. Ambient feeds are present without being intelligible, which is the
+point. With several on the bus they spread across the stereo field between
+50% left and 50% right; an odd number puts one in the centre, phase-inverted
+and 6 dB down so it does not pile up in the middle.
+
+The meter shows the level **after** compression — what you actually hear.
+The activity ranking measures **before** it, so making a quiet feed louder
+does not make it look busier.
 
 ## Known limitations
 
 - Feeds are discovered once at startup; a feed that appears on LiveATC
   later needs a restart to show up.
-- `[A]` is rendered and toggleable but silent until the mixing engine lands.
+- The reverb is fixed. Decay, damping, and wetness are not configurable.
+- All feeds share one output device; there is no per-feed device routing.
 - Ranking is by level crossings, not by speech detection — a feed with a
   noisy carrier will rank above a quiet but busy one.
 - No transcription (see "History").
@@ -326,10 +358,10 @@ watching on battery.
   rest. Retention is capped at the most recent 200 messages so memory and
   redraw cost stay flat over a multi-hour session.
 
-Several of these are addressed by a planned batch of upgrades — click-to-mute,
-solo, activity-ordered feeds, theme matching with the radar pane, and an audio
-path with upward compression and an ambient reverb bus. Designed and planned,
-not yet built: see [`docs/`](docs/README.md).
+The batch of upgrades these once pointed at — click-to-mute, solo,
+activity-ordered feeds, theme matching with the radar pane, and an audio path
+with upward compression and an ambient reverb bus — is built. Its specs and
+implementation plans are in [`docs/`](docs/README.md).
 
 ## History
 
