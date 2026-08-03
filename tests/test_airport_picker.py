@@ -12,7 +12,16 @@ import pytest
 from textual.geometry import Size
 
 from kcgx.airports import Airport
-from kcgx.picker import POPUP_HEIGHT, POPUP_WIDTH, AirportPicker, fit, row_text
+from textual.widgets import Input
+
+from kcgx.picker import (
+    POPUP_HEIGHT,
+    POPUP_WIDTH,
+    QUIT,
+    AirportPicker,
+    fit,
+    row_text,
+)
 
 SIZE = (POPUP_WIDTH, POPUP_HEIGHT)
 
@@ -208,3 +217,53 @@ async def test_no_widget_is_wider_than_the_popup():
             if w.outer_size.width > POPUP_WIDTH
         ]
         assert too_wide == []
+
+
+# -- quitting --------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ctrl_q_asks_for_the_cockpit_to_be_shut_down():
+    app = AirportPicker(AIRPORTS)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+    assert app.return_value is QUIT
+
+
+@pytest.mark.asyncio
+async def test_quitting_is_distinct_from_cancelling():
+    """Opposite intentions, and the CLI turns them into different codes."""
+    cancelled = AirportPicker(AIRPORTS)
+    async with cancelled.run_test(size=SIZE) as pilot:
+        await pilot.press("escape")
+        await pilot.pause()
+    assert cancelled.return_value is None
+    assert cancelled.return_value is not QUIT
+
+
+@pytest.mark.asyncio
+async def test_typing_q_filters_instead_of_quitting():
+    """The reason the binding is ctrl+q and not q.
+
+    The Input keeps focus so that every keystroke filters, and it consumes
+    printable keys before an App binding sees them -- a bare `q` binding
+    never fires at all. Were one forced through with priority, it would
+    cost every airport whose name starts with the letter: Quito,
+    Queenstown, Qingdao, and 47 others in the dataset.
+    """
+    app = AirportPicker(AIRPORTS)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("q")
+        await pilot.pause()
+        assert app.is_running, "typing a letter must not end the picker"
+        assert app.query_one("#query", Input).value == "q"
+
+
+@pytest.mark.asyncio
+async def test_the_hint_line_advertises_quit():
+    app = AirportPicker(AIRPORTS)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        joined = "\n".join(rendered(app)[0])
+        assert "^q quit" in joined

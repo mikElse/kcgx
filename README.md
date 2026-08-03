@@ -43,7 +43,21 @@ the column. These are starting positions, not constraints — drag them.
 current ICAO and airport name, and on its second, the time in Zulu and in
 your own timezone (`1955Z   12:55 PDT`) alongside `▾ airport (^b a)`.
 Clicking that hint opens the same picker popup as `Ctrl-b a` — both are the
-same `tmux display-popup` call, pinned together by a test. The pane re-reads
+same `tmux display-popup` call, pinned together by a test.
+
+In the picker: `↵` goes to the highlighted airport, `esc` closes it and
+leaves the cockpit where it is, and **`^q` shuts every cockpit down** — all
+of them, on every tmux socket, not just this one. It is deliberately wider
+than `kcgx stop`, which only ever kills the session it was invoked for.
+Cockpits are recognised by their panes' `@kcgx_role` tags rather than by
+session name, so a session of your own that happens to be called `kcgx`
+survives.
+
+The binding is `^q` and not plain `q` because the search box keeps focus so
+that typing always filters: it consumes printable keys before any app
+binding sees them, so a bare `q` binding never fires at all — and forcing
+one through would cost you every airport starting with the letter, Quito
+and Queenstown among them. The pane re-reads
 the remembered airport once a second, so `kcgx go` moves it without a
 respawn or a flicker. The airport's own local time is deliberately not
 shown: the dataset carries no timezone column, and deriving one from

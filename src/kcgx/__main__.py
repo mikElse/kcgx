@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from kcgx.airports import Airport, find, load_airports
-from kcgx.picker import pick
+from kcgx.picker import QUIT, pick
 from kcgx.state import current_icao, write_airport
 
 
@@ -96,8 +96,9 @@ def main(
     picker: Callable[..., Airport | None] = pick,
     state_writer: Callable[[str], None] = write_airport,
 ) -> int:
-    """The console script. Every path out of here is one of the three exit
-    codes bin/kcgx knows: 0 chose something, 1 declined, 2 failed.
+    """The console script. Every path out of here is one of the four exit
+    codes bin/kcgx knows: 0 chose something, 1 declined, 2 failed, 3 asked
+    for the cockpit to be shut down.
 
     The wrapping is the point. Python's default exit code for an unhandled
     exception is 1 -- indistinguishable, to bin/kcgx, from the user pressing
@@ -161,6 +162,11 @@ def _run(
     chosen = find(args.query, airports) if args.query else None
     if chosen is None:
         chosen = picker(airports, initial=args.query)
+    if chosen is QUIT:
+        # Distinct from 1: declining to move the cockpit and asking to shut
+        # it down are opposite intentions, and bin/kcgx acts on them
+        # differently. Nothing is written and nothing is remembered.
+        return 3
     if chosen is None:
         return 1
 

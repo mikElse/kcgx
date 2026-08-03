@@ -16,6 +16,22 @@ from textual.widgets.option_list import Option
 
 from kcgx.airports import Airport, search
 
+class Quit:
+    """The user asked to shut the whole cockpit down, not just this popup.
+
+    A distinct sentinel rather than a second `None`: cancelling and quitting
+    are opposite intentions, and the caller turns them into different exit
+    codes.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "QUIT"
+
+
+QUIT = Quit()
+
 POPUP_WIDTH = 64
 POPUP_HEIGHT = 20
 
@@ -44,7 +60,7 @@ def row_text(airport: Airport, width: int) -> str:
     )
 
 
-class AirportPicker(App[Airport | None]):
+class AirportPicker(App[Airport | Quit | None]):
     CSS = """
     Screen { background: $surface; }
     #query { border: none; padding: 0 1; height: 3; }
@@ -54,6 +70,12 @@ class AirportPicker(App[Airport | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel", show=False),
+        # ctrl+q, not q. The Input below keeps focus so that typing always
+        # filters, and it consumes printable keys before an App binding can
+        # see them -- a bare `q` binding never fires at all, at any
+        # priority. Forcing one through would also cost the 50 airports
+        # whose names start with the letter: Quito, Queenstown, Qingdao.
+        Binding("ctrl+q", "quit_all", "quit", show=False),
         # The input keeps focus so typing always filters, and up/down are
         # handled here rather than by the list. priority=True is defensive:
         # in Textual 8.2.8 nothing in this DOM competes for these keys, but
@@ -73,7 +95,7 @@ class AirportPicker(App[Airport | None]):
         with Vertical():
             yield Input(placeholder="airport, city, or code", id="query")
             yield OptionList(id="results")
-            yield Static("↑↓ select   ↵ go   esc cancel", id="hint")
+            yield Static("↑↓ select   ↵ go   esc cancel   ^q quit", id="hint")
 
     def on_mount(self) -> None:
         query = self.query_one("#query", Input)
@@ -134,7 +156,13 @@ class AirportPicker(App[Airport | None]):
     def action_cancel(self) -> None:
         self.exit(None)
 
+    def action_quit_all(self) -> None:
+        self.exit(QUIT)
 
-def pick(airports: list[Airport], *, initial: str = "") -> Airport | None:
-    """Run the picker and return the choice, or None if cancelled."""
+
+def pick(
+    airports: list[Airport], *, initial: str = ""
+) -> Airport | Quit | None:
+    """Run the picker: the chosen airport, None if cancelled, QUIT if the
+    user asked to shut the cockpit down."""
     return AirportPicker(airports, initial=initial).run()

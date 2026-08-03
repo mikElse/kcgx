@@ -198,6 +198,65 @@ pane_for_role() {  # $1=adsb|status|squelch
     printf '%s' "$id"
 }
 
+# -- shutting every cockpit down -------------------------------------------
+#
+# `kcgx stop` deliberately kills only $SESSION on our own socket, because the
+# tmux server may be hosting sessions that have nothing to do with kcgx. The
+# picker's ^q is a wider request -- "stop all instances" -- so it needs a
+# wider sweep, and the danger is the same one magnified: killing something
+# that is not a cockpit.
+#
+# Cockpits are therefore identified by their panes' @kcgx_role tags, never by
+# session name. The name is configurable through KCGX_SESSION, so matching on
+# it would both miss a cockpit opened under another name and kill an
+# unrelated session that happened to be called "kcgx". The tags are what the
+# launcher actually builds, and what pane_for_role already trusts.
+kcgx_sessions() {  # $1=socket path; prints tagged session names, one per line
+    tmux -S "$1" list-panes -a -F "#{@kcgx_role}$(printf '\t')#{session_name}" \
+        2>/dev/null | awk -F'\t' '$1 != "" { print $2 }' | sort -u
+}
+
+socket_dir() {
+    local path
+    path="$(tm display -p '#{socket_path}' 2>/dev/null || true)"
+    if [ -n "$path" ]; then
+        printf '%s' "${path%/*}"
+        return
+    fi
+    # No server of ours running, so ask tmux where it would put one.
+    printf '%s' "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+}
+
+stop_all() {
+    local dir sock session self_socket stopped=0
+    local held_socket="" held_session=""
+    dir="$(socket_dir)"
+    self_socket="$(tm display -p '#{socket_path}' 2>/dev/null || true)"
+
+    for sock in "$dir"/*; do
+        [ -S "$sock" ] || continue
+        while IFS= read -r session; do
+            [ -n "$session" ] || continue
+            # Ours goes last: killing it tears down the popup this very
+            # script is running in, so anything after it would not run.
+            if [ "$sock" = "$self_socket" ] && [ "$session" = "$SESSION" ]; then
+                held_socket="$sock"
+                held_session="$session"
+                continue
+            fi
+            tmux -S "$sock" kill-session -t "=$session" 2>/dev/null || true
+            stopped=$((stopped + 1))
+        done <<< "$(kcgx_sessions "$sock")"
+    done
+
+    [ -n "$held_session" ] && stopped=$((stopped + 1))
+    # Said before the last kill, not after: there is no "after".
+    printf 'kcgx: stopped %d cockpit(s).\n' "$stopped"
+    if [ -n "$held_session" ]; then
+        tmux -S "$held_socket" kill-session -t "=$held_session" 2>/dev/null || true
+    fi
+}
+
 retarget() {  # $1=icao $2=lat $3=lon
     local adsb_target squelch_target
     # Assign, don't inline. `die` inside "$( )" exits only the subshell, and a
@@ -261,6 +320,9 @@ case "${1:-}" in
         # than doing nothing, and the user already knows they escaped. Any
         # other failure is a real one and must not masquerade as a cancel.
         [ "$status" -eq 1 ] && exit 0
+        # 3: the picker's ^q. Wider than `kcgx stop` by request -- every
+        # cockpit on every socket, not just this one.
+        [ "$status" -eq 3 ] && { stop_all; exit 0; }
         [ "$status" -eq 0 ] ||
             die "airport search failed (exit $status); nothing was changed."
         retarget "$ICAO" "$LAT" "$LON"

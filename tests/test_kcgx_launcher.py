@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import os
 import re
+import pathlib
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -1309,3 +1311,185 @@ def test_the_radar_pane_id_survives_a_retarget(cockpit, tmp_path, airport_stub):
         KCGX_TEST_RECORD="KORD\t41.9786\t-87.9048\tChicago O'Hare",
     )
     assert _await_file(out) == first
+
+
+# -- quitting from the picker ----------------------------------------------
+#
+# These are the only tests that exercise stop_all, and stop_all sweeps every
+# socket in the socket *directory* rather than one named socket. Run against
+# the shared /tmp/tmux-$UID they would kill the developer's own live cockpit
+# partway through a test run -- so they get a private TMUX_TMPDIR, which is
+# what decides where tmux puts sockets and therefore what socket_dir() finds.
+
+
+@pytest.fixture
+def isolated(tmp_path):
+    """A launcher runner whose tmux servers live in their own directory.
+
+    The directory is a short one under /tmp, not pytest's tmp_path: a unix
+    socket path is capped near 104 bytes, and
+    .../pytest-of-user/pytest-691/test_name0/tmux-home/tmux-501/sock-a
+    overruns it -- tmux reports "File name too long" and the launch fails.
+    """
+    root = pathlib.Path(tempfile.mkdtemp(prefix="kcgxq", dir="/tmp"))
+    tmpdir = root / "h"
+    tmpdir.mkdir()
+    resolver = tmp_path / "kcgx-airport-default"
+    resolver.write_text(FAKE_AIRPORT)
+    resolver.chmod(0o755)
+    started: list[tuple[str, str]] = []
+
+    def env_for(socket, session, **overrides):
+        env = {
+            **os.environ,
+            "TMUX_TMPDIR": str(tmpdir),
+            "KCGX_SOCKET": socket,
+            "KCGX_SESSION": session,
+            "KCGX_DETACHED": "1",
+            "KCGX_SIZE": "200x50",
+            "KCGX_ADSB_CMD": FAKE_ADSB,
+            "KCGX_SQUELCH_CMD": FAKE_SQUELCH,
+            "KCGX_STATUS_CMD": FAKE_STATUS,
+            "KCGX_AIRPORT_CMD": str(resolver),
+        }
+        env.pop("TMUX", None)
+        env.update({k: str(v) for k, v in overrides.items()})
+        return env
+
+    def launch(socket, session, args=(), **overrides):
+        started.append((socket, session))
+        return subprocess.run(
+            [str(LAUNCHER), *args],
+            env=env_for(socket, session, **overrides),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def tmux(socket, *args):
+        return subprocess.run(
+            ["tmux", "-L", socket, *args],
+            env={**os.environ, "TMUX_TMPDIR": str(tmpdir)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def sessions_on(socket):
+        out = tmux(socket, "list-sessions", "-F", "#{session_name}")
+        return [line for line in out.stdout.splitlines() if line.strip()]
+
+    launch.tmux = tmux
+    launch.sessions_on = sessions_on
+    launch.tmpdir = tmpdir
+    yield launch
+
+    for socket, _session in started:
+        tmux(socket, "kill-server")
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_quitting_the_picker_stops_the_cockpit(isolated, airport_stub):
+    """^q in the picker exits 3, which the launcher answers by shutting down."""
+    isolated("sock-a", "cockpit-a")
+    assert "cockpit-a" in isolated.sessions_on("sock-a")
+
+    result = isolated(
+        "sock-a",
+        "cockpit-a",
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_FAIL="3",
+    )
+    assert result.returncode == 0, "a deliberate quit is not a failure"
+    assert "stopped" in result.stdout.lower()
+    assert "cockpit-a" not in isolated.sessions_on("sock-a")
+
+
+def test_quitting_stops_cockpits_on_other_sockets_too(isolated, airport_stub):
+    """The point of the wider sweep: `kcgx stop` could never reach these."""
+    isolated("sock-a", "cockpit-a")
+    isolated("sock-b", "cockpit-b")
+    assert "cockpit-b" in isolated.sessions_on("sock-b")
+
+    isolated(
+        "sock-a",
+        "cockpit-a",
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_FAIL="3",
+    )
+    assert "cockpit-a" not in isolated.sessions_on("sock-a")
+    assert "cockpit-b" not in isolated.sessions_on("sock-b"), (
+        "a cockpit on another socket must be stopped too"
+    )
+
+
+def test_quitting_leaves_sessions_that_are_not_cockpits_alone(
+    isolated, airport_stub
+):
+    """The safety property the wider sweep depends on.
+
+    `kcgx stop` only ever touched $SESSION on one socket, so it could not
+    reach anything else. ^q sweeps every socket, and a tmux server may host
+    sessions that have nothing to do with kcgx -- identifying cockpits by
+    their @kcgx_role pane tags rather than by name is what keeps those
+    alive. `impostor` is the case name-matching would get wrong.
+    """
+    isolated("sock-a", "cockpit-a")
+    isolated.tmux("sock-a", "new-session", "-d", "-s", "bystander", "sleep 300")
+    isolated.tmux("sock-a", "new-session", "-d", "-s", "kcgx", "sleep 300")
+    assert "bystander" in isolated.sessions_on("sock-a")
+
+    isolated(
+        "sock-a",
+        "cockpit-a",
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_FAIL="3",
+    )
+    survivors = isolated.sessions_on("sock-a")
+    assert "cockpit-a" not in survivors, "the cockpit must be gone"
+    assert "bystander" in survivors, "an unrelated session must survive"
+    assert "kcgx" in survivors, "name-matching would have killed this"
+
+
+def test_quitting_never_reaches_outside_its_socket_directory(
+    isolated, airport_stub
+):
+    """A cockpit in a different TMUX_TMPDIR must be untouched.
+
+    This is the developer's own cockpit, in miniature: the sweep is bounded
+    by the socket directory, and nothing outside it is enumerated.
+    """
+    isolated("sock-a", "cockpit-a")
+    outside = pathlib.Path(tempfile.mkdtemp(prefix="kcgxo", dir="/tmp"))
+    env = {**os.environ, "TMUX_TMPDIR": str(outside)}
+    subprocess.run(
+        ["tmux", "-L", "sock-out", "new-session", "-d", "-s", "cockpit-out",
+         "sleep 300"],
+        env=env, capture_output=True, timeout=30,
+    )
+    subprocess.run(
+        ["tmux", "-L", "sock-out", "set", "-p", "-t", "cockpit-out",
+         "@kcgx_role", "squelch"],
+        env=env, capture_output=True, timeout=30,
+    )
+
+    isolated(
+        "sock-a",
+        "cockpit-a",
+        args=("go",),
+        KCGX_AIRPORT_CMD=str(airport_stub),
+        KCGX_TEST_FAIL="3",
+    )
+    still_there = subprocess.run(
+        ["tmux", "-L", "sock-out", "list-sessions", "-F", "#{session_name}"],
+        env=env, capture_output=True, text=True, timeout=30,
+    ).stdout
+    subprocess.run(["tmux", "-L", "sock-out", "kill-server"],
+                   env=env, capture_output=True, timeout=30)
+    shutil.rmtree(outside, ignore_errors=True)
+    assert "cockpit-out" in still_there, (
+        "a tagged cockpit outside the socket directory must survive"
+    )
