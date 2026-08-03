@@ -20,6 +20,7 @@ from textual.widgets import Label, ListItem, ListView, Static
 from textual.worker import NoActiveWorker, get_current_worker
 
 from squelch.config import Config
+from squelch.config_view import ConfigScreen
 from squelch.feeds import Feed
 from squelch.activity import Resorter, rank
 from squelch.radar_theme import POLL_SECONDS, RadarTheme
@@ -110,6 +111,9 @@ class SquelchApp(App):
         ("space", "toggle_mute", "Mute"),
         ("S", "toggle_solo", "Solo"),
         ("a", "toggle_ambient", "Ambient"),
+        ("c", "show_config", "Config"),
+        # Still bound, just no longer advertised on the footer: `q` is the
+        # only way out, and `f` still opens the feed picker.
         ("f", "show_feeds", "Feeds"),
         ("q", "quit", "Quit"),
     ]
@@ -222,7 +226,7 @@ class SquelchApp(App):
         if self._footer is None:
             return
         self._footer.update(
-            " [↑↓] select  [space] mute  [f] feeds  [q] quit", layout=False
+            " [↑↓] select  [space] mute  [c] config", layout=False
         )
 
     def _tick_clock(self) -> None:
@@ -481,6 +485,11 @@ class SquelchApp(App):
             widget.remove()
         except Exception:
             pass
+
+    # -- config --------------------------------------------------------
+
+    def action_show_config(self) -> None:
+        self.push_screen(ConfigScreen(self._config))
 
     # -- feed picker ---------------------------------------------------
 

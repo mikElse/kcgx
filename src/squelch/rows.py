@@ -17,7 +17,10 @@ from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Static
 
-BLOCKS = "▁▂▃▄▅▆▇█"
+# Shade blocks, not the partial-height bricks: these are dither patterns, so
+# a level reads as a density rather than as a bar, which is what lets the
+# meter work at a single row.
+BLOCKS = "░▒▓█"
 FLOOR_DBFS = -60.0
 
 # The pane is 48 wide; rows carry `padding: 0 1`, leaving 46 content cells.
@@ -25,13 +28,13 @@ ROW_WIDTH = 46
 # Dropping the ident buys the name 10 cells compact and 20 expanded. The
 # ident was never typed at runtime; `feed` in squelch.toml and the picker
 # are where it is still needed.
-NAME_WIDTH = 34
+NAME_WIDTH = 33
 NAME_WIDTH_EXPANDED = 44
-METER_ROWS = 3
-# One glyph per row of vertical resolution, so a sample spans 3 x 8 steps.
-# At a single row a colour gradient has too few cells to read as a gradient,
-# which is the whole reason the expanded meter is worth its height.
-METER_STEPS = METER_ROWS * len(BLOCKS)  # 24
+METER_ROWS = 1
+# Four shades, one row: the density ramp carries the level, so the meter no
+# longer needs height to show it. Each shade gets its own gradient colour
+# (see _GRADIENT_STOPS), which is what keeps a four-step ramp legible.
+METER_STEPS = METER_ROWS * len(BLOCKS)  # 4
 # The meter row carries nothing else, so it gets the full content width.
 METER_WIDTH = 46
 
@@ -44,25 +47,42 @@ _STATE_DOTS = {
 
 
 # Both states of the mute toggle are 5 cells, so nothing beside it shifts
-# when it flips.
+# when it flips. The toggle appears on the expanded control line only.
 _ON = "[ ON]"
 _OFF = "[OFF]"
 _SOLO = "[S]"
 _AMBIENT = "[A]"
+# Padded to two cells so the percentage beside it never shifts.
+_SOUND = "♪ "
+_CHATTER_WIDTH = 4
 
 
 def _toggle(muted: bool) -> str:
     return _OFF if muted else _ON
 
 
-def compact_line(name: str, *, muted: bool, ambient: bool, state: str) -> str:
-    """Name, controls, and state dot on one line.
+def compact_line(
+    name: str,
+    *,
+    muted: bool,
+    ambient: bool,
+    state: str,
+    activity: float | None = None,
+) -> str:
+    """Name, ambient toggle, chatter, and the state dot on one line.
 
-    A muted feed is compact, and a compact row still has to offer a way back
-    -- so the toggle lives here as well as on the expanded control line.
+    No [OFF] here. A compact row is by definition a muted one, so the
+    toggle could only ever have read OFF -- it spent five cells saying what
+    the row's own shape already says. The chatter figure earns them instead,
+    which is what makes the muted stack scannable: it is the number the
+    stack is sorted by. Clicking anywhere on the row still unmutes it.
     """
     dot = _STATE_DOTS.get(state, "●")
-    return f"{_fit(name, NAME_WIDTH)} {_AMBIENT} {_toggle(muted)} {dot}"
+    chatter = "" if activity is None else f"{round(activity * 100)}%"
+    return (
+        f"{_fit(name, NAME_WIDTH)} {_AMBIENT} "
+        f"{_SOUND}{chatter:>{_CHATTER_WIDTH}} {dot}"
+    )
 
 
 def expanded_name_line(name: str, *, state: str) -> str:
@@ -82,16 +102,19 @@ def control_line(
 
 # Cell spans of each control, as half-open [start, stop) ranges within the
 # 46-cell content area. Derived from the format strings above -- compact is
-# `name(34) SP [A](3) SP [xx](5) SP dot`, expanded's control line is
-# `[S](3) SP SP [xx](5) SP SP [A](3)`.
-_COMPACT_AMBIENT = (NAME_WIDTH + 1, NAME_WIDTH + 4)          # 35..38
-_COMPACT_TOGGLE = (NAME_WIDTH + 5, NAME_WIDTH + 10)          # 39..44
+# `name(33) SP [A](3) SP sound(2) chatter(4) SP dot`, expanded's control
+# line is `[S](3) SP SP [xx](5) SP SP [A](3)`.
+#
+# A compact row has no mute span: [OFF] is gone, and the chatter readout is
+# not a control. Everything that is not [A] falls through to the row body,
+# which toggles mute -- so a compact row is one big unmute target.
+_COMPACT_AMBIENT = (NAME_WIDTH + 1, NAME_WIDTH + 4)          # 34..37
 _EXPANDED_SOLO = (0, 3)
 _EXPANDED_TOGGLE = (5, 10)
 _EXPANDED_AMBIENT = (12, 15)
 
-# Row-relative line indices when expanded: name, meter x3, controls.
-CONTROL_LINE_Y = 4
+# Row-relative line indices when expanded: name, meter, controls.
+CONTROL_LINE_Y = 2
 
 
 def _within(x: int, span: tuple[int, int]) -> bool:
@@ -119,8 +142,6 @@ def control_at(x: int, y: int, *, expanded: bool) -> str | None:
         return None
     if _within(x, _COMPACT_AMBIENT):
         return "ambient"
-    if _within(x, _COMPACT_TOGGLE):
-        return "mute"
     return None
 
 
@@ -130,12 +151,14 @@ def level_step(dbfs: float) -> int:
     return max(0, min(METER_STEPS - 1, int(fraction * METER_STEPS)))
 
 
-def _column(step: int) -> tuple[str, str, str]:
-    """Top, middle, and bottom glyphs for one sample.
+def _column(step: int) -> tuple[str, ...]:
+    """One sample's glyphs, top row first.
 
-    Rows below the level read as full blocks, the row containing it gets a
-    partial glyph, and rows above it are blank -- so the three rows compose
-    into one tall bar rather than three independent meters.
+    Written for any METER_ROWS rather than the one it currently has: rows
+    below the level saturate, the row containing it gets the shade for the
+    remainder, and rows above it are blank, so several rows would compose
+    into one tall bar rather than into independent meters. At METER_ROWS=1
+    only the middle case can occur, and the ramp alone carries the level.
     """
     glyphs = []
     for row in range(METER_ROWS):  # 0 = bottom
@@ -147,12 +170,12 @@ def _column(step: int) -> tuple[str, str, str]:
         else:
             glyphs.append(BLOCKS[step - base])
     glyphs.reverse()  # top first
-    return glyphs[0], glyphs[1], glyphs[2]
+    return tuple(glyphs)
 
 
 def meter_rows(
     history: Sequence[float], width: int = METER_WIDTH
-) -> tuple[str, str, str]:
+) -> tuple[str, ...]:
     """Render a rolling history of levels as one bar per sample.
 
     Oldest sample at the left, newest at the right. Only the most recent
@@ -162,10 +185,8 @@ def meter_rows(
     recent = list(history)[-width:]
     columns = [_column(0)] * (width - len(recent))
     columns += [_column(level_step(level)) for level in recent]
-    return (
-        "".join(c[0] for c in columns),
-        "".join(c[1] for c in columns),
-        "".join(c[2] for c in columns),
+    return tuple(
+        "".join(column[row] for column in columns) for row in range(METER_ROWS)
     )
 
 
@@ -198,10 +219,12 @@ DEFAULT_PALETTE = MeterPalette(
     peak="#ff6666",
 )
 
-# Step boundaries for each stop, over METER_STEPS (24). Roughly: the bottom
-# third is noise floor, the middle is ordinary speech, the top is a strong
-# signal, and the last few steps are approaching clipping.
-_GRADIENT_STOPS = ((8, "dim"), (16, "text"), (21, "accent"), (METER_STEPS, "peak"))
+# One colour per shade, now that the ramp is four steps: ░ is the noise
+# floor, ▒ ordinary speech, ▓ a strong signal, █ approaching clipping.
+# Proportional boundaries would collapse here -- at four steps the old
+# 8/16/21-of-24 fractions round together and the top colour becomes
+# unreachable.
+_GRADIENT_STOPS = ((1, "dim"), (2, "text"), (3, "accent"), (METER_STEPS, "peak"))
 
 
 def gradient_style(step: int, palette: MeterPalette) -> str:
@@ -366,6 +389,7 @@ class FeedRow(Vertical):
                     muted=session.muted,
                     ambient=bool(getattr(session, "ambient", False)),
                     state=session.state,
+                    activity=getattr(session, "activity", None),
                 ),
                 layout=False,
             )
