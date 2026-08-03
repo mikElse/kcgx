@@ -32,9 +32,14 @@ MAKEUP_DB = 6.0
 # noise floor by ~28 dB and hiss becomes the loudest thing in the pane.
 RANGE_LIMIT_DB = 12.0
 GATE_OPEN_DBFS = -40.0
-# Hysteresis: a signal hovering at the open point would otherwise chatter
-# between 0 and 12 dB of boost, which is exactly what a squelch tail does.
-GATE_CLOSE_DBFS = -46.0
+# Deliberately equal to the open point: a single gate threshold at -40, set
+# on request. This removes the hysteresis that used to hold the gate open
+# down to -46, so a signal sitting near -40 can now toggle the gate between
+# blocks. The gate ramp (see `process`, which eases `_gate` toward its
+# target on the release constant) is what damps that into a slew rather
+# than a 12 dB step -- it is now the only thing standing between a hovering
+# signal and audible chatter, so do not remove it as well.
+GATE_CLOSE_DBFS = -40.0
 ATTACK_S = 0.005
 RELEASE_S = 0.150
 

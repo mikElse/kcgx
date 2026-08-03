@@ -145,31 +145,44 @@ def test_the_gate_opens_above_its_threshold():
     assert comp.gate_open is True
 
 
-def test_the_gate_has_hysteresis():
-    """A signal hovering just under the open point must not chatter.
+def test_the_gate_has_a_single_threshold():
+    """Opens and closes at the same level, by request.
 
-    The envelope has to actually *settle* inside the -46..-40 band for this
-    to test anything. Five blocks at -42 does not: the envelope is still
-    releasing from -20 (release is ~0.9 per 16 ms block) and is nowhere near
-    -42 yet, so the gate stays open whether or not there are two thresholds
-    -- the assertion passes on envelope lag alone. Sixty blocks settles it.
+    This replaces a hysteresis test. The gate used to open at -40 and hold
+    until -46 so a signal hovering at the threshold could not chatter; the
+    thresholds are now equal, so it can. What is left damping it is the
+    ramp, which the next test pins -- if that goes too, a hovering signal
+    steps the full 12 dB between blocks.
     """
+    from squelch.dsp import GATE_CLOSE_DBFS, GATE_OPEN_DBFS
+
+    assert GATE_OPEN_DBFS == GATE_CLOSE_DBFS == -40.0
+
     comp = Compressor()
     run_blocks(comp, -20.0, 20)
     assert comp.gate_open is True
     run_blocks(comp, -43.0, 60)
-    assert comp.gate_open is True, "between the open and close points it holds"
-    run_blocks(comp, -50.0, 60)
-    assert comp.gate_open is False, "below the close point it eventually shuts"
+    assert comp.gate_open is False, "below the single threshold it shuts"
 
 
 def test_the_gate_ramps_rather_than_steps():
-    """A hard gate steps 12 dB at the threshold and chatters audibly."""
+    """A hard gate steps the whole range at the threshold and chatters.
+
+    With the hysteresis removed this ramp is the only thing left damping a
+    signal that sits near -40, so it is pinned deliberately hard. The
+    levels matter: -60 to -20 cannot detect a missing ramp, because the
+    envelope's own attack smoothing limits the jump and the boost at -20 is
+    only ~7 dB anyway. Crossing from -50 to just under the threshold puts
+    the boost at the 12 dB range limit, so an ungated step is the full 12
+    and the assertion can actually fail.
+    """
     comp = Compressor()
-    run_blocks(comp, -60.0, 40)
+    run_blocks(comp, -50.0, 40)
     quiet_gain = comp.gain_db
+    assert comp.gate_open is False
     out = np.zeros(BLOCK, dtype=np.float32)
-    comp.process(tone(-20.0), out)
+    comp.process(tone(-39.0), out)
+    assert comp.gate_open is True, "the level must actually cross the threshold"
     assert comp.gain_db - quiet_gain < 12.0, "one block cannot jump the whole range"
 
 
