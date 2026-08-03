@@ -34,6 +34,14 @@ class Config:
     # Off by default. [A] still marks a feed, and the mixer still ignores
     # it -- no pan, no reverb.
     ambient_enabled: bool = False
+    # How much audio each feed may hold before the ring buffer drops to
+    # catch up -- effectively how far behind live you are willing to sit.
+    # LiveATC delivers in ~1.2 s bursts, so a buffer under that discards
+    # most of the feed and stutters; see the note beside BUFFER_SECONDS in
+    # mixer.py for the measurements. Raise it for a lossier connection at
+    # the cost of lag, lower it to stay closer to live at the cost of
+    # dropouts.
+    buffer_seconds: float = 4.0
 
 
 def load_config(path: Path | None = None) -> Config:

@@ -149,3 +149,18 @@ def test_a_non_boolean_switch_is_rejected(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert "ambient_enabled" in str(exc.value)
+
+
+def test_the_buffer_is_large_enough_for_a_burst():
+    """LiveATC delivers ~1.2 s at a time. A buffer under that discards most
+    of the feed -- see the note beside BUFFER_SECONDS in mixer.py."""
+    from squelch.mixer import BUFFER_SECONDS
+
+    assert Config().buffer_seconds == BUFFER_SECONDS
+    assert Config().buffer_seconds >= 2.4
+
+
+def test_the_buffer_can_be_tuned(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text("buffer_seconds = 8.0\n")
+    assert load_config(path).buffer_seconds == 8.0
