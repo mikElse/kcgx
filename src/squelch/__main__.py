@@ -21,13 +21,30 @@ from squelch.feeds import (
     read_cached_feeds,
     write_cached_feeds,
 )
+from squelch.mixer import Mixer
 from squelch.radar_theme import RadarTheme
 from squelch.session import FeedSession, SessionEvents
+
+AUDIO_FAILED = (
+    "no audio device — every feed is still connecting and metering, "
+    "but nothing can be heard"
+)
 
 FFMPEG_MISSING = (
     "ffmpeg not found on PATH — squelch decodes feeds with it. "
     "Install it (macOS: brew install ffmpeg) and start squelch again."
 )
+
+
+def report_audio_failure(mixer, warn: Callable[[str], None]) -> None:
+    """One warning for the whole app, not one per feed.
+
+    Twelve independent output streams became one, so a device that will not
+    open is now a single event. Losing sound must not lose the pane: every
+    feed keeps connecting, metering, and ranking.
+    """
+    if mixer.failed:
+        warn(AUDIO_FAILED)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -202,6 +219,7 @@ def build_sessions(
     config: Config,
     events: SessionEvents,
     *,
+    mixer: Any = None,
     session_factory: Callable[..., Any] = FeedSession,
 ) -> list[Any]:
     """One session per feed, all muted except the configured one.
@@ -218,6 +236,7 @@ def build_sessions(
                 events,
                 muted=feed.ident != config.feed,
                 icao=config.icao,
+                channel=None if mixer is None else mixer.add_channel(),
                 activity_threshold=config.activity_threshold_dbfs,
             )
         )
@@ -266,7 +285,12 @@ def main(
         ),
     )
 
-    sessions = sessions_builder(feeds, config, events)
+    mixer = Mixer()
+    sessions = sessions_builder(feeds, config, events, mixer=mixer)
+    # Before the app, so a device failure is already known and is replayed
+    # with the other startup warnings once the UI is up.
+    mixer.start()
+    report_audio_failure(mixer, pending.append)
     app = app_factory(
         config,
         sessions,
@@ -290,8 +314,11 @@ def main(
     try:
         app.run()
     finally:
-        # Unconditional: an exception escaping the UI must not leave a dozen
-        # PortAudio streams and ffmpeg processes behind.
+        # Unconditional: an exception escaping the UI must not leave the
+        # output stream and a dozen ffmpeg processes behind. The mixer goes
+        # first -- the callback reads the channels the sessions are still
+        # writing to.
+        mixer.stop()
         for session in sessions:
             session.stop()
     return 0

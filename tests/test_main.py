@@ -10,10 +10,13 @@ from squelch.__main__ import (
     load_feeds,
     main,
     parse_args,
+    report_audio_failure,
     safe_call,
 )
 from squelch.config import Config
 from squelch.feeds import Feed
+from squelch.mixer import Mixer
+from squelch.session import FeedSession
 
 FEEDS = [
     Feed(ident="kpdx3_twr", label="KPDX Tower (Both)"),
@@ -84,12 +87,13 @@ def test_load_feeds_falls_back_when_the_airport_lists_nothing(tmp_path):
 
 class StubSession:
     def __init__(self, feed, events, *, muted=True, icao="",
-                 activity_threshold=-40.0):
+                 activity_threshold=-40.0, channel=None):
         self.feed = feed
         self.events = events
         self.muted = muted
         self.icao = icao
         self.activity_threshold = activity_threshold
+        self.channel = channel
         self.started = False
         self.stopped = False
 
@@ -180,7 +184,7 @@ def run_main(argv=None, **overrides):
     kwargs = dict(
         app_factory=app_factory,
         feeds_loader=lambda config, warn: FEEDS,
-        sessions_builder=lambda feeds, config, events: [
+        sessions_builder=lambda feeds, config, events, mixer=None: [
             StubSession(f, events) for f in feeds
         ],
         which=lambda name: f"/usr/bin/{name}",
@@ -215,7 +219,7 @@ def test_main_stops_every_session_even_if_the_ui_raises():
             [],
             app_factory=app_factory,
             feeds_loader=lambda config, warn: FEEDS,
-            sessions_builder=lambda feeds, config, events: [
+            sessions_builder=lambda feeds, config, events, mixer=None: [
                 StubSession(f, events) for f in feeds
             ],
             which=lambda name: f"/usr/bin/{name}",
@@ -519,3 +523,65 @@ def test_the_first_feed_is_used_when_there_is_no_tower():
         session_factory=StubSession,
     )
     assert [s.feed.ident for s in sessions if not s.muted] == ["kord_atis"]
+
+
+# -- the mixer -------------------------------------------------------------
+
+
+class FakeStream:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_every_session_gets_a_channel():
+    mixer = Mixer()
+    feeds = [Feed(ident="a_twr", label="A Tower"), Feed(ident="a_gnd", label="A Ground")]
+    sessions = build_sessions(
+        feeds, Config(feed="a_twr"), events=None, mixer=mixer,
+        session_factory=FeedSession,
+    )
+    assert len(mixer._channels) == 2
+    assert all(s._channel is not None for s in sessions)
+
+
+def test_the_configured_feed_starts_audible_on_its_channel():
+    mixer = Mixer()
+    feeds = [Feed(ident="a_twr", label="A Tower"), Feed(ident="a_gnd", label="A Ground")]
+    build_sessions(
+        feeds, Config(feed="a_twr"), events=None, mixer=mixer,
+        session_factory=FeedSession,
+    )
+    assert mixer._channels[0].muted is False
+    assert mixer._channels[1].muted is True
+
+
+def test_a_failed_audio_device_warns_once_and_still_runs():
+    """Losing sound must not lose the pane."""
+    warnings = []
+    mixer = Mixer()
+
+    def explode(**_kwargs):
+        raise RuntimeError("no device")
+
+    mixer.start(stream_factory=explode)
+    assert mixer.failed is True
+    report_audio_failure(mixer, warnings.append)
+    assert len(warnings) == 1
+    assert "audio" in warnings[0].lower()
+
+
+def test_no_warning_when_the_device_opened():
+    warnings = []
+    mixer = Mixer()
+    mixer.start(stream_factory=lambda **kw: FakeStream(**kw))
+    report_audio_failure(mixer, warnings.append)
+    assert warnings == []
