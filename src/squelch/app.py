@@ -101,6 +101,9 @@ class SquelchApp(App):
     CSS_PATH = "squelch.tcss"
     # Ranking is cheap; applying it is what needs to be rare.
     RESORT_INTERVAL = 5.0
+    # 25 Hz: fast enough to read as a waveform, and the cost scales with
+    # what you are listening to rather than with how many feeds exist.
+    LEVEL_INTERVAL = 1 / 25
     BINDINGS = [
         ("up", "cursor_up", "Up"),
         ("down", "cursor_down", "Down"),
@@ -127,6 +130,7 @@ class SquelchApp(App):
         self._solo = Solo()
         self._resorter = Resorter()
         self._resort_timer = None
+        self._level_timer = None
         self._radar_theme = radar_theme
         self._theme_timer = None
         for session in self._sessions:
@@ -167,6 +171,9 @@ class SquelchApp(App):
         self._resort_timer = self.set_interval(
             self.RESORT_INTERVAL, self._tick_resort
         )
+        self._level_timer = self.set_interval(
+            self.LEVEL_INTERVAL, self._tick_levels
+        )
         for name in METER_PALETTES:
             self.register_theme(textual_theme(name))
         if self._radar_theme is not None:
@@ -185,6 +192,9 @@ class SquelchApp(App):
         if self._resort_timer is not None:
             self._resort_timer.stop()
             self._resort_timer = None
+        if self._level_timer is not None:
+            self._level_timer.stop()
+            self._level_timer = None
         if self._theme_timer is not None:
             self._theme_timer.stop()
             self._theme_timer = None
@@ -399,10 +409,18 @@ class SquelchApp(App):
 
     # -- driven by the sessions ----------------------------------------
 
-    def set_level(self, session, dbfs: float) -> None:
-        row = self._rows.get(id(session))
-        if row is not None:
-            row.push_level(dbfs)
+    def _tick_levels(self) -> None:
+        """Read each audible feed's post-compression level.
+
+        Polled rather than pushed: the level is computed inside the audio
+        callback, which is a real-time context and may not call into the
+        UI. Reading a float from here costs nothing and removes level
+        updates from the audio path entirely.
+        """
+        for session in self._sessions:
+            row = self._rows.get(id(session))
+            if row is not None and row.expanded:
+                row.push_level(session.level)
 
     def set_state(self, session, state: str) -> None:
         row = self._rows.get(id(session))
