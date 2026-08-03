@@ -68,19 +68,34 @@ SETTLE_ROUNDS = 3
 QUIET_SECONDS = 2.0
 
 
-def rank(items: Sequence, activity_of: Callable[[object], float]) -> list:
+def rank(
+    items: Sequence,
+    activity_of: Callable[[object], float],
+    *,
+    audible_of: Callable[[object], bool] | None = None,
+) -> list:
     """Busiest first, ties broken by the order they were discovered in.
 
     The tie-break is what stops two equally idle feeds trading places every
     time the ranking is recomputed.
+
+    With `audible_of`, everything it accepts sorts above everything it does
+    not, and activity orders within each group. A feed you have unmuted is
+    what you are listening to, so it belongs at the top whether or not it
+    happens to be talking; muting it drops it back in on activity alone.
+
+    Sorting by key rather than by a tuple containing the item: two items
+    with equal keys would otherwise be compared directly, and sessions are
+    not orderable. The index makes keys unique today, so this is a
+    robustness point rather than a live bug.
     """
-    return [
-        item
-        for _key, item in sorted(
-            ((-activity_of(item), index), item)
-            for index, item in enumerate(items)
-        )
-    ]
+
+    def sort_key(pair: tuple[int, object]) -> tuple[int, float, int]:
+        index, item = pair
+        audible = bool(audible_of(item)) if audible_of is not None else False
+        return (0 if audible else 1, -activity_of(item), index)
+
+    return [item for _index, item in sorted(enumerate(items), key=sort_key)]
 
 
 class Resorter:
@@ -110,6 +125,19 @@ class Resorter:
 
     def note_input(self) -> None:
         self._last_input = self._clock()
+
+    def adopt(self, order: Sequence) -> None:
+        """Record an order that was applied without going through propose().
+
+        The app reorders the stack the instant you mute or unmute something,
+        because that move is a direct consequence of your own keypress rather
+        than activity drifting underneath you. Without telling the Resorter,
+        it would spend the next three rounds proposing the order that is
+        already on screen.
+        """
+        self._applied = list(order)
+        self._candidate = None
+        self._held = 0
 
     def propose(self, order: Sequence) -> list | None:
         proposed = list(order)

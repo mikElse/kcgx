@@ -418,9 +418,12 @@ async def test_clicking_a_row_selects_it():
     app = make_app(3)
     async with app.run_test(size=SIZE) as pilot:
         assert app._selected == 0
-        await pilot.click(app._rows[id(app._sessions[2])], offset=(3, 0))
+        target = app._sessions[2]
+        await pilot.click(app._rows[id(target)], offset=(3, 0))
         await pilot.pause()
-        assert app.selected_session is app._sessions[2]
+        # By identity: the click unmutes it, which lifts it up the stack, so
+        # `_sessions[2]` is a different feed by the time this runs.
+        assert app.selected_session is target
 
 
 @pytest.mark.asyncio
@@ -440,27 +443,36 @@ async def test_clicking_the_ambient_control_does_not_toggle_mute():
 # -- solo ------------------------------------------------------------------
 
 
-def mix(app):
-    return [s.muted for s in app._sessions]
+def mix(app, order=None):
+    """Mute state per feed, in a stable order.
+
+    Takes the session list explicitly because `app._sessions` now reorders
+    whenever audibility changes -- audible feeds sort to the top. A
+    positional assertion against it would be reading a different feed after
+    every toggle, so callers capture the discovery order first and pass it.
+    """
+    return [session.muted for session in (order if order is not None else app._sessions)]
 
 
 @pytest.mark.asyncio
 async def test_solo_mutes_every_other_feed():
     app = make_app(4)
     async with app.run_test(size=SIZE) as pilot:
+        original = list(app._sessions)
         app._selected = 2
         app._apply_selection()
         await pilot.press("S")
         await pilot.pause()
-        assert mix(app) == [True, True, False, True]
+        assert mix(app, original) == [True, True, False, True]
 
 
 @pytest.mark.asyncio
 async def test_solo_restores_the_prior_mix_including_other_unmuted_feeds():
     app = make_app(4)
     async with app.run_test(size=SIZE) as pilot:
-        app._sessions[3].muted = False
-        before = mix(app)
+        original = list(app._sessions)
+        original[3].muted = False
+        before = mix(app, original)
         assert before == [False, True, True, False]
         app._selected = 2
         app._apply_selection()
@@ -468,26 +480,27 @@ async def test_solo_restores_the_prior_mix_including_other_unmuted_feeds():
         await pilot.pause()
         await pilot.press("S")
         await pilot.pause()
-        assert mix(app) == before
+        assert mix(app, original) == before
 
 
 @pytest.mark.asyncio
 async def test_moving_the_solo_then_disengaging_returns_to_the_pre_solo_mix():
     app = make_app(4)
     async with app.run_test(size=SIZE) as pilot:
-        before = mix(app)
-        app._selected = 1
+        original = list(app._sessions)
+        before = mix(app, original)
+        app._selected = app._sessions.index(original[1])
         app._apply_selection()
         await pilot.press("S")
         await pilot.pause()
-        app._selected = 3
+        app._selected = app._sessions.index(original[3])
         app._apply_selection()
         await pilot.press("S")
         await pilot.pause()
-        assert mix(app) == [True, True, True, False]
+        assert mix(app, original) == [True, True, True, False]
         await pilot.press("S")
         await pilot.pause()
-        assert mix(app) == before
+        assert mix(app, original) == before
 
 
 @pytest.mark.asyncio
@@ -510,12 +523,13 @@ async def test_muting_by_hand_during_solo_cancels_it():
 async def test_the_soloed_row_is_marked():
     app = make_app(3)
     async with app.run_test(size=SIZE) as pilot:
+        original = list(app._sessions)
         app._selected = 1
         app._apply_selection()
         await pilot.press("S")
         await pilot.pause()
-        assert app._rows[id(app._sessions[1])].has_class("soloed")
-        assert not app._rows[id(app._sessions[0])].has_class("soloed")
+        assert app._rows[id(original[1])].has_class("soloed")
+        assert not app._rows[id(original[0])].has_class("soloed")
 
 
 @pytest.mark.asyncio
@@ -523,11 +537,12 @@ async def test_solo_expands_only_the_soloed_row():
     """Expansion follows audibility, so solo reshapes the whole stack."""
     app = make_app(4)
     async with app.run_test(size=SIZE) as pilot:
+        original = list(app._sessions)
         app._selected = 2
         app._apply_selection()
         await pilot.press("S")
         await pilot.pause()
-        heights = [app._rows[id(s)].outer_size.height for s in app._sessions]
+        heights = [app._rows[id(s)].outer_size.height for s in original]
         assert heights == [2, 2, 6, 2]
 
 
@@ -566,10 +581,18 @@ def set_activity(app, values):
 
 @pytest.mark.asyncio
 async def test_the_stack_reorders_busiest_first_once_settled():
+    """Activity ordering, among feeds of equal audibility.
+
+    Every feed here is muted, so the audible-first tier cannot mask what is
+    being tested -- with the default fixture, session 0 is unmuted and would
+    lead on audibility alone regardless of its activity.
+    """
     app = make_app(3)
     async with app.run_test(size=SIZE) as pilot:
-        set_activity(app, [0.1, 0.9, 0.5])
         original = list(app._sessions)
+        for session in original:
+            session.muted = True
+        set_activity(app, [0.1, 0.9, 0.5])
         for _ in range(3):
             app._tick_resort()
         await pilot.pause()
@@ -654,8 +677,12 @@ async def test_a_resort_preserves_meter_history():
 async def test_offline_feeds_sink_to_the_bottom():
     app = make_app(3)
     async with app.run_test(size=SIZE) as pilot:
-        set_activity(app, [0.0, 0.4, 0.8])
         original = list(app._sessions)
+        # Muted, or the silent feed would lead on audibility rather than
+        # sinking -- which is a different behaviour, tested elsewhere.
+        for session in original:
+            session.muted = True
+        set_activity(app, [0.0, 0.4, 0.8])
         for _ in range(3):
             app._tick_resort()
         await pilot.pause()
@@ -764,3 +791,100 @@ async def test_polling_survives_a_session_with_no_row():
     async with app.run_test(size=SIZE):
         app._rows.clear()
         app._tick_levels()
+
+
+# -- audible feeds on top --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audible_feeds_sit_above_muted_ones():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        # The audible feed is the *quietest*, so activity alone would sink it.
+        set_activity(app, [0.0, 0.9, 0.5, 0.1])
+        original = list(app._sessions)
+        for _ in range(3):
+            app._tick_resort()
+        await pilot.pause()
+        assert app._sessions[0] is original[0], "what you can hear leads"
+        assert app._sessions[1:] == [original[1], original[2], original[3]]
+
+
+@pytest.mark.asyncio
+async def test_unmuting_lifts_a_feed_to_the_top_at_once():
+    """No settle delay: the move is the direct result of your own keypress."""
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.0, 0.0, 0.9])
+        original = list(app._sessions)
+        app._selected = 3
+        app._apply_selection()
+        await pilot.press("space")
+        await pilot.pause()
+        assert app._sessions[0] is original[3], (
+            "unmuted and busiest of the audible pair, so it leads immediately"
+        )
+
+
+@pytest.mark.asyncio
+async def test_muting_drops_it_back_in_on_activity():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.0, 0.0, 0.9])
+        original = list(app._sessions)
+        app._selected = 3
+        app._apply_selection()
+        await pilot.press("space")
+        await pilot.pause()
+        assert app._sessions[0] is original[3]
+        await pilot.press("space")
+        await pilot.pause()
+        assert app._sessions[0] is original[0], "the audible feed leads again"
+        assert app._sessions[1] is original[3], (
+            "muted, it rejoins the sort as the busiest of the muted group"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_selection_still_follows_the_feed_across_an_unmute():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.0, 0.0, 0.9])
+        app._selected = 3
+        app._apply_selection()
+        chosen = app.selected_session
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.selected_session is chosen, (
+            "space must keep acting on the feed you just unmuted"
+        )
+
+
+@pytest.mark.asyncio
+async def test_solo_puts_the_soloed_feed_on_top():
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.9, 0.0, 0.0, 0.0])
+        original = list(app._sessions)
+        app._selected = 2
+        app._apply_selection()
+        await pilot.press("S")
+        await pilot.pause()
+        assert app._sessions[0] is original[2], "the only audible feed leads"
+
+
+@pytest.mark.asyncio
+async def test_an_immediate_reorder_is_not_proposed_again():
+    """The Resorter is told, so it does not re-apply what is already there."""
+    app = make_app(4)
+    async with app.run_test(size=SIZE) as pilot:
+        set_activity(app, [0.1, 0.0, 0.0, 0.9])
+        app._selected = 3
+        app._apply_selection()
+        await pilot.press("space")
+        await pilot.pause()
+        after = list(app._sessions)
+        for _ in range(4):
+            app._tick_resort()
+        await pilot.pause()
+        assert app._sessions == after, "the order must be stable afterwards"

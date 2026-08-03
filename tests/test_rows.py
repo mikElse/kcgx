@@ -160,18 +160,18 @@ def test_control_line_carries_all_three_controls():
 
 def test_control_line_shows_activity_when_measured():
     line = control_line(muted=False, ambient=False, soloed=False, activity=0.34)
-    assert "busy 34%" in line
+    assert "Chatter 34%" in line
 
 
 def test_control_line_omits_activity_until_it_is_measured():
     line = control_line(muted=False, ambient=False, soloed=False, activity=None)
-    assert "busy" not in line
+    assert "Chatter" not in line
     assert len(line) == ROW_WIDTH
 
 
 def test_activity_rounds_rather_than_truncating():
     line = control_line(muted=False, ambient=False, soloed=False, activity=0.999)
-    assert "busy 100%" in line
+    assert "Chatter 100%" in line
 
 
 from squelch.rows import control_at

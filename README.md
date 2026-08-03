@@ -139,7 +139,7 @@ lets you unmute the ones you want to hear.
  ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
  ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
  ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
- [S]  [ ON]  [A]
+ [S]  [ ON]  [A]                    Chatter 34%
 ────────────────────────────────────────────────
  Ground                          [A] [OFF] ◐
 ────────────────────────────────────────────────
@@ -159,15 +159,29 @@ Feed idents no longer appear on the row. They are still what `feed` in
 
 ### Ordering
 
-Feeds are ordered by how busy they have been over the last five minutes —
-the fraction of that window spent above `activity_threshold_dbfs`. The
-busiest frequency is at the top, and an offline feed decays to 0% and sinks.
-The expanded row shows the figure as `busy 34%`.
+**Audible feeds sit at the top**, in the order you unmuted-or-not; what you
+can hear is what you want to look at. Everything below them is ordered by
+how busy it has been over the last five minutes — the fraction of that
+window spent above `activity_threshold_dbfs`. An offline feed decays to 0%
+and sinks. The expanded row shows the figure as `Chatter 34%`.
 
-The order does not change the instant the ranking does. A new order is
-applied only once it has held for fifteen seconds and you have not touched
-the pane for two — because clicking a row toggles its mute, and a row that
-moves while you are reaching for it silences the wrong frequency.
+Muting a feed drops it straight back into that sort on its chatter alone,
+so a busy frequency you have just silenced stays near the top of the muted
+group rather than disappearing to the bottom.
+
+Activity-driven reordering does not happen the instant the ranking changes.
+A new order is applied only once it has held for fifteen seconds and you
+have not touched the pane for two — because clicking a row toggles its
+mute, and a row that moves while you are reaching for it silences the wrong
+frequency.
+
+**Muting and unmuting are exempt from that delay.** The row moves at once,
+because it is the direct result of the key you just pressed rather than
+activity drifting underneath you. Selection follows the feed rather than the
+position, so `space` keeps acting on the feed you just toggled even though
+it has moved. One consequence worth knowing: after a click-to-mute the stack
+reshuffles immediately, so a second click at the same spot lands on a
+different feed.
 
 Activity is measured **before** the compressor, so making quiet feeds louder
 does not make them look busier.
