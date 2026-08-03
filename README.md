@@ -184,8 +184,8 @@ it has moved. One consequence worth knowing: after a click-to-mute the stack
 reshuffles immediately, so a second click at the same spot lands on a
 different feed.
 
-Activity is measured **before** the compressor, so making quiet feeds louder
-does not make them look busier.
+Activity is measured on the decoded feed, which is also exactly what you
+hear — nothing sits between the two.
 
 ### Matching themes
 
@@ -279,20 +279,16 @@ failing later inside the audio pipeline.
 | `icao`               | `"KPDX"`                                                        | Airport used by the feed picker (`f`) to look up feeds on LiveATC.net |
 | `feed`               | `"kpdx3_twr"`                                                    | The one feed left unmuted at startup |
 | `activity_threshold_dbfs` | `-40.0`                                                    | Level above which a feed counts as busy for the five-minute ranking. Must be written as a decimal (`-40.0`, not `-40`). |
-| `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. |
-| `gate_dbfs` | `-55.0` | Gate threshold. Measured against live audio — see the note beside `GATE_OPEN_DBFS` in `dsp.py` before moving it. |
-| `gate_enabled` | `true` | Set `false` to disable the gate. Safe on source-squelched feeds; costs you noise rejection on one with an open-squelch floor. |
-| `compressor_enabled` | `false` | Set `true` for gate + upward compression + makeup. Adds roughly 13 dB, and its gain moves to do so. |
+| `master_volume` | `1.0` | Output gain, 0.0–1.0. Shown as a percentage in the config overlay. The only gain in the signal path. |
 | `ambient_enabled` | `false` | Set `true` for `[A]` routing, panning, and the reverb bus. |
-| `compressor_threshold_dbfs` | `-12.0` | Below this, upward compression applies |
-| `compressor_ratio` | `4.0` | Upward compression ratio |
-| `compressor_makeup_db` | `6.0` | Gain applied to every feed |
-| `compressor_range_db` | `12.0` | Maximum upward gain |
 | `ambient_gain_db` | `-8.0` | Ambient bus level, relative to the dry bus |
 
-The `model`, `compute_type` and `vad_aggressiveness` keys are gone. An
-existing config that still sets them keeps working — unknown keys are
-ignored, not rejected.
+The `model`, `compute_type` and `vad_aggressiveness` keys are gone, and so
+are the seven that configured the gate and the compressor — `gate_dbfs`,
+`gate_enabled`, `compressor_enabled`, `compressor_threshold_dbfs`,
+`compressor_ratio`, `compressor_makeup_db`, `compressor_range_db`. An
+existing config that still sets any of them keeps working — unknown keys
+are ignored, not rejected.
 
 Example:
 
@@ -309,7 +305,7 @@ run.
 | Key     | Action |
 |---------|--------|
 | `↑` `↓` | Move the selection through the stack. |
-| `c`     | Open the config overlay: master volume and gate are adjustable with `◂ ▸`; the rest shows what is honoured. |
+| `c`     | Open the config overlay: master volume is adjustable with `◂ ▸`; the rest shows what is honoured. |
 | `space` | Mute/unmute the selected feed. Its meter keeps running either way. |
 | `S`     | Solo the selected feed — mute every other one. Press again to restore the previous mix. |
 | `a`     | Route the selected feed to the ambient bus. |
@@ -336,19 +332,20 @@ what it shapes — **Output**, **Chatter**, **Ambient**.
 
 ```
  Output
-›Master volume                100% ◂ ▸
+›Master volume               100% ◂ ▸
 
  Chatter
- Compressor                    off off
- Gate                           on off
- Gate threshold         -55.0 dBFS off
- Chatter threshold      -40.0 dBFS live
- Comp threshold         -12.0 dBFS inert
- ...
+ Chatter threshold     -40.0 dBFS live
+
+ Ambient
+ Ambient bus                  off off
+ Bus level                -8.0 dB off
+ Reverb decay              100 ms off
+ Reverb roll-off          1200 Hz off
 ```
 
-**Master volume is the only control**, because it is the only shaping still
-happening: `◂ ▸` moves it in 5% steps and it reaches the running mixer
+**Master volume is the only control**, because it is the only gain in the
+path: `◂ ▸` moves it in 5% steps and it reaches the running mixer
 immediately, scaling the summed output before the clip.
 
 Every other row reports rather than controls, and says which it is:
@@ -398,39 +395,40 @@ fallbacks says so in the message log.
 One ffmpeg process, one ring buffer, and one thread per feed — twelve of
 each at KPDX — feeding **one** stereo output stream. Bandwidth is trivial at
 roughly 16–32 kbps per feed; the CPU is mostly ffmpeg decode plus one
-mixing callback every 16 ms. With the shaping off by default that callback
-is a sum and a multiply — the reverb, whose comb loops are the only part
-of it that is not vectorised, does not run at all. Worth watching on
-battery.
+mixing callback every 16 ms. That callback is a sum and a multiply — the
+reverb, whose comb loops are the only part of it that is not vectorised,
+is off by default and does not run at all. Worth watching on battery.
 
 ## Audio shaping
 
-**There is none, by default.** What reaches the device is the decoded feed
-scaled by master volume:
+**There is none.** What reaches the device is the decoded feed scaled by
+master volume:
 
 ```
-ffmpeg ─► ring buffer ─► (compressor bypassed) ─► sum ─► master volume ─► stereo
+ffmpeg ─► ring buffer ─► sum ─► master volume ─► stereo
 ```
 
-The compressor and the ambient bus are both shipped disabled, so the signal
-is what came out of ffmpeg until the volume scales it. `[A]` still marks a
-feed and the mixer still ignores it — no panning, no reverb. The reverb is
-not run at all rather than run and added as silence, which saves most of
-the mixer's cost.
+There was, briefly, a per-feed noise gate and an upward compressor between
+the ring buffer and the sum. Both were **removed** on 2026-08-02, along
+with their config keys and their controls. The gate never had anything to
+reject — LiveATC squelches at the source, so 87% of blocks arrive at
+exactly −96 dBFS with a ~70 dB gap up to speech — and a gain that moves
+continuously is the wrong thing to have in the path when the complaint is
+that the audio sounds choppy. `git log -- src/squelch/dsp.py` has the
+measurements.
 
-The machinery is all still there and still tested; it is switched off, not
-removed. Two config keys bring it back:
+An unmuted feed now contributes exactly the samples ffmpeg decoded. There
+is a test asserting a mixer built from the shipped `Config` returns
+output == input, sample for sample.
+
+The ambient bus survives, shipped disabled: `[A]` still marks a feed and
+the mixer still ignores it. The reverb is not run at all rather than run
+and added as silence, which saves most of the mixer's cost. One config key
+brings it back:
 
 ```toml
-compressor_enabled = true   # gate, upward compression, makeup
 ambient_enabled = true      # [A] routing, panning, reverb
 ```
-
-**Upward compression**, when enabled, lifts quiet feeds instead of you
-riding a gain control: 4:1 below −12 dBFS with a 6 dB soft knee and +6 dB
-makeup, held back by a 12 dB range limit and a gate at −55 dBFS. Measured
-on live KPDX tower audio it adds about 13 dB to speech — and its gain moves
-continuously to do so, which is why it is off by default.
 
 **`[A]` routes a feed to the ambient bus**, when enabled: 8 dB down,
 panned, and heard only through a short dark reverb — 100 ms, fully wet,

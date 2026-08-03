@@ -1,13 +1,22 @@
 """Signal processing for the mixing engine.
 
 Everything here is a pure function or a small stateful class over NumPy
-arrays, deliberately: it is the only way to test a compressor's knee or a
-reverb's decay without an audio device, and the callback that calls it is a
-real-time context where nothing may allocate.
+arrays, deliberately: it is the only way to test a reverb's decay without an
+audio device, and the callback that calls it is a real-time context where
+nothing may allocate.
 
-Gain is computed once per block and ramped across it rather than computed
-per sample. At a 16 ms block that is inaudible for speech, and it is what
-makes the whole chain vectorisable.
+A feed's own samples are no longer processed here at all. There was once a
+per-feed noise gate and an upward compressor between the decoder and the
+mix; both were removed on 2026-08-02 because neither earned its keep on a
+source-squelched feed and both were suspects in an audible stutter. What
+reaches the mix is now the decoded feed, unaltered. `git log -- src/squelch/
+dsp.py` has the measurements if the question is ever reopened -- and the
+short version is that LiveATC squelches at the source, so 87% of blocks
+arrive at exactly -96 dBFS with a ~70 dB gap up to speech. There is no
+analog noise floor here for a gate to reject.
+
+What remains is the ambient bus: panning, and a reverb whose gain is
+constant, so nothing in this module reacts to the signal passing through it.
 """
 
 from __future__ import annotations
@@ -21,233 +30,22 @@ SAMPLE_RATE = 16_000
 # a delay shorter than the block feeds back into the block being computed,
 # which cannot be vectorised.
 BLOCK = 256
-BLOCK_SECONDS = BLOCK / SAMPLE_RATE
 SILENCE_FLOOR_DBFS = -96.0
-
-THRESHOLD_DBFS = -12.0
-RATIO = 4.0
-KNEE_DB = 6.0
-MAKEUP_DB = 6.0
-# Without this, 4:1 upward compression below -12 dBFS boosts a -50 dBFS
-# noise floor by ~28 dB and hiss becomes the loudest thing in the pane.
-RANGE_LIMIT_DB = 12.0
-# Measured against five minutes of live KPDX tower and ground on
-# 2026-08-02 (tools/gate_tune.py). LiveATC squelches at the source: 87% of
-# blocks sit at exactly -96 dBFS, digital silence, with a ~70 dB gap up to
-# speech. There is no analog noise floor for the gate to reject, so the
-# -40 this used to sit at was not protecting against anything -- it was
-# sitting *inside* the range transmissions pass through, and re-triggering
-# about once per transmission.
-#
-# Toggles per minute on tower, against a true transmission count of 5.8
-# (measured at -70, below anything on the feed):
-#
-#     -40 single        12.2    110% spurious
-#     -40/-46 hyst       9.0     55% spurious
-#     -55 single         6.6     14% spurious
-#
-# Hence -55, and hence a single threshold: moving the gate out of the
-# signal's way beats hysteresis at the wrong level. Open and close are
-# deliberately equal, set on request; the gate ramp in `process` is what
-# damps a crossing into a slew rather than a step, and is now the only
-# thing doing so.
-#
-# The tradeoff this accepts: a feed carrying a genuine open-squelch noise
-# floor above -55 dBFS would no longer be gated. None of KPDX's feeds do.
-# If a future airport's does, raise this rather than reinstating the
-# hysteresis -- the measurement above is what to re-run.
-GATE_OPEN_DBFS = -55.0
-GATE_CLOSE_DBFS = -55.0
-ATTACK_S = 0.005
-RELEASE_S = 0.150
 
 
 def block_dbfs(block: np.ndarray) -> float:
-    """RMS level of a block, floored."""
+    """RMS level of a block, floored.
+
+    Nothing in the signal path depends on this any more; it feeds the level
+    meter and the activity ranking, which is why it outlived the gate that
+    used to be its other caller.
+    """
     if block.size == 0:
         return SILENCE_FLOOR_DBFS
     mean_square = float(np.dot(block, block) / block.size)
     if mean_square <= 0.0:
         return SILENCE_FLOOR_DBFS
     return max(SILENCE_FLOOR_DBFS, 10.0 * math.log10(mean_square))
-
-
-def smoothing(tau_seconds: float, block_seconds: float = BLOCK_SECONDS) -> float:
-    """One-pole coefficient for a time constant, at block rate."""
-    if tau_seconds <= 0.0:
-        return 0.0
-    return math.exp(-block_seconds / tau_seconds)
-
-
-def upward_gain_db(
-    level_db: float,
-    *,
-    threshold: float = THRESHOLD_DBFS,
-    ratio: float = RATIO,
-    knee: float = KNEE_DB,
-    range_limit: float = RANGE_LIMIT_DB,
-) -> float:
-    """How much to lift a signal sitting below the threshold.
-
-    Soft knee: within +/- knee/2 of the threshold the curve is quadratic, so
-    it meets the flat region and the sloped region without a step. A step
-    here is audible as a click.
-    """
-    slope = 1.0 - 1.0 / ratio
-    below = threshold - level_db
-    half = knee / 2.0
-    if below <= -half:
-        gain = 0.0
-    elif below >= half:
-        gain = below * slope
-    else:
-        gain = slope * (below + half) ** 2 / (2.0 * knee)
-    return min(gain, range_limit)
-
-
-class Compressor:
-    """Gate, then upward compression, then makeup.
-
-    The gate scales the *boost*, never the signal: a gated feed is quiet
-    rather than absent, and makeup still applies, so closing the gate cannot
-    make a feed vanish mid-word.
-    """
-
-    def __init__(
-        self,
-        *,
-        threshold: float = THRESHOLD_DBFS,
-        ratio: float = RATIO,
-        knee: float = KNEE_DB,
-        makeup: float = MAKEUP_DB,
-        range_limit: float = RANGE_LIMIT_DB,
-        gate_open: float = GATE_OPEN_DBFS,
-        gate_close: float = GATE_CLOSE_DBFS,
-        gate_enabled: bool = True,
-        enabled: bool = True,
-        attack: float = ATTACK_S,
-        release: float = RELEASE_S,
-    ) -> None:
-        self._threshold = threshold
-        self._ratio = ratio
-        self._knee = knee
-        self._makeup = makeup
-        self._range = range_limit
-        self._open_at = gate_open
-        self._close_at = gate_close
-        self._gate_enabled = bool(gate_enabled)
-        self._enabled = bool(enabled)
-        self._attack = smoothing(attack)
-        self._release = smoothing(release)
-        self._envelope = SILENCE_FLOOR_DBFS
-        self._gate = 0.0
-        # 1.0 in circuit, 0.0 bypassed, ramped on the release constant for
-        # the same reason the gate is: switching mid-transmission would
-        # otherwise drop ~18 dB inside one block.
-        self._engaged = 1.0 if enabled else 0.0
-        self.gate_open = False
-        # Seeded from the gain this compressor will actually start on, not
-        # from makeup unconditionally: a compressor constructed bypassed
-        # would otherwise ramp its first block down from +6 dB to unity,
-        # and that block is not the signal that was written in.
-        self.gain_db = makeup if enabled else 0.0
-        self._applied = 10 ** (self.gain_db / 20)
-        # Preallocated: the callback may not allocate. `_unit` is a fixed
-        # 0..1 ramp; `np.linspace` has no `out=` parameter, so the per-block
-        # ramp is built by scaling this instead of generating a new one.
-        self._unit = np.linspace(0.0, 1.0, BLOCK, dtype=np.float32)
-        self._ramp = np.zeros(BLOCK, dtype=np.float32)
-
-    def set_enabled(self, enabled: bool) -> None:
-        """Bypass the whole compressor, or bring it back.
-
-        Bypassed means unity: no gate, no upward boost, and no makeup. The
-        envelope keeps tracking while it is off, so switching back on does
-        not lurch from a stale reading -- and the gain still moves through
-        the ramp, so neither direction clicks.
-        """
-        self._enabled = bool(enabled)
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    def set_gate_enabled(self, enabled: bool) -> None:
-        """Turn the gate off entirely, or back on.
-
-        Off pins the gate open and lets the existing ramp carry it there,
-        so switching does not click. What you lose is the only thing
-        stopping upward compression lifting a noise floor -- which costs
-        nothing on a source-squelched feed, where the floor is digital
-        silence, and costs up to the range limit on one with open squelch.
-        """
-        self._gate_enabled = bool(enabled)
-
-    @property
-    def gate_enabled(self) -> bool:
-        return self._gate_enabled
-
-    def set_gate(self, dbfs: float) -> None:
-        """Move the gate threshold. Safe to call from another thread.
-
-        Rebinding a float is atomic under CPython, and a threshold that
-        takes effect one block late is not observable. Open and close move
-        together: the hysteresis was removed deliberately (see
-        GATE_OPEN_DBFS), so a single number is the whole control.
-        """
-        self._open_at = self._close_at = float(dbfs)
-
-    @property
-    def gate_dbfs(self) -> float:
-        return self._open_at
-
-    def process(self, block: np.ndarray, out: np.ndarray) -> None:
-        level = block_dbfs(block)
-        # Attack when the signal rises, release when it falls -- the
-        # asymmetry is what stops a compressor pumping on speech.
-        coefficient = self._attack if level > self._envelope else self._release
-        self._envelope = level + coefficient * (self._envelope - level)
-
-        if not self._gate_enabled:
-            # Pinned open rather than bypassed: the ramp below still runs,
-            # so toggling the gate off mid-transmission slews instead of
-            # stepping the whole range in one block.
-            self.gate_open = True
-        elif self._envelope > self._open_at:
-            self.gate_open = True
-        elif self._envelope < self._close_at:
-            self.gate_open = False
-        target = 1.0 if self.gate_open else 0.0
-        self._gate = target + self._release * (self._gate - target)
-
-        boost = upward_gain_db(
-            self._envelope,
-            threshold=self._threshold,
-            ratio=self._ratio,
-            knee=self._knee,
-            range_limit=self._range,
-        )
-        # Bypassed is unity, not "makeup only": the point of the switch is
-        # to hear the feed untouched. Scaled by `_engaged` rather than
-        # branched on, so the whole gain slews to 0 dB over the release
-        # instead of stepping ~18 dB in one block. The envelope above still
-        # ran, so coming back on picks up from a current reading rather
-        # than a stale one.
-        engaged_target = 1.0 if self._enabled else 0.0
-        self._engaged = engaged_target + self._release * (
-            self._engaged - engaged_target
-        )
-        self.gain_db = (boost * self._gate + self._makeup) * self._engaged
-        target_linear = 10 ** (self.gain_db / 20)
-
-        # Ramp across the block rather than stepping at its boundary: a
-        # step in gain between two blocks is a discontinuity, i.e. a click.
-        n = len(block)
-        ramp = self._ramp[:n]
-        np.multiply(self._unit[:n], target_linear - self._applied, out=ramp)
-        np.add(ramp, self._applied, out=ramp)
-        np.multiply(block, ramp, out=out[:n])
-        self._applied = target_linear
 
 
 # The centre feed is phase-inverted and attenuated 6 dB, so an odd number of
