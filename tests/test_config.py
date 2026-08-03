@@ -80,3 +80,34 @@ def test_a_non_numeric_activity_threshold_is_rejected(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert "activity_threshold_dbfs" in str(exc.value)
+
+
+def test_the_audio_defaults_match_the_dsp_module():
+    from squelch import dsp
+
+    config = Config()
+    assert config.compressor_threshold_dbfs == dsp.THRESHOLD_DBFS
+    assert config.compressor_ratio == dsp.RATIO
+    assert config.compressor_makeup_db == dsp.MAKEUP_DB
+    assert config.compressor_range_db == dsp.RANGE_LIMIT_DB
+
+
+def test_the_audio_parameters_can_be_configured(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text(
+        "compressor_threshold_dbfs = -18.0\n"
+        "compressor_ratio = 2.0\n"
+        "ambient_gain_db = -12.0\n"
+    )
+    config = load_config(path)
+    assert config.compressor_threshold_dbfs == -18.0
+    assert config.compressor_ratio == 2.0
+    assert config.ambient_gain_db == -12.0
+
+
+def test_a_non_numeric_ratio_is_rejected(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text('compressor_ratio = "hard"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "compressor_ratio" in str(exc.value)
