@@ -124,6 +124,7 @@ class Compressor:
         gate_open: float = GATE_OPEN_DBFS,
         gate_close: float = GATE_CLOSE_DBFS,
         gate_enabled: bool = True,
+        enabled: bool = True,
         attack: float = ATTACK_S,
         release: float = RELEASE_S,
     ) -> None:
@@ -135,10 +136,15 @@ class Compressor:
         self._open_at = gate_open
         self._close_at = gate_close
         self._gate_enabled = bool(gate_enabled)
+        self._enabled = bool(enabled)
         self._attack = smoothing(attack)
         self._release = smoothing(release)
         self._envelope = SILENCE_FLOOR_DBFS
         self._gate = 0.0
+        # 1.0 in circuit, 0.0 bypassed, ramped on the release constant for
+        # the same reason the gate is: switching mid-transmission would
+        # otherwise drop ~18 dB inside one block.
+        self._engaged = 1.0 if enabled else 0.0
         self.gate_open = False
         self.gain_db = makeup
         self._applied = 10 ** (makeup / 20)
@@ -147,6 +153,20 @@ class Compressor:
         # ramp is built by scaling this instead of generating a new one.
         self._unit = np.linspace(0.0, 1.0, BLOCK, dtype=np.float32)
         self._ramp = np.zeros(BLOCK, dtype=np.float32)
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Bypass the whole compressor, or bring it back.
+
+        Bypassed means unity: no gate, no upward boost, and no makeup. The
+        envelope keeps tracking while it is off, so switching back on does
+        not lurch from a stale reading -- and the gain still moves through
+        the ramp, so neither direction clicks.
+        """
+        self._enabled = bool(enabled)
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
 
     def set_gate_enabled(self, enabled: bool) -> None:
         """Turn the gate off entirely, or back on.
@@ -203,7 +223,17 @@ class Compressor:
             knee=self._knee,
             range_limit=self._range,
         )
-        self.gain_db = boost * self._gate + self._makeup
+        # Bypassed is unity, not "makeup only": the point of the switch is
+        # to hear the feed untouched. Scaled by `_engaged` rather than
+        # branched on, so the whole gain slews to 0 dB over the release
+        # instead of stepping ~18 dB in one block. The envelope above still
+        # ran, so coming back on picks up from a current reading rather
+        # than a stale one.
+        engaged_target = 1.0 if self._enabled else 0.0
+        self._engaged = engaged_target + self._release * (
+            self._engaged - engaged_target
+        )
+        self.gain_db = (boost * self._gate + self._makeup) * self._engaged
         target_linear = 10 ** (self.gain_db / 20)
 
         # Ramp across the block rather than stepping at its boundary: a

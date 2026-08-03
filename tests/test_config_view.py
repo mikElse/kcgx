@@ -16,6 +16,7 @@ from squelch.config import Config
 from squelch.config_view import (
     CONTENT_WIDTH,
     FIXED,
+    COMPRESSOR_KEY,
     GATE_ENABLED_KEY,
     GATE_FLOOR,
     GATE_KEY,
@@ -159,14 +160,6 @@ def test_master_volume_is_alone_at_the_top():
 
 
 # -- adjustment ------------------------------------------------------------
-
-
-def test_the_adjustable_settings_are_volume_and_the_gate():
-    assert [s.label for s in adjustable_settings(config_rows(live()))] == [
-        "Master volume",
-        "Gate",
-        "Gate threshold",
-    ]
 
 
 def test_raising_the_volume():
@@ -387,14 +380,14 @@ async def test_left_lowers_it():
 
 
 @pytest.mark.asyncio
-async def test_down_twice_then_right_moves_the_threshold_not_the_volume():
+async def test_reaching_the_threshold_moves_it_and_not_the_volume():
     mixer = Mixer(volume=0.5, gate_dbfs=-55.0)
     app = app_with_mixer(mixer)
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("c")
-        # Two down: volume, then the gate on/off row, then the threshold.
-        await pilot.press("down")
-        await pilot.press("down")
+        # volume, compressor, gate, then the threshold.
+        for _ in range(3):
+            await pilot.press("down")
         await pilot.press("right")
         await pilot.pause()
         assert mixer.gate_dbfs == -55.0 + GATE_STEP
@@ -402,12 +395,13 @@ async def test_down_twice_then_right_moves_the_threshold_not_the_volume():
 
 
 @pytest.mark.asyncio
-async def test_one_down_then_right_switches_the_gate_off():
+async def test_reaching_the_gate_row_switches_it_off():
     """The control that exists because the gate sounds choppy."""
     mixer = Mixer()
     app = app_with_mixer(mixer)
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("c")
+        await pilot.press("down")
         await pilot.press("down")
         await pilot.press("right")
         await pilot.pause()
@@ -422,6 +416,7 @@ async def test_switching_the_gate_off_reaches_a_running_feed():
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("c")
         await pilot.press("down")
+        await pilot.press("down")
         await pilot.press("right")
         await pilot.pause()
         assert channel._compressor.gate_enabled is False
@@ -433,6 +428,7 @@ async def test_the_overlay_shows_the_gate_as_off():
     app = app_with_mixer(mixer)
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("c")
+        await pilot.press("down")
         await pilot.press("down")
         await pilot.press("right")
         await pilot.pause()
@@ -447,8 +443,8 @@ async def test_the_gate_change_reaches_a_running_feed():
     app = app_with_mixer(mixer)
     async with app.run_test(size=SIZE) as pilot:
         await pilot.press("c")
-        await pilot.press("down")
-        await pilot.press("down")
+        for _ in range(3):
+            await pilot.press("down")
         for _ in range(5):
             await pilot.press("right")
         await pilot.pause()
@@ -465,7 +461,7 @@ async def test_the_selection_cannot_run_off_either_end():
             await pilot.press("up")
         await pilot.pause()
         assert app.screen.selected.key == VOLUME_KEY
-        for _ in range(6):
+        for _ in range(9):
             await pilot.press("down")
         await pilot.pause()
         assert app.screen.selected.key == GATE_KEY
@@ -509,3 +505,55 @@ async def test_a_mixer_that_raises_does_not_take_the_pane_down():
         await pilot.press("right")
         await pilot.pause()
         assert isinstance(app.screen, ConfigScreen)
+
+
+# -- switching the compressor off ------------------------------------------
+
+
+def test_the_compressor_starts_on():
+    assert values()["Compressor"] == "on"
+
+
+def test_the_compressor_row_is_adjustable():
+    labels = [s.label for s in adjustable_settings(config_rows(live()))]
+    assert labels == ["Master volume", "Compressor", "Gate", "Gate threshold"]
+
+
+def test_bypassing_marks_the_gate_rows_off_too():
+    """The gate lives inside the compressor, so bypassing takes it along
+    whatever the gate row itself says."""
+    state = adjust(live(), COMPRESSOR_KEY, 1)
+    shown = {s.label: s.status for s in flatten(config_rows(state))}
+    assert shown["Compressor"] != OFF
+    assert shown["Gate"] == OFF
+    assert shown["Gate threshold"] == OFF
+
+
+def test_bypassing_does_not_forget_the_gate_setting():
+    state = adjust(live(), COMPRESSOR_KEY, 1)
+    assert state.gate_enabled is True, "restored as it was when re-enabled"
+
+
+@pytest.mark.asyncio
+async def test_one_down_then_right_bypasses_the_compressor():
+    mixer = Mixer()
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("down")
+        await pilot.press("right")
+        await pilot.pause()
+        assert mixer.compressor_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_bypassing_reaches_a_running_feed():
+    mixer = Mixer()
+    channel = mixer.add_channel()
+    app = app_with_mixer(mixer)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.press("c")
+        await pilot.press("down")
+        await pilot.press("right")
+        await pilot.pause()
+        assert channel._compressor.enabled is False

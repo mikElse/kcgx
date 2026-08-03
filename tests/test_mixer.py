@@ -543,3 +543,85 @@ def test_switching_the_gate_off_does_not_step_the_gain():
     comp.set_gate_enabled(False)
     comp.process(tone, out)
     assert abs(comp.gain_db - before) < 12.0, "one block cannot jump the range"
+
+
+# -- bypassing the compressor ----------------------------------------------
+
+
+def test_the_compressor_is_enabled_by_default():
+    assert Mixer().compressor_enabled is True
+
+
+def test_a_bypassed_compressor_reaches_channels_both_sides_of_the_call():
+    mixer = Mixer()
+    early = mixer.add_channel()
+    mixer.set_compressor_enabled(False)
+    late = mixer.add_channel()
+    assert early._compressor.enabled is False
+    assert late._compressor.enabled is False
+
+
+def test_a_configured_bypass_reaches_new_channels():
+    assert Mixer(compressor_enabled=False).add_channel()._compressor.enabled is False
+
+
+def test_bypassed_is_unity_not_makeup_only():
+    """The point of the switch is to hear the feed untouched."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor, block_dbfs
+
+    tone = np.full(DSP_BLOCK, 10 ** (-20.0 / 20), dtype=np.float32)
+    comp = Compressor(enabled=False)
+    out = np.zeros(DSP_BLOCK, dtype=np.float32)
+    for _ in range(60):
+        comp.process(tone, out)
+    assert comp.gain_db == 0.0
+    assert block_dbfs(out) == pytest.approx(-20.0, abs=0.2)
+
+
+def test_bypassed_gain_never_moves():
+    """Static by construction: this is what a choppy compressor is not."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor
+
+    comp = Compressor(enabled=False)
+    out = np.zeros(DSP_BLOCK, dtype=np.float32)
+    gains = []
+    for level in (-60.0, -10.0, -45.0, -5.0, -80.0):
+        tone = np.full(DSP_BLOCK, 10 ** (level / 20), dtype=np.float32)
+        for _ in range(10):
+            comp.process(tone, out)
+            gains.append(comp.gain_db)
+    assert set(gains) == {0.0}
+
+
+def test_switching_the_compressor_off_does_not_step_the_gain():
+    """It rides the ramp, so an A/B mid-transmission cannot click."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor
+
+    comp = Compressor()
+    out = np.zeros(DSP_BLOCK, dtype=np.float32)
+    tone = np.full(DSP_BLOCK, 10 ** (-30.0 / 20), dtype=np.float32)
+    for _ in range(60):
+        comp.process(tone, out)
+    before = comp.gain_db
+    comp.set_enabled(False)
+    comp.process(tone, out)
+    assert abs(comp.gain_db - before) < 12.0
+
+
+def test_the_envelope_keeps_tracking_while_bypassed():
+    """So coming back on picks up from a current reading, not a stale one."""
+    from squelch.dsp import BLOCK as DSP_BLOCK
+    from squelch.dsp import Compressor
+
+    comp = Compressor(enabled=False)
+    out = np.zeros(DSP_BLOCK, dtype=np.float32)
+    loud = np.full(DSP_BLOCK, 10 ** (-6.0 / 20), dtype=np.float32)
+    for _ in range(60):
+        comp.process(loud, out)
+    comp.set_enabled(True)
+    comp.process(loud, out)
+    # A stale -96 envelope would ask for the full range limit here.
+    assert comp.gain_db < 10.0

@@ -42,6 +42,10 @@ class Config:
     # open-squelch noise floor, which would be lifted by up to the range
     # limit.
     gate_enabled: bool = True
+    # Off bypasses the compressor entirely -- no gate, no upward boost, no
+    # makeup. The feed is heard untouched, which is roughly 13 dB quieter
+    # on a typical LiveATC stream.
+    compressor_enabled: bool = True
 
 
 def load_config(path: Path | None = None) -> Config:

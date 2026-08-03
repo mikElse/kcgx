@@ -53,6 +53,7 @@ VALUE_WIDTH = 12
 VOLUME_KEY = "master_volume"
 GATE_KEY = "gate_dbfs"
 GATE_ENABLED_KEY = "gate_enabled"
+COMPRESSOR_KEY = "compressor_enabled"
 # Shown against the threshold when the gate is switched off, so the number
 # is still readable without implying it is doing anything.
 OFF = "off"
@@ -94,17 +95,24 @@ class Live:
     config: Config
     gate_dbfs: float
     gate_enabled: bool
+    compressor_enabled: bool = True
 
     @classmethod
     def of(cls, config: Config, mixer=None) -> "Live":
         if mixer is None:
-            return cls(config, config.gate_dbfs, config.gate_enabled)
+            return cls(
+                config,
+                config.gate_dbfs,
+                config.gate_enabled,
+                config.compressor_enabled,
+            )
         # From the mixer, not the config: the overlay has to show what is
         # running, and the two diverge as soon as anyone adjusts anything.
         return cls(
             replace(config, master_volume=mixer.volume),
             mixer.gate_dbfs,
             mixer.gate_enabled,
+            mixer.compressor_enabled,
         )
 
 
@@ -128,15 +136,26 @@ def config_rows(live: Live) -> list[Group]:
             "Chatter",
             (
                 Setting(
+                    "Compressor",
+                    "on" if live.compressor_enabled else OFF,
+                    ADJUSTABLE,
+                    key=COMPRESSOR_KEY,
+                ),
+                Setting(
                     "Gate",
                     "on" if live.gate_enabled else OFF,
-                    ADJUSTABLE,
+                    # The gate lives inside the compressor, so bypassing
+                    # the compressor takes the gate with it whatever this
+                    # row says.
+                    ADJUSTABLE if live.compressor_enabled else OFF,
                     key=GATE_ENABLED_KEY,
                 ),
                 Setting(
                     "Gate threshold",
                     f"{gate:.1f} dBFS",
-                    ADJUSTABLE if live.gate_enabled else OFF,
+                    ADJUSTABLE
+                    if live.gate_enabled and live.compressor_enabled
+                    else OFF,
                     key=GATE_KEY,
                 ),
                 Setting(
@@ -194,6 +213,8 @@ def adjust(live: Live, key: str, delta: int) -> Live:
     if key == GATE_KEY:
         moved = live.gate_dbfs + delta * GATE_STEP
         return replace(live, gate_dbfs=min(GATE_CEILING, max(GATE_FLOOR, moved)))
+    if key == COMPRESSOR_KEY:
+        return replace(live, compressor_enabled=not live.compressor_enabled)
     if key == GATE_ENABLED_KEY:
         # Either direction flips it: there are only two states, and making
         # ◂ mean off and ▸ mean on would leave half the presses inert.
@@ -304,6 +325,7 @@ class ConfigScreen(ModalScreen):
             self._mixer.volume = self._live.config.master_volume
             self._mixer.set_gate(self._live.gate_dbfs)
             self._mixer.set_gate_enabled(self._live.gate_enabled)
+            self._mixer.set_compressor_enabled(self._live.compressor_enabled)
         except Exception:
             pass
 
