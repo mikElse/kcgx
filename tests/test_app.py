@@ -339,7 +339,7 @@ async def test_feed_row_renders_before_any_level_arrives():
         assert isinstance(row, FeedRow)
         assert isinstance(row._name_widget, Static)
         text, _ = rendered(app)
-        assert any("▁" in line for line in text), "an idle meter reads as a flat line"
+        assert any("░" in line for line in text), "an idle meter reads as a flat line"
 
 
 # -- row states ------------------------------------------------------------
@@ -368,7 +368,7 @@ async def test_unmuting_grows_the_row_and_muting_shrinks_it():
         app._apply_selection()
         await pilot.press("space")
         await pilot.pause()
-        assert row.outer_size.height == 6, "expanded is name, meter x3, controls"
+        assert row.outer_size.height == 4, "expanded is name, meter, controls"
 
 
 @pytest.mark.asyncio
@@ -543,7 +543,7 @@ async def test_solo_expands_only_the_soloed_row():
         await pilot.press("S")
         await pilot.pause()
         heights = [app._rows[id(s)].outer_size.height for s in original]
-        assert heights == [2, 2, 6, 2]
+        assert heights == [2, 2, 4, 2]
 
 
 # -- ambient ---------------------------------------------------------------
@@ -888,3 +888,37 @@ async def test_an_immediate_reorder_is_not_proposed_again():
             app._tick_resort()
         await pilot.pause()
         assert app._sessions == after, "the order must be stable afterwards"
+
+
+# -- the footer ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_footer_advertises_config_and_not_feeds_or_quit():
+    """`f` and `q` still work; they just no longer spend footer cells."""
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        footer = rendered(app)[0][-1]
+        assert "[c] config" in footer
+        assert "feeds" not in footer
+        assert "quit" not in footer
+
+
+@pytest.mark.asyncio
+async def test_the_unadvertised_keys_still_work():
+    """Dropping them from the footer must not drop them from the app --
+    `q` is the only way out."""
+    app = make_app(3)
+    async with app.run_test(size=SIZE):
+        actions = {binding[1] for binding in app.BINDINGS}
+        assert "quit" in actions
+        assert "show_feeds" in actions
+
+
+@pytest.mark.asyncio
+async def test_the_footer_fits_the_pane():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        await pilot.pause()
+        assert overflowing(app) == []

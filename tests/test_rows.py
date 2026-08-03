@@ -31,44 +31,45 @@ def test_steps_increase_with_level():
     assert quiet < mid < loud
 
 
-def test_meter_returns_three_rows_of_the_requested_width():
+def test_meter_returns_one_row_of_the_requested_width():
     rows = meter_rows([-20.0] * 10, width=12)
-    assert len(rows) == METER_ROWS
+    assert len(rows) == METER_ROWS == 1
     assert all(len(row) == 12 for row in rows)
 
 
-def test_a_silent_meter_fills_only_the_bottom_row():
-    top, middle, bottom = meter_rows([-96.0] * 8, width=8)
-    assert set(top) == {" "}
-    assert set(middle) == {" "}
-    assert set(bottom) == {"▁"}
+def test_a_silent_meter_reads_as_the_lightest_shade():
+    """Not blank: a dead feed and an idle one must look different from a
+    gap in the layout."""
+    (row,) = meter_rows([-96.0] * 8, width=8)
+    assert set(row) == {"░"}
 
 
-def test_a_full_scale_meter_fills_every_row():
-    top, middle, bottom = meter_rows([0.0] * 8, width=8)
-    assert set(top) == {"█"}
-    assert set(middle) == {"█"}
-    assert set(bottom) == {"█"}
+def test_a_full_scale_meter_is_solid():
+    (row,) = meter_rows([0.0] * 8, width=8)
+    assert set(row) == {"█"}
 
 
-def test_a_mid_level_fills_below_and_leaves_the_top_empty():
-    """A column is one sample drawn across 24 steps, not three meters."""
-    top, middle, bottom = meter_rows([-30.0], width=1)
-    assert bottom == "█", "everything below the level reads as full"
-    assert top == " ", "nothing above the level is drawn"
-    assert middle not in (" ",), "the level itself lands in the middle row"
+def test_the_shade_climbs_with_the_level():
+    """The ramp is the meter now: density carries the level, not height."""
+    seen = [meter_rows([level], width=1)[0] for level in (-96.0, -40.0, -20.0, 0.0)]
+    assert seen == ["░", "▒", "▓", "█"]
+
+
+def test_every_shade_is_reachable():
+    """A ramp with an unreachable step is a ramp with fewer steps."""
+    reached = {meter_rows([-60.0 + i * 0.5], width=1)[0] for i in range(121)}
+    assert reached == set("░▒▓█")
 
 
 def test_a_short_history_is_padded_on_the_left():
-    top, _middle, bottom = meter_rows([0.0], width=5)
-    assert top == "    █", "the newest sample belongs at the right"
-    assert bottom == "▁▁▁▁█"
+    (row,) = meter_rows([0.0], width=5)
+    assert row == "░░░░█", "the newest sample belongs at the right"
 
 
 def test_history_scrolls_oldest_off_the_left():
     loud_then_quiet = [0.0] + [-96.0] * 12
-    top, _middle, _bottom = meter_rows(loud_then_quiet, width=10)
-    assert set(top) == {" "}, "the loud sample has scrolled off"
+    (row,) = meter_rows(loud_then_quiet, width=10)
+    assert set(row) == {"░"}, "the loud sample has scrolled off"
 
 
 def test_the_default_width_is_the_full_content_row():
@@ -104,26 +105,46 @@ def test_the_ident_is_gone_from_the_row():
     assert "kpdx" not in line.lower()
 
 
-def test_compact_shows_the_name_the_controls_and_the_state_dot():
+def test_compact_shows_the_name_the_ambient_control_and_the_state_dot():
     line = compact_line("Tower (Both)", muted=True, ambient=False, state="live")
     assert "Tower (Both)" in line
     assert "[A]" in line
-    assert "[OFF]" in line
     assert line.endswith("●")
 
 
-def test_compact_shows_on_when_audible():
-    line = compact_line("Ground", muted=False, ambient=False, state="live")
-    assert "[ ON]" in line
+def test_compact_has_no_mute_toggle():
+    """A compact row is a muted one, so [OFF] could only ever read OFF.
+
+    Those five cells go to the chatter figure instead -- the number the
+    stack is sorted by. Unmuting is a click anywhere on the row.
+    """
+    line = compact_line("Tower (Both)", muted=True, ambient=False, state="live")
     assert "[OFF]" not in line
+    assert "[ ON]" not in line
 
 
-def test_the_on_off_control_is_the_same_width_in_both_states():
-    """A toggle that changes width shifts every cell beside it."""
-    off = compact_line("Ground", muted=True, ambient=False, state="live")
-    on = compact_line("Ground", muted=False, ambient=False, state="live")
-    assert len(off) == len(on) == ROW_WIDTH
-    assert off.index("[") == on.index("[")
+def test_compact_shows_the_chatter_percentage_behind_a_sound_symbol():
+    line = compact_line(
+        "Ground", muted=True, ambient=False, state="live", activity=0.34
+    )
+    assert "♪" in line
+    assert "34%" in line
+    assert line.index("♪") < line.index("34%")
+
+
+def test_compact_omits_the_percentage_until_chatter_is_measured():
+    line = compact_line("Ground", muted=True, ambient=False, state="live")
+    assert "%" not in line
+    assert len(line) == ROW_WIDTH
+
+
+def test_the_compact_percentage_field_does_not_shift_the_dot():
+    """0% through 100% must not move anything beside them."""
+    widths = {
+        len(compact_line("G", muted=True, ambient=False, state="live", activity=a))
+        for a in (0.0, 0.07, 0.34, 1.0)
+    }
+    assert widths == {ROW_WIDTH}
 
 
 def test_state_dots_reach_the_line():
@@ -147,8 +168,8 @@ def test_expanded_gives_the_name_more_room_than_compact():
 
 
 def test_the_name_field_is_wider_than_the_old_24_cell_field():
-    """Dropping the ident is what this buys."""
-    assert NAME_WIDTH == 34
+    """Dropping the ident is what this buys; the sound symbol costs one back."""
+    assert NAME_WIDTH == 33
 
 
 def test_control_line_carries_all_three_controls():
@@ -174,7 +195,7 @@ def test_activity_rounds_rather_than_truncating():
     assert "Chatter 100%" in line
 
 
-from squelch.rows import control_at
+from squelch.rows import CONTROL_LINE_Y, control_at
 
 
 def test_a_compact_click_on_the_name_is_not_a_control():
@@ -182,13 +203,22 @@ def test_a_compact_click_on_the_name_is_not_a_control():
     assert control_at(20, 0, expanded=False) is None
 
 
-def test_a_compact_click_hits_the_ambient_and_mute_controls():
+def test_a_compact_click_hits_the_ambient_control():
     line = compact_line("Ground", muted=True, ambient=False, state="live")
-    for x in range(len(line)):
-        if line[x : x + 3] == "[A]":
-            assert control_at(x, 0, expanded=False) == "ambient"
-        if line[x : x + 5] == "[OFF]":
-            assert control_at(x, 0, expanded=False) == "mute"
+    hit = line.index("[A]")
+    for x in range(hit, hit + 3):
+        assert control_at(x, 0, expanded=False) == "ambient"
+
+
+def test_a_compact_click_anywhere_else_is_the_row_body():
+    """Which unmutes. With [OFF] gone the whole row is the unmute target."""
+    line = compact_line(
+        "Ground", muted=True, ambient=False, state="live", activity=0.34
+    )
+    ambient = range(line.index("[A]"), line.index("[A]") + 3)
+    assert {
+        control_at(x, 0, expanded=False) for x in range(ROW_WIDTH) if x not in ambient
+    } == {None}
 
 
 def test_a_compact_row_has_no_solo_control():
@@ -203,30 +233,30 @@ def test_a_compact_click_below_the_first_line_is_nothing():
 
 def test_expanded_controls_live_on_the_control_line_only():
     assert control_at(1, 0, expanded=True) is None, "the name line"
-    assert control_at(1, 2, expanded=True) is None, "a meter line"
-    assert control_at(1, 4, expanded=True) == "solo"
+    assert control_at(1, 1, expanded=True) is None, "the meter line"
+    assert control_at(1, CONTROL_LINE_Y, expanded=True) == "solo"
 
 
 def test_expanded_click_hits_each_control():
     line = control_line(muted=False, ambient=False, soloed=False, activity=None)
     assert line.index("[S]") == 0
-    assert control_at(0, 4, expanded=True) == "solo"
-    assert control_at(line.index("[ ON]"), 4, expanded=True) == "mute"
-    assert control_at(line.index("[A]"), 4, expanded=True) == "ambient"
+    assert control_at(0, CONTROL_LINE_Y, expanded=True) == "solo"
+    assert control_at(line.index("[ ON]"), CONTROL_LINE_Y, expanded=True) == "mute"
+    assert control_at(line.index("[A]"), CONTROL_LINE_Y, expanded=True) == "ambient"
 
 
 def test_expanded_click_on_the_activity_readout_is_not_a_control():
-    assert control_at(ROW_WIDTH - 1, 4, expanded=True) is None
+    assert control_at(ROW_WIDTH - 1, CONTROL_LINE_Y, expanded=True) is None
 
 
 def test_the_gaps_between_controls_are_not_controls():
-    assert control_at(3, 4, expanded=True) is None
-    assert control_at(4, 4, expanded=True) is None
+    assert control_at(3, CONTROL_LINE_Y, expanded=True) is None
+    assert control_at(4, CONTROL_LINE_Y, expanded=True) is None
 
 
 def test_out_of_range_coordinates_are_safe():
     assert control_at(-1, 0, expanded=False) is None
-    assert control_at(999, 4, expanded=True) is None
+    assert control_at(999, CONTROL_LINE_Y, expanded=True) is None
     assert control_at(0, -3, expanded=True) is None
 
 
@@ -261,10 +291,10 @@ def test_the_gradient_never_goes_backwards():
     assert seen == sorted(seen), "louder must never render cooler"
 
 
-def test_meter_text_is_three_lines():
+def test_meter_text_is_one_line():
     text = meter_text([-20.0] * 10, PALETTE, width=10)
     assert isinstance(text, Text)
-    assert text.plain.count("\n") == 2
+    assert text.plain.count("\n") == METER_ROWS - 1 == 0
 
 
 def test_meter_text_matches_the_plain_renderer():

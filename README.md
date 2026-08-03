@@ -136,18 +136,19 @@ lets you unmute the ones you want to hear.
  KCGX  12 feeds               07:54:29  10 live
 ────────────────────────────────────────────────
  Tower (Both)                               ●
- ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
- ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
- ▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▂▃▅▇█▇▅
+ ░░░▒▒▓▓▓▓▓▒▓▓▓▓▓▓▒▒░░░░▒▒▓▓▓█▓▓▒▒░░░░░░▒▓▓
  [S]  [ ON]  [A]                    Chatter 34%
 ────────────────────────────────────────────────
- Ground                          [A] [OFF] ◐
+ Ground                            [A] ♪   7% ◐
 ────────────────────────────────────────────────
- Clearance Delivery              [A] [OFF] ●
+ Clearance Delivery                [A] ♪   0% ●
 ```
 
-An audible feed is **expanded** — a three-row meter and its full controls.
-A muted feed collapses to a single **compact** line. Expansion follows what
+An audible feed is **expanded** — a one-row meter and its full controls.
+A muted feed collapses to a single **compact** line carrying its chatter
+figure behind a `♪`, which is the number the stack is sorted by. There is
+no `[OFF]` on a compact row: it is muted by definition, so the toggle could
+only ever have read OFF. Clicking anywhere on the row unmutes it. Expansion follows what
 you can hear, so the pane spends its height on the frequencies you are
 actually listening to. **Every feed meters whether or not it is audible** —
 muting is an audio gate, not a pause — a muted feed simply keeps its history
@@ -303,6 +304,7 @@ run.
 | Key     | Action |
 |---------|--------|
 | `↑` `↓` | Move the selection through the stack. |
+| `c`     | Open the config overlay — what the audio path is set to, and which settings are actually honoured. |
 | `space` | Mute/unmute the selected feed. Its meter keeps running either way. |
 | `S`     | Solo the selected feed — mute every other one. Press again to restore the previous mix. |
 | `a`     | Route the selected feed to the ambient bus. |
@@ -312,6 +314,29 @@ run.
 
 Every control is also clickable: `[S]`, `[ ON]`/`[OFF]`, and `[A]`. Clicking
 anywhere else on a row toggles its mute.
+
+The footer shows only `[↑↓] select`, `[space] mute` and `[c] config`; `f`
+and `q` still work, they just no longer spend cells saying so.
+
+The meter is a **shade ramp** — `░▒▓█`, one row — so the level reads as
+density rather than as bar height, and each shade carries its own colour
+from the active theme: `░` noise floor, `▒` speech, `▓` a strong signal,
+`█` approaching clipping. A silent feed shows a flat `░` line rather than
+going blank, so a dead feed and a gap in the layout do not look alike.
+
+### The config overlay
+
+`c` opens a read-only table of every audio setting the design defines,
+each marked with whether it is honoured:
+
+- **live** — read from `squelch.toml` and actually applied.
+- **inert** — read from `squelch.toml` and not yet wired to the audio path.
+- **fixed** — compiled in; not settable at all.
+
+Five of the compressor and ambient keys are currently `inert`: `Config`
+parses them and the mixer builds its compressor from the `dsp.py` defaults
+regardless. The overlay shows both what was asked for and what is running,
+rather than implying an edit would do something.
 
 ### Feed picker
 
