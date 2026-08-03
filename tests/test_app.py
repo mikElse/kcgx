@@ -21,6 +21,7 @@ class FakeSession:
         self.name = label.replace("KPDX ", "")
         self.muted = muted
         self.state = state
+        self.level = -96.0
         self.ambient = False
         self.soloed = False
         self.activity = 0.0
@@ -177,10 +178,17 @@ async def test_muted_feeds_are_dimmed_but_keep_metering():
         assert app._sessions[1].muted is True
         assert row.has_class("muted"), "a muted feed must render dimmed"
 
+        # The app's own 25 Hz level timer also fires during pause(),
+        # which would make the count depend on wall-clock timing. Stop
+        # it so this measures _tick_levels and nothing else.
+        app._level_timer.stop()
+        app._sessions[1].muted = False
+        row.refresh_all()
         for level in (-50.0, -20.0, -8.0):
-            app.set_level(app._sessions[1], level)
+            app._sessions[1].level = level
+            app._tick_levels()
         await pilot.pause()
-        assert len(row._history) == 3, "a muted feed must keep metering"
+        assert len(row._history) == 3, "an audible feed meters every tick"
 
 
 @pytest.mark.asyncio
@@ -308,7 +316,7 @@ async def test_teardown_is_quiet_after_the_app_exits():
     async with app.run_test(size=SIZE):
         pass
     app._tick_clock()
-    app.set_level(app._sessions[0], -10.0)
+    app._tick_levels()
     app.set_state(app._sessions[0], "offline")
     app.warn("after teardown")
 
@@ -369,11 +377,12 @@ async def test_a_compact_row_shows_no_meter():
     async with app.run_test(size=SIZE) as pilot:
         session = app._sessions[1]
         for level in (-50.0, -20.0, -8.0):
-            app.set_level(session, level)
+            session.level = level
+            app._tick_levels()
         await pilot.pause()
         row = app._rows[id(session)]
-        assert len(row._history) == 3, "a muted feed keeps metering"
-        assert not row._meter_widget.display, "but does not draw the meter"
+        assert len(row._history) == 0, "a compact row is not polled at all"
+        assert not row._meter_widget.display, "and does not draw the meter"
 
 
 @pytest.mark.asyncio
@@ -624,10 +633,16 @@ async def test_a_resort_preserves_meter_history():
     """Rows are moved, never remounted."""
     app = make_app(3)
     async with app.run_test(size=SIZE) as pilot:
+        # The app's own 25 Hz level timer also fires during pause(),
+        # which would make the count depend on wall-clock timing. Stop
+        # it so this measures _tick_levels and nothing else.
+        app._level_timer.stop()
         session = app._sessions[2]
         session.muted = False
+        app._rows[id(session)].refresh_all()
         for level in (-20.0, -10.0, -5.0):
-            app.set_level(session, level)
+            session.level = level
+            app._tick_levels()
         set_activity(app, [0.1, 0.9, 0.5])
         for _ in range(3):
             app._tick_resort()
@@ -702,3 +717,50 @@ async def test_no_radar_theme_leaves_the_app_on_its_default():
     app = make_app(3)
     async with app.run_test(size=SIZE):
         assert app._radar_theme is None
+
+
+# -- metering --------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_expanded_rows_take_a_level_each_tick():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        # The app's own 25 Hz level timer also fires during pause(),
+        # which would make the count depend on wall-clock timing. Stop
+        # it so this measures _tick_levels and nothing else.
+        app._level_timer.stop()
+        app._sessions[0].level = -20.0
+        app._tick_levels()
+        app._tick_levels()
+        await pilot.pause()
+        assert len(app._rows[id(app._sessions[0])]._history) == 2
+
+
+@pytest.mark.asyncio
+async def test_compact_rows_are_not_polled():
+    """A muted feed draws no meter, so drawing one is wasted work."""
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app._sessions[1].level = -20.0
+        app._tick_levels()
+        await pilot.pause()
+        assert len(app._rows[id(app._sessions[1])]._history) == 0
+
+
+@pytest.mark.asyncio
+async def test_the_meter_shows_the_post_compression_level():
+    app = make_app(3)
+    async with app.run_test(size=SIZE) as pilot:
+        app._sessions[0].level = -6.0
+        app._tick_levels()
+        await pilot.pause()
+        assert app._rows[id(app._sessions[0])]._history[-1] == -6.0
+
+
+@pytest.mark.asyncio
+async def test_polling_survives_a_session_with_no_row():
+    app = make_app(2)
+    async with app.run_test(size=SIZE):
+        app._rows.clear()
+        app._tick_levels()
