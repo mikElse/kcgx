@@ -101,3 +101,44 @@ def test_a_missing_tool_is_reported_as_missing(tmp_path):
     ffmpeg_line = [l for l in result.stdout.splitlines() if "ffmpeg" in l]
     assert ffmpeg_line, "no ffmpeg row at all"
     assert "missing" in ffmpeg_line[0].lower()
+
+
+def test_pyenv_shims_are_flagged(tmp_path):
+    """Bare `python` fails inside this repo when pyenv shims come first.
+
+    Not setup's to fix -- it belongs to the user's PATH -- but silently
+    letting them hit `pyenv: version 3.14 is not installed` is worse.
+    """
+    shims = tmp_path / ".pyenv" / "shims"
+    shims.mkdir(parents=True)
+    fake_python = shims / "python"
+    fake_python.write_text("#!/bin/sh\nexit 1\n")
+    fake_python.chmod(0o755)
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+
+    result = subprocess.run(
+        [str(SETUP), "--check"],
+        env={
+            "PATH": f"{shims}:{path_dir}",
+            "HOME": str(tmp_path / "home"),
+            "KCGX_SETUP_NO_LAUNCH": "1",
+        },
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, "an advisory must not fail the check"
+    assert "pyenv" in result.stdout
+
+
+def test_no_pyenv_no_advisory(tmp_path):
+    """The guard must be capable of staying quiet, or it says nothing."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, "--check")
+    assert "pyenv" not in result.stdout
+
+
+def test_a_narrow_terminal_is_flagged(tmp_path):
+    """bin/kcgx refuses below 100 columns. Better said now than at launch."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, "--check", COLUMNS="80")
+    assert result.returncode == 0
+    assert "100" in result.stdout

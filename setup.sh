@@ -47,6 +47,37 @@ tmux_new_enough() {
 
 row() { printf '  %-12s %s\n' "$1" "$2"; }
 
+# Advisory only. Both describe the user's environment rather than anything
+# setup installs, so neither changes the exit status.
+
+check_pyenv() {
+    local python_path
+    python_path="$(command -v python 2>/dev/null || true)"
+    case "$python_path" in
+        */.pyenv/shims/*)
+            say "  note: pyenv shims come before uv on your PATH, so bare"
+            say "        \`python\` will not work inside this repo. That is"
+            say "        expected -- every kcgx command uses \`uv run\`,"
+            say "        which ignores pyenv entirely."
+            ;;
+    esac
+}
+
+check_width() {
+    local cols=""
+    if winsize="$(stty size 2>/dev/null </dev/tty)"; then
+        cols="${winsize##* }"
+    elif [ -n "${COLUMNS:-}" ]; then
+        cols="$COLUMNS"
+    fi
+    case "$cols" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    if [ "$cols" -lt "$MIN_COLS" ]; then
+        say "  note: this terminal is $cols columns; kcgx needs $MIN_COLS."
+    fi
+}
+
 preflight() {
     ARCH="$(detect_arch)"
     say "kcgx setup"
@@ -65,6 +96,8 @@ preflight() {
     fi
     have_command curl     && row curl "found" || row curl "missing"
     have_command adsb-tui && row adsb-tui "found" || row adsb-tui "missing (optional)"
+    check_pyenv
+    check_width
     say ""
 }
 
