@@ -10,6 +10,9 @@ from __future__ import annotations
 import fcntl
 import os
 import pty
+import re
+
+import pytest
 import shutil
 import struct
 import subprocess
@@ -24,6 +27,8 @@ BASE_TOOLS = ("bash", "sh", "env", "uname", "grep", "awk", "sed", "head",
               "dirname", "basename", "pwd", "mkdir", "ln", "rm", "cat",
               "printf", "tr", "sort", "id", "stty", "tar", "chmod",
               "readlink",
+              # For the shell-profile backup in link_launcher.
+              "cp",
               # For `tar xzf` in install_adsb. macOS's bsdtar decompresses
               # in-process and never looks for it, so the two download tests
               # passed there while failing on Linux, where GNU tar shells out
@@ -36,9 +41,24 @@ BASE_TOOLS = ("bash", "sh", "env", "uname", "grep", "awk", "sed", "head",
 # HOME points at tmp_path -- so uv would find no cache, re-download the
 # whole 3.14 toolchain per test, and mutate the working tree the suite is
 # running from.
+# Prints "2" because step 8 asks uv to count audio output devices and reads
+# the number off stdout; a silent stub reports "no output device" and every
+# otherwise-clean run ends on a warning. Harmless to the other two uv calls
+# in that step, whose output is discarded.
 UV_STUB = """#!/bin/sh
+echo 2
 exit 0
 """
+
+# Step 1 prints a version column, which means it runs `curl --version`.
+# A stub that answers every invocation with its payload therefore writes a
+# gzip tarball into the middle of the dependency table -- which surfaces
+# only as a UnicodeDecodeError inside subprocess.run, three steps away from
+# the line that caused it. Every curl stub below answers --version first.
+ANSWER_VERSION = """
+case "${1:-}" in --version) echo "curl 8.0.0 (kcgx test stub)"; exit 0 ;; esac
+"""
+
 
 # setup.sh's only two uses of curl are `curl | sh` (the uv installer) and
 # `curl | tar` (the 9.6 MB adsb-tui release). A real curl on the stubbed
@@ -51,7 +71,7 @@ exit 0
 # would. A test that needs curl to *do* something passes its own fake in
 # `scripts`, which wins over this.
 CURL_STUB = """#!/bin/sh
-echo "curl stub: tests never reach the network (tests/test_setup.py)" >&2
+""" + ANSWER_VERSION + """echo "curl stub: tests never reach the network (tests/test_setup.py)" >&2
 exit 1
 """
 
@@ -119,7 +139,16 @@ OFFLINE_RELEASE_URL = "https://kcgx-tests.invalid/never-fetched"
 
 
 def setup_env(tmp_path, path_dir, **env):
-    """The environment every invocation of setup.sh in this file gets."""
+    """The environment every invocation of setup.sh in this file gets.
+
+    The platform is pinned rather than detected. setup.sh now branches on
+    the real machine -- which package manager, which release asset, whether
+    PortAudio is a separate package -- so an unpinned suite would assert
+    macOS behaviour on a macOS developer's laptop and Linux behaviour in
+    CI, from the same source. macOS is the default because it is what the
+    bulk of these tests were written against; the Linux tests set the seams
+    themselves and say so in their names.
+    """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True, parents=True)
     environ = {
@@ -127,9 +156,74 @@ def setup_env(tmp_path, path_dir, **env):
         "HOME": str(home),
         "KCGX_SETUP_NO_LAUNCH": "1",
         "KCGX_SETUP_RELEASE_URL": OFFLINE_RELEASE_URL,
+        "KCGX_SETUP_OS": "macos",
+        "KCGX_SETUP_PLATFORM": "macos-arm64",
+        "KCGX_SETUP_PKG": "brew",
+        # Step 8 probes liveatc.net and api.airplanes.live. The suite must
+        # pass with no network at all, and a probe that has to time out is
+        # 8 seconds per test besides.
+        "KCGX_SETUP_SKIP_NET": "1",
+        # Read by every curl stub carrying SERVE_ADSB. Set for all of them
+        # rather than per test: step 6 is fatal without a usable binary, so
+        # a test that forgets it fails somewhere unrelated to its subject.
+        "ADSB_TARBALL": str(adsb_tarball(tmp_path)),
     }
     environ.update({k: str(v) for k, v in env.items()})
     return environ
+
+
+# Step 6 is fatal when it cannot produce a working adsb-tui, so any test that
+# expects setup.sh to reach the end has to leave one behind. Building the
+# tarball on the Python side and handing curl stubs its path keeps them from
+# needing mktemp and tar of their own.
+def adsb_tarball(tmp_path):
+    """A real gzipped tar holding one executable named adsb-tui."""
+    tarball = tmp_path / "adsb-tui.tar.gz"
+    if tarball.exists():
+        return tarball
+    payload = tmp_path / "adsb-payload"
+    payload.mkdir(exist_ok=True)
+    binary = payload / "adsb-tui"
+    # Step 8 runs `adsb-tui --help` and requires exit 0. That is the check
+    # that catches an archive built for the wrong platform, so the stand-in
+    # has to be able to answer it.
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    subprocess.run(
+        ["tar", "czf", str(tarball), "-C", str(payload), "adsb-tui"],
+        check=True, timeout=30,
+    )
+    return tarball
+
+
+# Prepended to every curl stub that has to survive step 6. $ADSB_TARBALL is
+# put on the environment by the test.
+SERVE_ADSB = """
+for arg in "$@"; do
+    case "$arg" in
+        *adsb-tui-*.tar.gz) cat "$ADSB_TARBALL"; exit 0 ;;
+    esac
+done
+"""
+
+CURL_SERVING_ADSB = """#!/bin/sh
+""" + ANSWER_VERSION + SERVE_ADSB + """
+echo "curl stub: unexpected URL: $*" >&2
+exit 1
+"""
+
+
+def complete_env(tmp_path, **scripts):
+    """A PATH on which a full run reaches the launch.
+
+    Everything present, a curl that serves the adsb-tui tarball, and the
+    real ffmpeg/tmux so step 8's version probes have something to read.
+    """
+    base = {"curl": CURL_SERVING_ADSB, "brew": BREW_RECORDER}
+    base.update(scripts)
+    return stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"), scripts=base,
+    )
 
 
 def run_setup(tmp_path, path_dir, *args, **env):
@@ -387,11 +481,11 @@ def test_missing_tools_are_installed_via_brew(tmp_path):
 def test_nothing_is_installed_when_everything_is_present(tmp_path):
     """Idempotence: the second run must be a no-op."""
     log = tmp_path / "brew.log"
-    path_dir = stub_path(
-        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
-        scripts={"brew": BREW_RECORDER},
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        BREW_LOG=str(log), ADSB_TARBALL=str(adsb_tarball(tmp_path)),
     )
-    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(log))
     assert result.returncode == 0
     link = tmp_path / "home" / ".local" / "bin" / "kcgx"
     assert link.is_symlink(), "setup did not run to completion"
@@ -401,10 +495,32 @@ def test_nothing_is_installed_when_everything_is_present(tmp_path):
 def test_no_homebrew_stops_with_the_install_line(tmp_path):
     """Installing a package manager unattended is beyond setup's remit."""
     path_dir = stub_path(tmp_path, tools=("uv", "curl"))  # no brew, no ffmpeg
-    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", KCGX_SETUP_PKG="none",
+    )
     assert result.returncode != 0
     combined = result.stdout + result.stderr
     assert "brew.sh" in combined, "the user needs the actual install command"
+
+
+def test_no_package_manager_on_linux_names_the_packages(tmp_path):
+    """The Linux sibling of the test above. There is no one command to
+    print -- apt, dnf and pacman spell it three ways and the machine has
+    none of them -- so the packages themselves are the answer, and telling
+    somebody to install Homebrew on Linux would not be one.
+    """
+    path_dir = stub_path(tmp_path, tools=("uv", "curl"))
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="none",
+        KCGX_SETUP_PLATFORM="linux-x64",
+    )
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "brew.sh" not in combined, "Homebrew is not the answer on Linux"
+    assert "ffmpeg" in combined and "tmux" in combined
+    for manager in ("apt-get", "dnf", "pacman"):
+        assert manager in combined, f"{manager} not named among what was looked for"
 
 
 def test_declining_the_prompt_installs_nothing(tmp_path):
@@ -420,19 +536,22 @@ def test_declining_the_prompt_installs_nothing(tmp_path):
     )
     # An absent brew.log alone is also what a premature die/exit before the
     # `read` would look like. Pin down that the script actually reached and
-    # took the decline branch via the "Nothing installed." message that
-    # only it prints -- not the exit code: ffmpeg and tmux are genuinely
-    # absent from this PATH, so declining leaves them missing and the run
-    # now correctly fails later, at the launch gate (see
-    # test_missing_tmux_is_stopped_by_the_gate). That downstream failure is
-    # the gate doing its job, not evidence against the decline branch.
-    assert "Nothing installed." in result.stdout
-    assert result.returncode != 0, "the gate should catch what decline left missing"
+    # took the decline branch via the "Nothing installed" message that only
+    # it prints. Declining is now fatal rather than merely skipped: ffmpeg
+    # and tmux are genuinely absent here, and carrying on to install a
+    # launcher for a cockpit that cannot open is worse than stopping.
+    combined = result.stdout + result.stderr
+    assert "Nothing installed" in combined
+    assert result.returncode != 0, "declining left the cockpit unopenable"
     assert not log.exists(), "declining still installed something"
 
 
 CURL_FOR_UV_INSTALL = """#!/bin/sh
-echo "$@" >> "$CURL_LOG"
+""" + ANSWER_VERSION + """echo "$@" >> "$CURL_LOG"
+""" + SERVE_ADSB + """
+# Concatenated, not an f-string: the install script below is full of shell
+# ${...} expansions that Python would read as format fields.
+#
 # Emit an install script for sh to execute. This preserves the two-stage
 # pipeline: curl fetches, sh installs. Matches `curl ... | sh` in production.
 # sync_project runs unconditionally after install_prerequisites, so this test
@@ -499,13 +618,13 @@ def test_the_uv_installer_may_not_edit_shell_profiles(tmp_path):
 
 
 def test_a_missing_uv_is_named_rather_than_blamed_on_the_sync(tmp_path):
-    """A fresh Mac where the prompt was declined: uv was never installed.
+    """A fresh Mac where the uv prompt was declined: uv was never installed.
 
-    Dying inside `uv sync` would be both wrong (there was no sync) and
-    useless (it does not say uv is missing, or how to get it). Route it
-    through the same gate as every other fatal dependency instead.
+    Dying inside `uv sync` at step 4 would be both wrong (there was no
+    sync) and useless -- it does not say uv is missing, or how to get it.
+    Step 3 owns that failure and has to say so itself.
     """
-    path_dir = stub_path(tmp_path, tools=("ffmpeg", "tmux"))
+    path_dir = stub_path(tmp_path, tools=("ffmpeg", "tmux", "curl"))
     result = subprocess.run(
         [str(SETUP)], input="n\n",
         env=setup_env(tmp_path, path_dir),
@@ -513,8 +632,8 @@ def test_a_missing_uv_is_named_rather_than_blamed_on_the_sync(tmp_path):
     )
     combined = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "Nothing installed." in result.stdout, "never reached the decline branch"
-    assert "still missing: uv" in combined, "the missing dependency is not named"
+    assert "Install uv now?" in result.stdout, "never reached the decline branch"
+    assert "uv is required" in combined, "the missing dependency is not named"
     assert "astral.sh/uv/install.sh" in combined, "no way to fix it is offered"
     assert "uv sync failed" not in combined, (
         "blamed the sync for a uv that was never installed"
@@ -579,7 +698,7 @@ def test_the_launcher_is_linked_not_copied(tmp_path):
 
 
 def test_relinking_is_a_no_op(tmp_path):
-    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    path_dir = complete_env(tmp_path)
     run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
     second = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
     assert second.returncode == 0
@@ -618,7 +737,7 @@ def test_a_path_with_the_prefix_does_not_warn(tmp_path):
     home = tmp_path / "home"
     prefix = home / ".local" / "bin"
     prefix.mkdir(parents=True)
-    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    path_dir = complete_env(tmp_path)
     result = run_setup(
         tmp_path, path_dir, KCGX_SETUP_YES="1",
         PATH=f"{prefix}:{path_dir}",
@@ -629,7 +748,7 @@ def test_a_path_with_the_prefix_does_not_warn(tmp_path):
 
 
 CURL_RECORDER = """#!/bin/sh
-# Record the URL, then emit a tarball containing a fake adsb-tui.
+""" + ANSWER_VERSION + """# Record the URL, then emit a tarball containing a fake adsb-tui.
 for a in "$@"; do case "$a" in https://*) echo "$a" >> "$CURL_LOG";; esac; done
 d=$(mktemp -d)
 printf '#!/bin/sh\\nexit 0\\n' > "$d/adsb-tui"
@@ -638,7 +757,7 @@ tar czf - -C "$d" adsb-tui
 """
 
 CURL_FAILS = """#!/bin/sh
-echo "404" >&2
+""" + ANSWER_VERSION + """echo "404" >&2
 exit 22
 """
 
@@ -667,15 +786,19 @@ def test_the_release_url_names_the_pinned_version(tmp_path):
     assert "macos-" in url, "the arch-specific asset must be selected"
 
 
-def test_a_failed_download_still_reaches_the_end(tmp_path):
-    """adsb-tui is degraded, never fatal: the cockpit must still open, and
-    it must say why the radar will be empty.
+def test_a_failed_download_is_fatal(tmp_path):
+    """The radar is part of the cockpit, not a bonus.
 
-    "radar" alone is not enough to prove the second half: install_adsb
-    prints "the radar pane" as its own banner *before* attempting the
-    download, so that substring is already on stdout whatever happens
-    next. Assert on "could not download", which only the failure branch
-    emits.
+    This inverts what setup.sh used to promise. A failed download was
+    non-fatal and left you with a working audio pane and a dead radar --
+    which reads as a broken install either way, and buries the one line
+    that said what happened under six more steps of output. Stopping at
+    the failure puts the URL that failed on the last line of the terminal.
+
+    "radar" alone would not prove the message: install_adsb prints "the
+    radar pane" as its own banner *before* attempting the download, so
+    that substring is on stdout whatever happens next. Assert on "could
+    not download", which only the failure branch emits.
     """
     path_dir = stub_path(
         tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
@@ -683,13 +806,14 @@ def test_a_failed_download_still_reaches_the_end(tmp_path):
     )
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
     combined = (result.stdout + result.stderr).lower()
-    assert result.returncode == 0, "a missing radar must not fail setup"
-    assert "could not download" in combined, "the degradation was never explained"
-    assert "everything else still works" in combined, "no reassurance, no re-run"
+    assert result.returncode != 0, "a missing radar must stop the install"
+    assert "could not download" in combined, "the failure was never explained"
+    assert "adsb-tui-macos-arm64.tar.gz" in combined, "the failing URL is not named"
+    assert "setup complete" not in combined, "claimed success after failing"
 
 
 CURL_EMPTY_ARCHIVE = """#!/bin/sh
-# A tarball that unpacks cleanly and contains no adsb-tui: `tar` exits 0,
+""" + ANSWER_VERSION + """# A tarball that unpacks cleanly and contains no adsb-tui: `tar` exits 0,
 # so "the download worked" is true and "adsb-tui is installed" is not.
 d=$(mktemp -d)
 printf 'not a binary\\n' > "$d/RELEASE-NOTES"
@@ -707,7 +831,7 @@ def test_an_archive_with_no_binary_is_not_called_installed(tmp_path):
     )
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
     combined = result.stdout + result.stderr
-    assert result.returncode == 0, "still degraded, not fatal"
+    assert result.returncode != 0, "an unusable radar must stop the install"
     assert not (tmp_path / "home" / ".local" / "bin" / "adsb-tui").exists()
     assert "Installed" not in combined, "claimed an install that did not happen"
     assert "no usable binary" in combined, "said nothing about the empty archive"
@@ -771,64 +895,78 @@ def test_an_existing_config_is_never_touched(tmp_path):
     assert config.read_text() == "theme = \"mono\"\n"
 
 
-def test_missing_tmux_is_stopped_by_the_gate(tmp_path):
-    """Declining the prompt with tmux absent must not reach the launcher.
+def test_a_missing_tmux_is_caught_before_the_launch(tmp_path):
+    """The launch gate is gone; step 8 replaced it, and has to do the job.
 
-    `preflight` runs unconditionally, before the gate, and always prints a
-    tmux row -- so a bare "tmux" (or "3.1") substring check would pass
-    even if the gate were deleted outright, or if the script died for an
-    unrelated reason anywhere after preflight. Assert on the gate's own
-    die message instead: "cannot open without these" is text only
-    `launch_gate` emits, and "tmux(3.1+)" is the literal token it builds
-    into `$blocked` -- distinct from preflight's row text ("missing" / "too
-    old (needs 3.1+)", with a space before the parenthesis, not glued to
-    "tmux").
-    """
-    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"))
-    result = subprocess.run(
-        [str(SETUP)], input="n\n",
-        env=setup_env(tmp_path, path_dir),
-        capture_output=True, text=True, timeout=120,
-    )
-    combined = result.stdout + result.stderr
-    assert result.returncode != 0
-    assert "cannot open without these" in combined
-    assert "tmux(3.1+)" in combined
+    `preflight` runs first and always prints a tmux row, so a bare "tmux"
+    substring check would pass even with step 8 deleted outright. Assert
+    on the verify table's own vocabulary instead -- a FAIL line, the count
+    of failed checks, and the absence of the hand-off message.
 
-
-def test_an_old_tmux_is_stopped_by_the_gate(tmp_path):
-    """bin/kcgx refuses below 3.1, so setup must not hand off to it.
-
-    See the sibling test above for why the assertions target the gate's
-    own die message rather than a substring preflight's row already
-    prints.
+    Declining the install is how tmux stays missing: brew here is a
+    recorder that installs nothing, so accepting would report success and
+    leave the machine unchanged, which is a different bug.
     """
     path_dir = stub_path(
         tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"),
-        scripts={"tmux": "#!/bin/sh\necho 'tmux 2.8'\n"},
+        scripts={"brew": BREW_RECORDER, "curl": CURL_SERVING_ADSB},
     )
-    result = subprocess.run(
-        [str(SETUP)], input="n\n",
-        env=setup_env(tmp_path, path_dir),
-        capture_output=True, text=True, timeout=120,
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(tmp_path / "b.log"),
     )
     combined = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "cannot open without these" in combined
-    assert "tmux(3.1+)" in combined
+    assert "tmux" in combined and "FAIL" in combined, combined
+    assert "check(s) failed" in combined, "the verify step did not stop the run"
+    assert "Setup complete" not in combined, "handed off to a cockpit that cannot open"
+
+
+def test_an_old_tmux_is_caught_before_the_launch(tmp_path):
+    """bin/kcgx refuses below 3.1, so setup must not hand off to it.
+
+    A present-but-too-old tmux is the case a bare `command -v` misses, and
+    it is the one that actually happens -- macOS shipped 2.x for years.
+    """
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"),
+        scripts={
+            "tmux": "#!/bin/sh\necho 'tmux 2.8'\n",
+            "brew": BREW_RECORDER,
+            "curl": CURL_SERVING_ADSB,
+        },
+    )
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(tmp_path / "b.log"),
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "3.1" in combined, "never said which version is wanted"
+    assert "check(s) failed" in combined, "the verify step did not stop the run"
+    assert "Setup complete" not in combined
 
 
 def test_a_complete_environment_reaches_the_launch(tmp_path):
+    """The end-to-end shape of a good install: no failures, no warnings.
+
+    SHELL is set because step 5 needs to know which profile to offer to
+    edit; without it setup cannot put $PREFIX on PATH, and step 8 warns
+    that the airport picker will not work -- which is correct behaviour
+    and not what this test is about.
+    """
     path_dir = stub_path(
         tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
         scripts={"curl": CURL_RECORDER},
     )
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1",
+                       SHELL="/bin/zsh",
                        CURL_LOG=str(tmp_path / "c.log"))
     assert result.returncode == 0
-    # The gate's own message, not merely the string "kcgx" -- which appears
-    # in the symlink line long before the gate and would pass either way.
+    # Step 8's own hand-off message, not merely the string "kcgx" -- which
+    # appears in the symlink line five steps earlier and would pass either
+    # way. And "Everything checks out", so a run that limped to the end on
+    # warnings cannot be mistaken for a clean one.
     assert "Setup complete" in result.stdout
+    assert "Everything checks out" in result.stdout
 
 
 def test_setup_never_invokes_cargo(tmp_path):
@@ -847,9 +985,11 @@ def test_setup_never_invokes_cargo(tmp_path):
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
     # An absent cargo.log alone is also what a premature die/exit before
     # install_adsb ever ran would look like. Pin down that the script
-    # actually ran far enough to have called cargo if it were going to.
-    assert result.returncode == 0, "setup did not run to completion"
-    assert "Setup complete" in result.stdout
+    # actually ran far enough to have called cargo if it were going to:
+    # the download was attempted and it failed, which is precisely the
+    # moment a build-from-source fallback would kick in.
+    combined = result.stdout + result.stderr
+    assert "could not download" in combined, "never reached the download"
     assert not log.exists(), "setup fell back to building from source"
 
 
@@ -860,13 +1000,17 @@ def test_no_cargo_call_appears_in_the_script(tmp_path):
     worth writing down in the script, and a naive substring check would
     turn documenting it into a test failure.
     """
-    code = [
+    invocations = [
         line for line in SETUP.read_text().splitlines()
         if not line.lstrip().startswith("#")
+        # `say`/`warn`/`die` lines are output, not execution. Step 6 tells
+        # the user in as many words that cargo is never invoked, and a
+        # naive substring check turned documenting the promise into a
+        # violation of it.
+        and not re.match(r'\s*(say|warn|die)\b', line)
+        and re.search(r'(^|[\s|;&(`$])(cargo|rustc)\b', line)
     ]
-    source = "\n".join(code)
-    assert "cargo" not in source
-    assert "rustc" not in source
+    assert not invocations, f"setup.sh may invoke neither: {invocations}"
 
 
 def test_exec_hands_off_by_absolute_path(tmp_path):
@@ -891,3 +1035,382 @@ def test_exec_hands_off_by_absolute_path(tmp_path):
         f"exec must hand off by absolute $REPO path, not a bare command "
         f"name resolved through PATH: {exec_lines}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Platform detection
+#
+# Driven through a stubbed `uname` rather than the KCGX_SETUP_PLATFORM seam,
+# because the seam is exactly what would hide the bug these cover: setup.sh
+# used to key the release asset on `uname -m` alone, so every x86_64 machine
+# resolved to macos-x64. On Linux that downloaded a Mach-O binary which
+# unpacked cleanly, tested executable, and was reported as installed. The
+# first sign of trouble was an empty radar pane and no error anywhere.
+
+def uname_stub(system, machine):
+    return f"""#!/bin/sh
+case "${{1:-}}" in
+    -s) echo "{system}" ;;
+    -m) echo "{machine}" ;;
+    *)  echo "{system}" ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(
+    "system,machine,expected",
+    [
+        ("Darwin", "arm64", "macos-arm64"),
+        ("Darwin", "x86_64", "macos-x64"),
+        ("Linux", "x86_64", "linux-x64"),
+        # Upstream publishes no ARM Linux build. "unsupported" is the honest
+        # answer; the alternative that shipped was linux-x64 on a Raspberry
+        # Pi, or macos-x64 on anything.
+        ("Linux", "aarch64", "unsupported"),
+        ("OpenBSD", "amd64", "unsupported"),
+    ],
+)
+def test_the_release_asset_follows_the_os_not_just_the_machine(
+    tmp_path, system, machine, expected
+):
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
+        scripts={"uname": uname_stub(system, machine)},
+    )
+    env = setup_env(tmp_path, path_dir)
+    del env["KCGX_SETUP_PLATFORM"]  # the point is what setup.sh works out
+    del env["KCGX_SETUP_OS"]
+    result = subprocess.run(
+        [str(SETUP), "--check"], env=env,
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0
+    platform_row = next(
+        line for line in result.stdout.splitlines() if "platform" in line
+    )
+    assert expected in platform_row, platform_row
+
+
+def test_an_unsupported_platform_stops_rather_than_installing_the_wrong_binary(
+    tmp_path,
+):
+    """The failure this replaces was silent, which is what made it expensive."""
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        KCGX_SETUP_PLATFORM="unsupported", KCGX_SETUP_OS="linux",
+        KCGX_SETUP_PKG="apt",
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "no release" in combined, combined
+    # The three that do exist, so the reader can tell whether they are close.
+    for published in ("macos-arm64", "macos-x64", "linux-x64"):
+        assert published in combined
+    assert not (tmp_path / "home" / ".local" / "bin" / "adsb-tui").exists()
+
+
+# ---------------------------------------------------------------------------
+# PortAudio: the dependency that was never written down
+
+def test_portaudio_is_installed_on_linux(tmp_path):
+    """`import sounddevice` raises OSError("PortAudio library not found")
+    without it, so squelch cannot start at all -- no meters, no error in
+    the UI, just a dead pane. The macOS wheel bundles its own copy, which
+    is why this went unnoticed: the only machine that needs the package is
+    the only one nobody installed on.
+    """
+    log = tmp_path / "apt.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
+        scripts={
+            "curl": CURL_SERVING_ADSB,
+            "apt-get": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
+            # No libportaudio in its output: the missing case.
+            "ldconfig": "#!/bin/sh\nexit 0\n",
+        },
+    )
+    run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="apt",
+        KCGX_SETUP_PLATFORM="linux-x64",
+    )
+    assert log.exists(), "apt-get was never called"
+    assert "libportaudio2" in log.read_text(), log.read_text()
+
+
+def test_portaudio_is_not_a_package_on_macos(tmp_path):
+    """Asking Homebrew for it would be wrong, not merely redundant: the
+    wheel loads the copy it ships with, so a brew portaudio is a second
+    library that nothing reads.
+    """
+    log = tmp_path / "brew.log"
+    path_dir = complete_env(tmp_path)
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(log))
+    installed = log.read_text() if log.exists() else ""
+    assert "portaudio" not in installed, installed
+
+
+def test_a_present_portaudio_is_not_reinstalled(tmp_path):
+    log = tmp_path / "apt.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
+        scripts={
+            "curl": CURL_SERVING_ADSB,
+            "apt-get": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
+            "ldconfig": (
+                "#!/bin/sh\n"
+                "echo '\tlibportaudio.so.2 (libc6,x86-64) => "
+                "/lib/x86_64-linux-gnu/libportaudio.so.2'\n"
+            ),
+        },
+    )
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="apt",
+        KCGX_SETUP_PLATFORM="linux-x64",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not log.exists(), "installed a PortAudio that was already there"
+
+
+# ---------------------------------------------------------------------------
+# The PATH, and the shell profile
+#
+# setup.sh used to refuse to touch a shell profile on principle, print the
+# export line, and leave it there -- which meant the airport picker silently
+# did nothing for anyone who did not act on a message six steps up. It now
+# asks. Asking is the whole difference: the edit is visible, declinable,
+# backed up, and applied once.
+
+def profile_of(tmp_path, name=".zshrc"):
+    return tmp_path / "home" / name
+
+
+def test_the_profile_edit_is_offered_and_applied(tmp_path):
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+    )
+    assert result.returncode == 0
+    profile = profile_of(tmp_path)
+    assert profile.exists(), "the profile was never written"
+    body = profile.read_text()
+    assert "added by kcgx setup.sh" in body, body
+    assert ".local/bin" in body, body
+
+
+def test_declining_the_profile_edit_leaves_it_alone(tmp_path):
+    """Answering no has to mean no, and the run must still finish: an
+    un-edited PATH costs you the picker, not the cockpit.
+    """
+    path_dir = complete_env(tmp_path)
+    env = setup_env(tmp_path, path_dir, SHELL="/bin/zsh")
+    # Everything is already installed here, so steps 2 and 3 ask nothing.
+    # The four prompts that remain, in order: sync (4), the profile edit
+    # (5), the download (6), the radar config (7). Answered explicitly
+    # rather than with KCGX_SETUP_YES, which would take the default on the
+    # one prompt this test is about.
+    result = subprocess.run(
+        [str(SETUP)], input="y\nn\ny\ny\n",
+        env=env, capture_output=True, text=True, timeout=120,
+    )
+    combined = result.stdout + result.stderr
+    assert "Append it to" in combined, "never offered the edit"
+    assert not profile_of(tmp_path).exists(), "edited the profile anyway"
+    assert "Not appended" in combined, combined
+
+
+def test_the_profile_edit_is_not_repeated(tmp_path):
+    """The second run is the one you do when you think something went
+    wrong, and two export lines is how a PATH ends up with duplicates
+    nobody can account for.
+    """
+    path_dir = complete_env(tmp_path)
+    first = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh")
+    assert first.returncode == 0
+    after_first = profile_of(tmp_path).read_text()
+    second = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh")
+    assert second.returncode == 0
+    assert profile_of(tmp_path).read_text() == after_first, "appended twice"
+
+
+def test_an_existing_profile_is_backed_up_before_it_is_touched(tmp_path):
+    profile = profile_of(tmp_path)
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text("alias ll='ls -l'\n")
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+    )
+    assert result.returncode == 0
+    backup = profile.with_suffix(profile.suffix + ".kcgx-backup")
+    assert backup.exists(), "no backup was taken"
+    assert backup.read_text() == "alias ll='ls -l'\n", "backup is not the original"
+    assert "alias ll='ls -l'" in profile.read_text(), "clobbered what was there"
+
+
+def test_fish_gets_fish_syntax(tmp_path):
+    """`export PATH=...` is a syntax error in fish, so a profile edit that
+    ignored the shell would break the login it was meant to fix.
+    """
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/usr/local/bin/fish",
+    )
+    assert result.returncode == 0
+    profile = tmp_path / "home" / ".config" / "fish" / "config.fish"
+    assert profile.exists(), "fish config was never written"
+    body = profile.read_text()
+    assert "fish_add_path" in body, body
+    assert "export PATH=" not in body, body
+
+
+def test_an_unknown_shell_is_told_rather_than_guessed_at(tmp_path):
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/ksh",
+    )
+    assert result.returncode == 0
+    combined = result.stdout + result.stderr
+    assert "no profile setup.sh knows how to" in combined, combined
+    assert not profile_of(tmp_path).exists()
+    assert not profile_of(tmp_path, ".profile").exists()
+
+
+# ---------------------------------------------------------------------------
+# Step 8, which is the whole "it works when I am done" claim
+
+def test_verify_runs_the_binary_rather_than_stat_ing_it(tmp_path):
+    """An adsb-tui built for another platform is present, executable, and
+    cannot run. Every file-based check calls that installed. Running
+    `adsb-tui --help` is the only one that does not, and it is the check
+    that would have caught the macos-on-linux download.
+    """
+    payload = tmp_path / "broken"
+    payload.mkdir()
+    binary = payload / "adsb-tui"
+    binary.write_text("#!/bin/sh\nexit 1\n")   # stands in for "wrong ELF"
+    binary.chmod(0o755)
+    tarball = tmp_path / "broken.tar.gz"
+    subprocess.run(
+        ["tar", "czf", str(tarball), "-C", str(payload), "adsb-tui"],
+        check=True, timeout=30,
+    )
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+        ADSB_TARBALL=str(tarball),
+    )
+    combined = result.stdout + result.stderr
+    installed = tmp_path / "home" / ".local" / "bin" / "adsb-tui"
+    assert installed.exists(), "the archive did unpack; that is the point"
+    assert result.returncode != 0, "a binary that cannot run was called fine"
+    assert "adsb-tui" in combined and "FAIL" in combined
+    assert "Setup complete" not in combined
+
+
+def test_verify_catches_dependencies_that_will_not_import(tmp_path):
+    """uv sync exiting 0 is not the same claim as `import sounddevice`
+    working -- PortAudio is a system library the sync knows nothing about.
+    """
+    uv = """#!/bin/sh
+case "$*" in
+    *"import numpy"*) exit 1 ;;
+esac
+echo 2
+exit 0
+"""
+    path_dir = complete_env(tmp_path, uv=uv)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "python deps" in combined and "FAIL" in combined
+    assert "import sounddevice" in combined, "no way to reproduce it by hand"
+
+
+def test_verify_warns_about_a_missing_audio_device_without_blocking(tmp_path):
+    """Headless boxes, containers and unplugged docks are real, and not
+    something setup can fix. The radar and the meters still work.
+    """
+    uv = """#!/bin/sh
+case "$*" in
+    *max_output_channels*) echo 0; exit 0 ;;
+esac
+exit 0
+"""
+    path_dir = complete_env(tmp_path, uv=uv)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, "a missing speaker is not a failed install"
+    assert "audio output" in combined and "warn" in combined
+    assert "Setup complete" in combined
+
+
+def test_verify_alone_changes_nothing(tmp_path):
+    path_dir = complete_env(tmp_path)
+    result = run_setup(tmp_path, path_dir, "--verify", SHELL="/bin/zsh")
+    home = tmp_path / "home"
+    assert "Checking it works" in result.stdout
+    assert not (home / ".local" / "bin" / "kcgx").exists()
+    assert not (home / ".zshrc").exists()
+    assert not (home / ".config" / "ads-b-tui" / "adsb-tui.toml").exists()
+
+
+# ---------------------------------------------------------------------------
+
+def test_every_step_that_changes_the_machine_asks_first(tmp_path):
+    """The contract, stated as a test: nothing significant happens without
+    a question. Driven by declining the very first prompt and checking that
+    the machine is untouched -- a step that acted before asking would leave
+    its evidence behind regardless of the answer.
+    """
+    log = tmp_path / "brew.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "curl"),   # ffmpeg and tmux missing
+        scripts={"brew": BREW_RECORDER, "curl": CURL_SERVING_ADSB},
+    )
+    result = subprocess.run(
+        [str(SETUP)], input="n\n",
+        env=setup_env(tmp_path, path_dir, BREW_LOG=str(log), SHELL="/bin/zsh"),
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode != 0
+    home = tmp_path / "home"
+    assert not log.exists(), "installed before asking"
+    assert not (home / ".local" / "bin" / "kcgx").exists(), "linked before asking"
+    assert not (home / ".local" / "bin" / "adsb-tui").exists(), "downloaded before asking"
+    assert not (home / ".zshrc").exists(), "edited the profile before asking"
+    assert not (home / ".config" / "ads-b-tui").exists(), "wrote config before asking"
+
+
+def test_the_steps_are_numbered_and_counted(tmp_path):
+    """"Poking around to figure out what it wants" was the original
+    complaint. A run that says which of how many steps it is on answers
+    that continuously rather than once at the top.
+    """
+    path_dir = complete_env(tmp_path)
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh")
+    assert result.returncode == 0
+    for n in range(1, 9):
+        assert f"Step {n}/8" in result.stdout, f"step {n} never announced"
+
+
+def test_the_radar_config_follows_xdg_config_home(tmp_path):
+    """adsb-tui resolves its own config under $XDG_CONFIG_HOME and says so
+    in its --help. Writing ~/.config unconditionally put the file where it
+    would never be read, and setup reported success either way.
+    """
+    xdg = tmp_path / "xdg"
+    path_dir = complete_env(tmp_path)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+        XDG_CONFIG_HOME=str(xdg),
+    )
+    assert result.returncode == 0
+    assert (xdg / "ads-b-tui" / "adsb-tui.toml").exists(), "not written under XDG"
+    assert not (tmp_path / "home" / ".config" / "ads-b-tui").exists()

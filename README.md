@@ -34,10 +34,15 @@ cd kcgx
 ./setup.sh           # install the missing pieces, then open the cockpit
 ```
 
-That is the whole install. Start with `--check` if you want to know what
-you are in for: it prints the table below filled in for your machine —
-what is present, what is missing, what is too old — with the command that
-installs each missing piece, and touches nothing.
+That is the whole install, on **macOS or Linux**. `setup.sh` works through
+eight steps, asks before each one that changes anything, and finishes by
+running every moving part to prove the cockpit will open. It is idempotent,
+so the second run — the one you do when you think something went wrong —
+ends where the first did.
+
+Start with `--check` if you want to know what you are in for: it prints the
+table below filled in for your machine, with the command that installs each
+missing piece, and touches nothing.
 
 ### What it needs
 
@@ -46,12 +51,25 @@ installs each missing piece, and touches nothing.
 | [`uv`](https://docs.astral.sh/uv/) | runs everything, and supplies Python 3.14 itself | yes |
 | [`ffmpeg`](https://ffmpeg.org/) | decodes each feed to PCM | yes |
 | [`tmux`](https://github.com/tmux/tmux) **3.1 or newer** | `kcgx` builds the pane layout with it | for the cockpit |
-| [`adsb-tui`](https://github.com/j4v3l/ADS-B_TUI) | the radar pane | optional |
+| **PortAudio** | what `sounddevice` plays through | on Linux |
+| [`adsb-tui`](https://github.com/j4v3l/ADS-B_TUI) | the radar pane | yes |
 
-Only `squelch` needs `ffmpeg`; only the `kcgx` launcher needs `tmux`. You
-can run the audio pane on its own with neither `tmux` nor `adsb-tui`. The
-cockpit runs without `adsb-tui` too — the radar pane just says it is
-missing instead of showing traffic.
+`setup.sh` installs all of them: Homebrew on macOS, `apt`/`dnf`/`pacman` on
+Linux, and the published `adsb-tui` release from GitHub. It never installs a
+package manager — if there is none it stops and prints the packages instead.
+
+**PortAudio is the one that bites on Linux.** The `sounddevice` wheel bundles
+its own copy on macOS and ships none on Linux, so without `libportaudio2`
+(or `portaudio`, depending on the distro) `import sounddevice` raises
+`OSError: PortAudio library not found` and the audio pane never draws. That
+is a system library `uv sync` knows nothing about, which is why it is a step
+of its own rather than a line in `pyproject.toml`.
+
+**`adsb-tui` is required**, and its licence is a custom **non-commercial**
+one, not OSI-approved — `setup.sh` says so before downloading and asks. It
+publishes builds for `macos-arm64`, `macos-x64` and `linux-x64`; on anything
+else (ARM Linux, Windows) setup stops rather than installing a binary that
+cannot run. Nothing is ever built from source and `cargo` is never invoked.
 
 **There is no Python to install.** This is a Python project, but `uv`
 supplies the 3.14 it requires: no system Python is read, no virtualenv is
@@ -61,48 +79,67 @@ into `.venv/` here in the repo. See [A note on `python`](#a-note-on-python)
 for what that means if you have pyenv, and for the one place a bare
 `python` will surprise you.
 
-`setup.sh` installs the first three with **Homebrew**, so it is written for
-macOS. On anything else the table is still the list — get them however your
-system gets them, then follow [Doing it by hand](#doing-it-by-hand).
+### The eight steps
 
-### What `setup.sh` does
+| | Step | Asks before |
+|---|---|---|
+| 1 | What you have | — |
+| 2 | System packages — `ffmpeg`, `tmux`, PortAudio | running your package manager |
+| 3 | `uv`, and the Python it supplies | fetching the installer |
+| 4 | Python dependencies (`uv sync`) | downloading anything |
+| 5 | The launcher on your `PATH` | appending to your shell profile |
+| 6 | `adsb-tui` | downloading it, licence named |
+| 7 | Where the radar gets its aircraft | writing its config |
+| 8 | Checking it works | — |
 
-It prints what it found, asks **once** before installing anything, then
-installs the missing prerequisites, syncs the Python dependencies, links
-the launcher onto your `PATH`, fetches the radar pane, writes its config,
-and opens the cockpit.
+```bash
+./setup.sh --check     # step 1 alone, then exit
+./setup.sh --verify    # step 8 alone, against this machine
+./setup.sh --yes       # take every default; for unattended installs
+./setup.sh --help
+```
 
-Running it again is safe: every phase is idempotent, so the second run —
-the one you do when you think something went wrong — ends in the same
-place as the first.
+**Step 8 runs things rather than looking for files.** It executes `ffmpeg`,
+`tmux` and `adsb-tui`, imports `numpy`/`sounddevice`/`textual` through the
+project's own interpreter, starts `squelch`, counts audio output devices,
+and reaches LiveATC and airplanes.live. An install that reports success and
+then opens a broken pane has not succeeded — and running `adsb-tui --help`
+is the only check that catches a binary built for the wrong platform, which
+is present, executable, and unable to run.
 
-Three things it deliberately does not do:
+Anything it cannot fix but you can live without — no audio device, an
+unreachable feed host, a terminal under 100 columns — is a warning and the
+cockpit still opens. Anything that means a dead pane stops the run, with the
+command that fixes it, rather than launching into the failure.
 
-- **It never edits your shell profile.** If `~/.local/bin` is not on your
-  `PATH` it prints the `export` line and leaves applying it to you.
-  (That matters more than it looks — see below.)
-- **It never installs Homebrew.** If `brew` is missing it stops and prints
-  the one-line install command instead of running it.
-- **It never builds `adsb-tui` from source**, and never invokes `cargo`.
+### About your shell profile
 
-A failed `adsb-tui` download is not fatal: you get a cockpit with working
-audio, and a radar pane that says the radar is missing. A missing `uv`,
-`ffmpeg` or `tmux` is fatal, and setup stops with the command that fixes
-it rather than launching into a failure.
-
-### `~/.local/bin` must be on your `PATH`
-
-This is the one step `setup.sh` cannot finish for you, because finishing
-it means editing your shell profile.
+**`setup.sh` will offer to edit it, and will not do so without asking.**
+This reverses a previous decision, so it is worth being explicit: the script
+used to print the `export` line and leave it entirely to you, which meant
+that anyone who did not act on a message six steps up got a working cockpit
+whose airport picker silently did nothing.
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Add that to your shell profile. It is not just so you can type `kcgx`:
-`Ctrl-b a` (the airport picker) is bound to `display-popup -E "kcgx go"`,
-which resolves `kcgx` by name through the tmux server's own environment.
-Without it the cockpit opens fine and the picker silently does nothing.
+Step 5 detects your shell (`zsh`, `bash`, `fish` — `fish` gets
+`fish_add_path` instead), shows you the line, names the file, and asks. If
+you say yes it backs the file up to `<profile>.kcgx-backup` first and marks
+what it added; a second run recognises the marker and does not append again.
+If you say no it says so and carries on — the cockpit still opens, and the
+picker is what you lose. An unrecognised shell is told, not guessed at.
+
+Note that `--yes` takes this default along with all the others.
+
+### Why the `PATH` matters more than it looks
+
+It is not just so you can type `kcgx`. `Ctrl-b a` (the airport picker) is
+bound to `display-popup -E "kcgx go"`, which resolves `kcgx` by name through
+the tmux server's own environment. Without it the cockpit opens fine and the
+picker silently does nothing, which is the least debuggable way for this to
+be broken.
 
 If a tmux server is already running, it captured its environment when it
 started — restart it (`kcgx stop`, or `tmux kill-server`) before
@@ -110,20 +147,34 @@ started — restart it (`kcgx stop`, or `tmux kill-server`) before
 
 ### Doing it by hand
 
-Everything `setup.sh` does, as the individual steps — for anyone not on
-macOS, or who would rather run them themselves. Nothing here is required
-if you ran the script.
+Everything `setup.sh` does, as the individual steps — for anyone who would
+rather run them, or whose platform it stops on. Nothing here is required if
+you ran the script.
 
 **Prerequisites.**
 
 ```bash
+# macOS
 brew install ffmpeg tmux
+
+# Debian/Ubuntu — libportaudio2 is not optional, see above
+sudo apt-get install ffmpeg tmux libportaudio2
+
+# Fedora (ffmpeg comes from RPM Fusion, not Fedora itself)
+sudo dnf install ffmpeg tmux portaudio
+
+# Arch
+sudo pacman -S --needed ffmpeg tmux portaudio
+```
+
+```bash
 curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh   # if you don't have uv
 ```
 
 `INSTALLER_NO_MODIFY_PATH=1` is what stops that installer appending
 `. "$HOME/.local/bin/env"` to `~/.zshrc`, `~/.bash_profile` *and*
-`~/.profile`. Drop it if you would rather it managed your `PATH` for you.
+`~/.profile` without asking. Drop it if you would rather it managed your
+`PATH` for you.
 
 **The project.**
 
@@ -145,31 +196,34 @@ ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
 
 Then put `~/.local/bin` on your `PATH`, as above.
 
-**The radar pane.** `kcgx` opens `adsb-tui` in the left pane. Without it
-the cockpit still runs — you get the audio and status panes, and a left
-pane that says the radar is missing and how to add it. Skip this step and
-come back to it later if you want; `Ctrl-b r` fills the pane in without a
-restart.
-
-It comes from [`j4v3l/ADS-B_TUI`](https://github.com/j4v3l/ADS-B_TUI).
-Note its licence is a custom **non-commercial** one, not OSI-approved.
+**The radar pane.** `kcgx` opens `adsb-tui` in the left pane. It comes from
+[`j4v3l/ADS-B_TUI`](https://github.com/j4v3l/ADS-B_TUI); note its licence is
+a custom **non-commercial** one, not OSI-approved.
 
 ```bash
-# swap macos-arm64 for macos-x64 or linux-x64 as appropriate
+# macos-arm64, macos-x64, or linux-x64 — those are the three published
 curl -L https://github.com/j4v3l/ADS-B_TUI/releases/download/v0.2.1/adsb-tui-macos-arm64.tar.gz \
   | tar xzf - -C ~/.local/bin
 ```
 
 Use the release rather than building from source. `cargo build` works, but
 it pulls in Rust, LLVM and their dependencies — about **4 GB** of build
-toolchain for a 3 MB binary that upstream already publishes.
+toolchain for a 3 MB binary that upstream already publishes. On a platform
+with no published build (ARM Linux, Windows) that is your only route, and it
+is why `setup.sh` stops there rather than guessing.
+
+Without `adsb-tui` on your `PATH` the cockpit still opens: the left pane
+says the radar is missing and how to add it, and `Ctrl-b r` fills it in once
+you have. That is a safety net for a hand-built install, not a supported
+configuration — `setup.sh` treats a radar it cannot produce as a failure.
 
 **It also needs somewhere to get aircraft from.** Its default is
 `http://adsb.local/data/aircraft.json` — a receiver on your own network.
 Without one, point it at a public aggregator instead:
 
 ```toml
-# ~/.config/ads-b-tui/adsb-tui.toml
+# $XDG_CONFIG_HOME/ads-b-tui/adsb-tui.toml, i.e. ~/.config/... unless you
+# have set XDG_CONFIG_HOME. adsb-tui resolves it under XDG and nowhere else.
 url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
 refresh_secs = 2
 ```
@@ -183,6 +237,9 @@ request per second, and `api.adsb.lol` returned `429` at this rate where
 
 `setup.sh` writes exactly that file, and only if it does not already
 exist — `adsb-tui` rewrites its own config on exit, so it is yours.
+
+**Checking it.** `./setup.sh --verify` runs step 8 against whatever you have
+built by hand, and changes nothing.
 
 ### A note on `python`
 
@@ -387,7 +444,7 @@ dataset update can't leave a stale one behind) and the cockpit reopens
 there. With nothing ever picked, it falls back to `icao` in
 `squelch.toml`, then to `KPDX`.
 
-Neither `squelch.toml` nor `~/.config/ads-b-tui/adsb-tui.toml` is
+Neither `squelch.toml` nor `adsb-tui.toml` is
 modified — adsb-tui rewrites its own config with defaults on exit, so an
 edit made to it by hand would not survive the next launch. Instead
 adsb-tui is retargeted with `--site-lat`/`--site-lon`, which also moves
@@ -408,6 +465,9 @@ cockpit down — see [Getting out](#getting-out).
 it, and says how to leave, rather than leaving the shell's `command not
 found` under a dead-pane banner next to two panes that work. Install it
 whenever you like and press `Ctrl-b` `r` there; nothing needs restarting.
+`setup.sh` will not leave you in this state — it treats a radar it cannot
+produce as a failed install — so this is the safety net for a cockpit built
+by hand, or one whose binary went missing afterwards.
 
 `kcgx` refuses to start below 100 columns, where there isn't room for both
 a readable traffic table and a 48-column pane.
