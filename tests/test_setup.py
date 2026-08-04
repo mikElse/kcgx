@@ -155,7 +155,9 @@ def test_check_reports_every_dependency(tmp_path):
 def test_check_changes_nothing(tmp_path):
     """Preflight is a probe. It must not create the symlink or the config."""
     path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
-    run_setup(tmp_path, path_dir, "--check")
+    result = run_setup(tmp_path, path_dir, "--check")
+    assert result.returncode == 0, "preflight did not run to completion"
+    assert "adsb-tui" in result.stdout, "preflight did not print its table"
     home = tmp_path / "home"
     assert not (home / ".local" / "bin" / "kcgx").exists()
     assert not (home / ".config" / "ads-b-tui" / "adsb-tui.toml").exists()
@@ -200,6 +202,12 @@ def test_no_pyenv_no_advisory(tmp_path):
     """The guard must be capable of staying quiet, or it says nothing."""
     path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
     result = run_setup(tmp_path, path_dir, "--check")
+    # --check is only `preflight; exit 0`, so returncode == 0 proves preflight
+    # ran start to finish (a die anywhere inside it, including check_pyenv
+    # itself, would exit nonzero under set -e) -- not just that it never got
+    # far enough to print "pyenv".
+    assert result.returncode == 0, "preflight did not run to completion"
+    assert "adsb-tui" in result.stdout, "preflight did not print its table"
     assert "pyenv" not in result.stdout
 
 
@@ -275,7 +283,10 @@ def test_nothing_is_installed_when_everything_is_present(tmp_path):
         tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
         scripts={"brew": BREW_RECORDER},
     )
-    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(log))
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(log))
+    assert result.returncode == 0
+    link = tmp_path / "home" / ".local" / "bin" / "kcgx"
+    assert link.is_symlink(), "setup did not run to completion"
     assert not log.exists(), "brew ran with nothing to install"
 
 
@@ -445,4 +456,6 @@ def test_a_path_with_the_prefix_does_not_warn(tmp_path):
         tmp_path, path_dir, KCGX_SETUP_YES="1",
         PATH=f"{prefix}:{path_dir}",
     )
+    assert result.returncode == 0
+    assert (prefix / "kcgx").is_symlink(), "link_launcher did not run to completion"
     assert "Ctrl-b a" not in result.stdout + result.stderr
