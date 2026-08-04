@@ -315,14 +315,22 @@ echo "$@" >> "$CURL_LOG"
 echo ":"
 """
 
+CURL_FOR_UV_INSTALL = """#!/bin/sh
+echo "$@" >> "$CURL_LOG"
+# Create a dummy uv binary so sync_project can succeed
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/bin/uv"
+chmod +x "$HOME/.local/bin/uv"
+"""
+
 
 def test_missing_uv_is_installed_via_astral_curl(tmp_path):
     """The uv-install branch (`curl ... | sh`) is a separate code path from
     the brew branch and every other test always stubs `uv` into `tools`,
     so without this test the branch never runs at all.
 
-    `curl` is stubbed to record the URL it was asked for and to print a
-    harmless no-op (`:`) for the piped `sh` to execute -- the real
+    `curl` is stubbed to record the URL it was asked for and to simulate
+    installing uv by creating a dummy binary in $HOME/.local/bin -- the real
     installer must never run and the network must never be reached. `sh`
     itself is left alone: it is in BASE_TOOLS and other things depend on
     it.
@@ -330,9 +338,41 @@ def test_missing_uv_is_installed_via_astral_curl(tmp_path):
     log = tmp_path / "curl.log"
     path_dir = stub_path(
         tmp_path, tools=("ffmpeg", "tmux"),
-        scripts={"curl": CURL_RECORDER},
+        scripts={"curl": CURL_FOR_UV_INSTALL},
     )
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(log))
     assert result.returncode == 0
     assert log.exists(), "curl was never called"
     assert "https://astral.sh/uv/install.sh" in log.read_text()
+
+
+UV_RECORDER = """#!/bin/sh
+echo "$@" >> "$UV_LOG"
+exit 0
+"""
+
+UV_FAILS = """#!/bin/sh
+echo "resolution impossible" >&2
+exit 1
+"""
+
+
+def test_uv_sync_runs_in_the_repo(tmp_path):
+    log = tmp_path / "uv.log"
+    path_dir = stub_path(
+        tmp_path, tools=("ffmpeg", "tmux", "curl"),
+        scripts={"uv": UV_RECORDER},
+    )
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", UV_LOG=str(log))
+    assert "sync" in log.read_text()
+
+
+def test_a_failing_uv_sync_is_fatal(tmp_path):
+    """Without dependencies there is no cockpit; carrying on would lie."""
+    path_dir = stub_path(
+        tmp_path, tools=("ffmpeg", "tmux", "curl"),
+        scripts={"uv": UV_FAILS},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    assert result.returncode != 0
+    assert "uv sync" in result.stdout + result.stderr

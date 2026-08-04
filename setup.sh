@@ -154,6 +154,11 @@ See https://brew.sh"
     fi
 }
 
+sync_project() {
+    say "Installing Python dependencies (uv provides Python 3.14 itself)..."
+    uv sync --project "$REPO" || die "uv sync failed; nothing was wired up."
+}
+
 if [ "${1:-}" = "--check" ]; then
     preflight
     exit 0
@@ -161,3 +166,4 @@ fi
 
 preflight
 install_prerequisites
+sync_project
