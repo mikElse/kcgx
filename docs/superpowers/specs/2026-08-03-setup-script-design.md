@@ -80,6 +80,38 @@ Its licence is a custom **"ADS-B TUI Non-Commercial License"**, not
 OSI-approved. Setup therefore downloads it from upstream and never
 redistributes it, and prints the restriction where the user will see it.
 
+**Setup must not need a Rust toolchain.** The development machine had
+`rust`, `llvm`, `z3`, `libgit2`, `libssh2`, `llhttp`, `pkgconf` and
+Homebrew's `python@3.14` installed on 2026-08-01 — **4,103 MB** of build
+toolchain, present for exactly one reason: `adsb-tui` was compiled from
+source because the prebuilt releases had not been found yet. (That is also
+why the binary there is 10 MB rather than the release's 3 MB — an
+unstripped local build.) `brew uses --installed python@3.14` reports
+`llvm rust speedtest-cli`, confirming Homebrew's Python is not a kcgx
+dependency at all; it arrived underneath Rust.
+
+Downloading the release costs 3 MB and no toolchain. Nothing in setup may
+invoke `cargo`.
+
+**`.python-version` stays, and is not the pyenv trap it looks like.**
+Inside the repo, `python --version` fails on any machine where pyenv's
+shims precede `uv` on `PATH`:
+
+    pyenv: version `3.14' is not installed (set by .../.python-version)
+
+The obvious fix — delete the file, since `requires-python = ">=3.14"` in
+`pyproject.toml` already governs resolution — was tested and does not
+work. With the file removed, `uv sync` still resolves 3.14.6 correctly,
+but bare `python` fails anyway with `pyenv: python: command not found`,
+because pyenv's global is `system` and macOS ships no `python` there. The
+file is redundant for uv and irrelevant to the failure; removing it only
+replaces an error naming the offending file with one that names nothing.
+
+So the trap is real but belongs to the user's `PATH`, not to the repo.
+Setup detects the condition and says so, rather than pretending to fix
+it. Every documented command already goes through `uv run`, which ignores
+pyenv entirely.
+
 **The ambience stems are out of scope.** `tools/fetch_ambience.py` exists,
 but nothing under `src/` reads `assets/` — the bed is still only
 `AMBIENCE-PLAN.md`. Fetching 3.4 MB of audio that no code loads would be
@@ -91,11 +123,20 @@ adds its own step.
 Each prints what it is about to do before doing it.
 
 **1. Preflight.** Establish the platform (`uname -s`, `uname -m`) and probe
-for `uv`, `ffmpeg`, `tmux`, `curl`, `adsb-tui`, and whether
-`~/.local/bin` is on `PATH`. Print the full table of found/missing
-*before* changing anything, so the whole picture is visible up front
-rather than revealed one failure at a time. Nothing is modified in this
-phase.
+for `uv`, `ffmpeg`, `tmux` (**and its version — `bin/kcgx` refuses below
+3.1**), `curl`, `adsb-tui`, and whether `~/.local/bin` is on `PATH`. Print
+the full table of found/missing *before* changing anything, so the whole
+picture is visible up front rather than revealed one failure at a time.
+Nothing is modified in this phase.
+
+Two advisory checks that are not pass/fail:
+
+- **pyenv shims ahead of `uv`.** If `command -v python` resolves inside a
+  `.pyenv/shims` directory, note that bare `python` will not work in this
+  repo and that every documented command uses `uv run`. This is a
+  property of the user's `PATH`, not something setup should change.
+- **Terminal width.** `bin/kcgx` refuses below 100 columns. Better to say
+  so during setup than at the moment the cockpit was supposed to open.
 
 **2. Prerequisites, after one prompt.** A single `[y/N]` listing exactly
 what will be installed. `ffmpeg` and `tmux` via Homebrew; `uv` via its
@@ -123,11 +164,22 @@ Python 3.14 itself, so the interpreter is not a separate step.
   it exists and points elsewhere, stop and say so rather than overwrite
   it.
 
-  If `~/.local/bin` is not on `PATH`, that is a warning, not a failure:
-  the script prints the `export PATH=...` line to add to the shell profile
-  and carries on. It does not edit the profile itself — phase 5 launches
-  via the absolute path, so the cockpit opens either way, and the friend
-  only needs the `PATH` entry to type `kcgx` on later runs.
+  **`kcgx` being resolvable by name is load-bearing, not a convenience.**
+  `kcgx.tmux.conf` binds `Ctrl-b a` to
+  `display-popup -E "kcgx go"` — resolved by *name*, through a shell,
+  against the **tmux server's** environment. Without `~/.local/bin` on
+  `PATH`, the cockpit opens correctly and the airport picker then fails
+  silently, which is worse than not launching at all.
+
+  Worse, the tmux server captures its environment when it *starts*. Adding
+  the directory to a shell profile after a server is already running does
+  not reach the popup until the server is restarted.
+
+  So this is a warning with teeth: setup prints the `export PATH=...` line
+  and explicitly says `Ctrl-b a` will not work until it is applied and any
+  running tmux server is restarted. It still does not edit the profile
+  itself — silently rewriting someone's shell config is beyond what a
+  setup script for a hobby project should do.
 - Install `adsb-tui` into `~/.local/bin` from the v0.2.1 release matching
   the detected architecture, after printing the licence notice. Skipped
   entirely if it is already on `PATH`.
@@ -184,8 +236,16 @@ Everything with an external effect goes through a named shell function —
   elsewhere being fatal;
 - a failed `adsb-tui` download still reaching the launch phase;
 - a missing `tmux` being stopped by the launch gate;
+- a `tmux` older than 3.1 being stopped by the launch gate;
 - declining the install prompt with everything already present still
-  launching.
+  launching;
+- a `PATH` without `~/.local/bin` producing the `Ctrl-b a` warning, and
+  one with it producing no warning;
+- a `PATH` whose `python` resolves into `.pyenv/shims` producing the
+  advisory, and one that does not staying silent;
+- setup never invoking `cargo` — asserted directly, because building
+  `adsb-tui` from source is what dragged 4 GB of toolchain onto the
+  development machine and the release download exists to prevent it.
 
 No test runs Homebrew, downloads a release, or opens a socket.
 
