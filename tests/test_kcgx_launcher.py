@@ -302,6 +302,92 @@ def test_session_config_keeps_dead_panes_visible(cockpit):
     assert "on" in result.stdout, result.stdout
 
 
+def test_prefix_q_can_shut_the_cockpit_down_from_inside_it(cockpit):
+    """The only exit that survives everything in the session being dead.
+
+    squelch's own `q` needs squelch alive, and the picker's ^q needs both the
+    popup to open and `kcgx` to be on the tmux server's PATH -- which is the
+    one step setup.sh deliberately leaves to the user. Without a binding tmux
+    runs itself, a cockpit whose panes had crashed had no way out that could
+    be found from inside it.
+    """
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+
+    bound = [
+        line
+        for line in tmux("list-keys", "-T", "prefix").stdout.splitlines()
+        if re.search(r"-T\s+prefix\s+q\s", line)
+    ]
+    assert len(bound) == 1, f"expected exactly one prefix+q binding, got {bound}"
+    assert "kill-session" in bound[0], bound[0]
+    # Asked before doing it: this is one keypress away from losing the
+    # session, and `q` is a key tmux itself binds to something harmless.
+    assert "confirm-before" in bound[0], bound[0]
+
+    # And it really ends this session rather than merely being spelled right.
+    tmux("kill-session", "-t", f"={session}")
+    assert tmux("has-session", "-t", f"={session}").returncode != 0
+
+
+def test_a_missing_radar_command_gets_a_pane_that_explains_itself(cockpit):
+    """Regression: adsb-tui is optional, and its absence surfaced as the
+    shell's `adsb-tui: command not found` under a dead-pane banner -- which
+    is indistinguishable from a broken cockpit, and says nothing about where
+    the binary comes from.
+    """
+    run, tmux, session = cockpit
+    assert run(KCGX_ADSB_CMD="kcgx-radar-that-is-not-installed").returncode == 0
+
+    cmd = pane_command(tmux, session, "adsb")
+    assert "kcgx-no-radar" in cmd, cmd
+    # A message pane has no site to be pointed at, and would report the flags
+    # as unknown arguments if it were given them.
+    assert "--site-lat" not in cmd, cmd
+
+
+def test_the_no_radar_pane_names_the_fix_and_the_way_out(cockpit):
+    """The pane's whole reason to exist is what it says, so read it.
+
+    Captured from the running pane rather than from the file: a stand-in that
+    is never actually reached, or that dies before drawing, would pass any
+    assertion made against the script's own text.
+    """
+    run, tmux, session = cockpit
+    assert run(KCGX_ADSB_CMD="kcgx-radar-that-is-not-installed").returncode == 0
+    pane = role_field(tmux, session, "pane_id")["adsb"]
+
+    text = ""
+    for _ in range(60):
+        text = tmux("capture-pane", "-p", "-t", pane).stdout
+        if "setup.sh" in text:
+            break
+        time.sleep(0.05)
+
+    assert "kcgx-radar-that-is-not-installed is not installed" in text, text
+    assert "./setup.sh" in text, text
+    assert "Ctrl-b r" in text, text
+    assert "Ctrl-b q" in text, text
+
+
+def test_the_no_radar_pane_does_not_take_the_session_down_with_it(cockpit):
+    """It blocks instead of exiting, and that is load-bearing.
+
+    At `new-session` the radar pane is the session's only pane, and
+    kcgx.tmux.conf -- remain-on-exit included -- is sourced immediately
+    *after*. A stand-in that printed and exited would race that, and losing
+    the race takes the whole cockpit with it.
+    """
+    run, tmux, session = cockpit
+    assert run(KCGX_ADSB_CMD="kcgx-radar-that-is-not-installed").returncode == 0
+
+    time.sleep(0.5)
+    assert tmux("has-session", "-t", f"={session}").returncode == 0
+    assert len(panes(tmux, session, "#{pane_index}")) == 3
+    dead = role_field(tmux, session, "pane_dead")["adsb"]
+    assert dead == "0", f"the stand-in exited (pane_dead={dead})"
+
+
 def test_says_there_is_no_terminal_rather_than_inventing_a_width(cockpit):
     """Regression: `tput cols` does not fail without a tty — it silently
     returns terminfo's default (80 for xterm-256color), which looks like a
