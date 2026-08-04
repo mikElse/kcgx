@@ -234,15 +234,92 @@ tmux split-window -h -l 48 'uv run squelch --feed kpdx3_twr'
 
 ## Install
 
-Requires Python 3.14+ and [`ffmpeg`](https://ffmpeg.org/) on your `PATH`
-(used to decode the stream to PCM).
+### What it needs
+
+| Tool | Why | Required? |
+|---|---|---|
+| [`uv`](https://docs.astral.sh/uv/) | runs everything, and supplies Python 3.14 itself | yes |
+| [`ffmpeg`](https://ffmpeg.org/) | decodes each feed to PCM | yes |
+| [`tmux`](https://github.com/tmux/tmux) | `kcgx` builds the pane layout with it | for the cockpit |
+| `adsb-tui` | the radar pane | optional |
+
+Only `squelch` needs `ffmpeg`; only the `kcgx` launcher needs `tmux`. You
+can run the audio pane on its own with neither `tmux` nor `adsb-tui`.
 
 ```bash
-cd squelch
+brew install ffmpeg tmux
+curl -LsSf https://astral.sh/uv/install.sh | sh   # if you don't have uv
+```
+
+### The project
+
+```bash
+git clone https://github.com/mikElse/kcgx.git
+cd kcgx
 uv sync
 ```
 
+That is enough to run `squelch`. The cockpit needs two more steps.
+
+### Wiring the launcher
+
+`bin/kcgx` resolves its own repo root through symlinks, so link it onto
+your `PATH` rather than copying it:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
+```
+
+If `~/.local/bin` isn't on your `PATH`, add it to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### The radar pane
+
+`kcgx` opens `adsb-tui` in the left pane. Without it the cockpit still
+runs — you get the audio and status panes and a dead pane where the radar
+would be.
+
+It comes from [`j4v3l/ADS-B_TUI`](https://github.com/j4v3l/ADS-B_TUI).
+Note its licence is a custom **non-commercial** one, not OSI-approved.
+
+```bash
+# swap macos-arm64 for macos-x64 or linux-x64 as appropriate
+curl -L https://github.com/j4v3l/ADS-B_TUI/releases/download/v0.2.1/adsb-tui-macos-arm64.tar.gz \
+  | tar xzf - -C ~/.local/bin
+```
+
+**It also needs somewhere to get aircraft from.** Its default is
+`http://adsb.local/data/aircraft.json` — a receiver on your own network.
+Without one, point it at a public aggregator instead:
+
+```toml
+# ~/.config/ads-b-tui/adsb-tui.toml
+url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
+refresh_secs = 2
+```
+
+No API key, no receiver hardware. `kcgx` fills in `{lat}`/`{lon}` per
+launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
+
+Two seconds is deliberate: the free aggregators rate-limit to roughly one
+request per second, and `api.adsb.lol` returned `429` at this rate where
+`api.airplanes.live` did not.
+
 ## Running it
+
+The cockpit:
+
+```bash
+kcgx          # open it, or reattach to a running one from anywhere
+kcgx go       # re-pick the airport in a running cockpit
+kcgx stop     # shut this cockpit down
+```
+
+The audio pane on its own, without `tmux` or the radar:
 
 ```bash
 uv run squelch                       # uses the config file / defaults
