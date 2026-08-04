@@ -24,7 +24,8 @@ SETUP = REPO / "setup.sh"
 # Every tool setup.sh itself needs in order to run at all.
 BASE_TOOLS = ("bash", "sh", "env", "uname", "grep", "awk", "sed", "head",
               "dirname", "basename", "pwd", "mkdir", "ln", "rm", "cat",
-              "printf", "tr", "sort", "id", "stty", "tar", "chmod")
+              "printf", "tr", "sort", "id", "stty", "tar", "chmod",
+              "readlink")
 
 # `uv` is ALWAYS a stub, never the real binary, and asking for "uv" in
 # `tools` gets you this rather than a symlink.
@@ -387,3 +388,61 @@ def test_a_failing_uv_sync_is_fatal(tmp_path):
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
     assert result.returncode != 0
     assert "uv sync" in result.stdout + result.stderr
+
+
+def test_the_launcher_is_linked_not_copied(tmp_path):
+    """bin/kcgx resolves its own repo root through the symlink; a copy
+    would resolve REPO to the link's directory and break."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    link = tmp_path / "home" / ".local" / "bin" / "kcgx"
+    assert link.is_symlink(), "must be a symlink"
+    assert link.resolve() == (REPO / "bin" / "kcgx").resolve()
+
+
+def test_relinking_is_a_no_op(tmp_path):
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    second = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    assert second.returncode == 0
+    link = tmp_path / "home" / ".local" / "bin" / "kcgx"
+    assert link.resolve() == (REPO / "bin" / "kcgx").resolve()
+
+
+def test_a_foreign_kcgx_is_never_overwritten(tmp_path):
+    """Someone else's kcgx on PATH is theirs. Stop, do not clobber."""
+    home = tmp_path / "home"
+    prefix = home / ".local" / "bin"
+    prefix.mkdir(parents=True)
+    stranger = tmp_path / "other-kcgx"
+    stranger.write_text("#!/bin/sh\nexit 0\n")
+    stranger.chmod(0o755)
+    (prefix / "kcgx").symlink_to(stranger)
+
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    assert result.returncode != 0
+    assert (prefix / "kcgx").resolve() == stranger.resolve(), "it clobbered it"
+
+
+def test_a_path_without_the_prefix_warns_about_the_picker(tmp_path):
+    """Ctrl-b a is bound to `display-popup -E "kcgx go"`, resolved by name
+    through the tmux server's environment. Without the prefix on PATH the
+    cockpit opens and the picker silently does nothing."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    combined = result.stdout + result.stderr
+    assert "PATH" in combined
+    assert "Ctrl-b a" in combined, "the consequence must be named"
+
+
+def test_a_path_with_the_prefix_does_not_warn(tmp_path):
+    home = tmp_path / "home"
+    prefix = home / ".local" / "bin"
+    prefix.mkdir(parents=True)
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        PATH=f"{prefix}:{path_dir}",
+    )
+    assert "Ctrl-b a" not in result.stdout + result.stderr
