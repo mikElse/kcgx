@@ -105,20 +105,38 @@ BASE_TOOLS = ("bash", "sh", "env", "uname", "grep", "awk", "sed", "head",
               "dirname", "basename", "pwd", "mkdir", "ln", "rm", "cat",
               "printf", "tr", "sort", "id", "stty", "tar", "chmod")
 
+# `uv` is ALWAYS a stub, never the real binary, and asking for "uv" in
+# `tools` gets you this rather than a symlink.
+#
+# setup.sh runs `uv sync --project $REPO`. Symlinking the real uv would make
+# every test that reaches phase 3 write to the actual repo's .venv while
+# HOME points at tmp_path -- so uv would find no cache, re-download the
+# whole 3.14 toolchain per test, and mutate the working tree the suite is
+# running from. Tests never install software or hit the network.
+UV_STUB = """#!/bin/sh
+exit 0
+"""
+
 
 def stub_path(tmp_path, *, tools=(), scripts=None):
     """A directory to use as the entire PATH.
 
     `tools` are symlinked from the real system; `scripts` is a mapping of
-    name -> shell source for fakes. Anything not named is absent, which is
-    how "ffmpeg is missing" is expressed.
+    name -> shell source for fakes and wins over both. Anything not named
+    is absent, which is how "ffmpeg is missing" is expressed.
     """
     d = tmp_path / "stub_bin"
     d.mkdir(exist_ok=True)
     for tool in (*BASE_TOOLS, *tools):
+        if tool == "uv":
+            continue  # never the real one; handled below
         found = shutil.which(tool)
         if found and not (d / tool).exists():
             (d / tool).symlink_to(found)
+    if "uv" in tools and "uv" not in (scripts or {}):
+        p = d / "uv"
+        p.write_text(UV_STUB)
+        p.chmod(0o755)
     for name, body in (scripts or {}).items():
         p = d / name
         p.write_text(body)
@@ -1004,9 +1022,18 @@ def test_setup_never_invokes_cargo(tmp_path):
     assert not log.exists(), "setup fell back to building from source"
 
 
-def test_no_cargo_appears_in_the_script_at_all(tmp_path):
-    """Belt and braces: the test above only covers paths it exercises."""
-    source = SETUP.read_text()
+def test_no_cargo_call_appears_in_the_script(tmp_path):
+    """Belt and braces: the test above only covers paths it exercises.
+
+    Comments are stripped first. The whole point of this constraint is
+    worth writing down in the script, and a naive substring check would
+    turn documenting it into a test failure.
+    """
+    code = [
+        line for line in SETUP.read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    source = "\n".join(code)
     assert "cargo" not in source
     assert "rustc" not in source
 ```
