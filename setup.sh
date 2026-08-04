@@ -13,6 +13,10 @@ set -euo pipefail
 
 REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Set by preflight, read by install_adsb. Declared here so the ordering is
+# explicit rather than a happy accident of which phase runs first.
+ARCH=""
+
 ADSB_VERSION="v0.2.1"
 RELEASE_URL="${KCGX_SETUP_RELEASE_URL:-https://github.com/j4v3l/ADS-B_TUI/releases/download}"
 PREFIX="$HOME/.local/bin"
@@ -47,6 +51,12 @@ tmux_new_enough() {
 
 row() { printf '  %-12s %s\n' "$1" "$2"; }
 
+# On PATH, or already sitting in the directory setup installs into. Both
+# preflight and install_adsb ask this one question, so a second run cannot
+# report "missing (optional)" and then "already installed" in the same
+# breath -- which is exactly what happens when $PREFIX is not on PATH.
+adsb_installed() { have_command adsb-tui || [ -x "$PREFIX/adsb-tui" ]; }
+
 # Advisory only. Both describe the user's environment rather than anything
 # setup installs, so neither changes the exit status.
 
@@ -64,7 +74,7 @@ check_pyenv() {
 }
 
 check_width() {
-    local cols=""
+    local cols="" winsize=""
     if winsize="$(stty size 2>/dev/null </dev/tty)"; then
         cols="${winsize##* }"
     elif [ -n "${COLUMNS:-}" ]; then
@@ -95,7 +105,7 @@ preflight() {
         row tmux "missing"
     fi
     have_command curl     && row curl "found" || row curl "missing"
-    have_command adsb-tui && row adsb-tui "found" || row adsb-tui "missing (optional)"
+    adsb_installed && row adsb-tui "found" || row adsb-tui "missing (optional)"
     check_pyenv
     check_width
     say ""
@@ -149,12 +159,62 @@ See https://brew.sh"
     fi
 
     if ! have_command uv; then
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        # INSTALLER_NO_MODIFY_PATH=1 is load-bearing, not noise: without it
+        # astral's installer appends `. "$HOME/.local/bin/env"` to ~/.zshrc,
+        # ~/.bash_profile AND ~/.profile. Nothing in kcgx may edit a shell
+        # profile -- link_launcher prints the export line and explicitly
+        # leaves applying it to the user, and delegating the same edit to
+        # somebody else's installer three phases earlier would make that
+        # promise a lie. (Verified against the installer source: it reads
+        # UV_NO_MODIFY_PATH first, then INSTALLER_NO_MODIFY_PATH.)
+        curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh
+        # ...which is also why this line exists: the profile is untouched,
+        # so this process has to put the new uv on its own PATH itself.
         PATH="$HOME/.local/bin:$PATH"
     fi
 }
 
+# The dependencies without which there is no cockpit, re-checked rather
+# than trusted from phase 1: the prompt may have been declined, or
+# Homebrew may have failed.
+#
+# `uv-only` narrows it to uv, so phase 3 can stop before `uv sync` reports
+# a sync failure for a machine where uv was never installed at all. The
+# unnarrowed call is the spec's launch gate, immediately before the
+# hand-off. Everything between the two still runs: the wiring phases are
+# worth doing even when the cockpit cannot open yet.
+dependency_gate() {
+    local blocked="" formulae="" remedy=""
+
+    have_command uv || blocked="uv"
+    if [ "${1:-all}" != "uv-only" ]; then
+        have_command ffmpeg || { blocked="$blocked ffmpeg"; formulae="$formulae ffmpeg"; }
+        tmux_new_enough     || { blocked="$blocked tmux(3.1+)"; formulae="$formulae tmux"; }
+    fi
+    blocked="${blocked# }"
+    [ -z "$blocked" ] && return 0
+
+    # tmux(3.1+) is how the missing list reads, not how brew takes it.
+    if [ -n "$formulae" ]; then
+        remedy="$remedy
+  brew install$formulae"
+    fi
+    if ! have_command uv; then
+        remedy="$remedy
+  curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh"
+    fi
+
+    say ""
+    die "still missing: $blocked
+The cockpit cannot open without these. Install them and run this again:$remedy"
+}
+
 sync_project() {
+    # A missing uv is not a sync failure -- it is the reason there can be
+    # no sync. Route it through the same gate as every other fatal
+    # dependency so the user gets the install line, not a message about
+    # dependency resolution.
+    dependency_gate uv-only
     say "Installing Python dependencies (uv provides Python 3.14 itself)..."
     uv sync --project "$REPO" || die "uv sync failed; nothing was wired up."
 }
@@ -208,7 +268,7 @@ Remove it yourself if you want setup to manage it."
 }
 
 install_adsb() {
-    if have_command adsb-tui || [ -x "$PREFIX/adsb-tui" ]; then
+    if adsb_installed; then
         say "adsb-tui already installed."
         return 0
     fi
@@ -228,11 +288,18 @@ install_adsb() {
     if curl -fL "$RELEASE_URL/$ADSB_VERSION/adsb-tui-$ARCH.tar.gz" \
         | tar xzf - -C "$PREFIX" 2>/dev/null; then
         chmod +x "$PREFIX/adsb-tui" 2>/dev/null || true
-        say "Installed $PREFIX/adsb-tui"
+        # A tar that unpacked something other than the binary exits 0 just
+        # like a good one, so "the download worked" is not the same claim
+        # as "adsb-tui is installed". Only make the one that is true.
+        if [ -x "$PREFIX/adsb-tui" ]; then
+            say "Installed $PREFIX/adsb-tui"
+            return 0
+        fi
+        warn "the adsb-tui archive held no usable binary; the radar pane will be empty."
     else
         warn "could not download adsb-tui; the radar pane will be empty."
-        warn "Everything else still works. Re-run setup.sh to try again."
     fi
+    warn "Everything else still works. Re-run setup.sh to try again."
 }
 
 # adsb-tui defaults to http://adsb.local/data/aircraft.json -- a receiver on
@@ -257,10 +324,33 @@ TOML
     say "Wrote $ADSB_CONFIG"
 }
 
-if [ "${1:-}" = "--check" ]; then
-    preflight
-    exit 0
+usage() {
+    say "Usage: ./setup.sh [--check | --help]"
+    say ""
+    say "  (no arguments)  install everything kcgx needs and open the cockpit"
+    say "  --check         print the dependency table and exit, changing nothing"
+    say "  --help, -h      this message"
+}
+
+# An unrecognised argument used to fall through to the full install and an
+# exec into the cockpit -- so a typo, or a flag this script does not have,
+# silently did the most consequential thing it can do.
+if [ "$#" -gt 1 ]; then
+    warn "unexpected argument: $2"
+    usage >&2
+    exit 2
 fi
+
+case "${1:-}" in
+    "") ;;
+    --check)   preflight; exit 0 ;;
+    --help|-h) usage; exit 0 ;;
+    *)
+        warn "unknown argument: $1"
+        usage >&2
+        exit 2
+        ;;
+esac
 
 preflight
 install_prerequisites
@@ -269,22 +359,9 @@ link_launcher
 install_adsb
 write_adsb_config
 
-# Re-checked rather than trusted from phase 1: the prompt may have been
-# declined, or Homebrew may have failed. Launching into a failure the
-# script already knew about would be worse than stopping here.
-launch_gate() {
-    local blocked=""
-    have_command ffmpeg || blocked="$blocked ffmpeg"
-    tmux_new_enough || blocked="$blocked tmux(3.1+)"
-    [ -z "$blocked" ] && return 0
-
-    say ""
-    die "still missing:$blocked
-The cockpit cannot open without these. Install them and run this again:
-  brew install$blocked"
-}
-
-launch_gate
+# The launch gate. Launching into a failure the script already knows
+# about would be worse than stopping here with the command that fixes it.
+dependency_gate
 
 say ""
 say "Setup complete. Opening the cockpit..."

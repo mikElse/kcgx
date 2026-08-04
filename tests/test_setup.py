@@ -202,6 +202,39 @@ def test_check_changes_nothing(tmp_path):
     assert not (home / ".config" / "ads-b-tui" / "adsb-tui.toml").exists()
 
 
+def test_help_explains_itself_and_installs_nothing(tmp_path):
+    """--help used to fall through to the full install and an exec into the
+    cockpit, which is a surprising amount of machine to change in response
+    to asking a question."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, "--help")
+    assert result.returncode == 0
+    assert "--check" in result.stdout, "the other flag is not documented"
+    home = tmp_path / "home"
+    assert not (home / ".local" / "bin" / "kcgx").exists(), "it installed anyway"
+    assert not (home / ".config" / "ads-b-tui" / "adsb-tui.toml").exists()
+
+
+def test_an_unknown_argument_is_refused(tmp_path):
+    """A typo must not be read as consent to install and launch."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, "--chekc")
+    assert result.returncode != 0, "an unrecognised flag exited 0"
+    assert "--chekc" in result.stderr, "the offending argument is not named"
+    assert "Usage" in result.stderr
+    home = tmp_path / "home"
+    assert not (home / ".local" / "bin" / "kcgx").exists(), "it installed anyway"
+
+
+def test_a_stray_extra_argument_is_refused(tmp_path):
+    """`./setup.sh --check please` is not a check, and not an install."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    result = run_setup(tmp_path, path_dir, "--check", "please")
+    assert result.returncode != 0
+    assert "please" in result.stderr
+    assert not (tmp_path / "home" / ".local" / "bin" / "kcgx").exists()
+
+
 def test_a_missing_tool_is_reported_as_missing(tmp_path):
     """ffmpeg absent from PATH — the table must say so, not claim success."""
     path_dir = stub_path(tmp_path, tools=("uv", "tmux", "curl"))
@@ -364,7 +397,12 @@ echo "$@" >> "$CURL_LOG"
 # pipeline: curl fetches, sh installs. Matches `curl ... | sh` in production.
 # sync_project runs unconditionally after install_prerequisites, so this test
 # must leave a working uv behind or the script dies at the next phase.
+#
+# The install script also reports the environment it was handed, because
+# that is the only place the real installer reads INSTALLER_NO_MODIFY_PATH
+# from -- see test_the_uv_installer_may_not_edit_shell_profiles.
 cat << 'INSTALL_SCRIPT'
+echo "INSTALLER_NO_MODIFY_PATH=${INSTALLER_NO_MODIFY_PATH:-unset}" >> "$CURL_LOG"
 mkdir -p "$HOME/.local/bin"
 printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/bin/uv"
 chmod +x "$HOME/.local/bin/uv"
@@ -392,6 +430,55 @@ def test_missing_uv_is_installed_via_astral_curl(tmp_path):
     assert result.returncode == 0
     assert log.exists(), "curl was never called"
     assert "https://astral.sh/uv/install.sh" in log.read_text()
+
+
+def test_the_uv_installer_may_not_edit_shell_profiles(tmp_path):
+    """kcgx never edits a shell profile, including by delegation.
+
+    Left to itself, astral's installer appends `. "$HOME/.local/bin/env"`
+    to ~/.zshrc, ~/.bash_profile AND ~/.profile. link_launcher prints the
+    export line and explicitly leaves applying it to the user, so having
+    somebody else's installer make that edit three phases earlier would
+    make the promise a lie.
+
+    Asserted where it actually has to be true: inside the process that
+    runs the install script, which is the only thing that reads the
+    variable. `INSTALLER_NO_MODIFY_PATH=1 sh` sets it for that process
+    alone, so a source-level grep would not prove it arrived.
+    """
+    log = tmp_path / "curl.log"
+    path_dir = stub_path(
+        tmp_path, tools=("ffmpeg", "tmux"),
+        scripts={"curl": CURL_FOR_UV_INSTALL},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(log))
+    assert result.returncode == 0
+    assert "INSTALLER_NO_MODIFY_PATH=1" in log.read_text(), (
+        "the astral installer was not told to leave shell profiles alone"
+    )
+
+
+def test_a_missing_uv_is_named_rather_than_blamed_on_the_sync(tmp_path):
+    """A fresh Mac where the prompt was declined: uv was never installed.
+
+    Dying inside `uv sync` would be both wrong (there was no sync) and
+    useless (it does not say uv is missing, or how to get it). Route it
+    through the same gate as every other fatal dependency instead.
+    """
+    path_dir = stub_path(tmp_path, tools=("ffmpeg", "tmux"))
+    result = subprocess.run(
+        [str(SETUP)], input="n\n",
+        env=setup_env(tmp_path, path_dir),
+        capture_output=True, text=True, timeout=120,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Nothing installed." in result.stdout, "never reached the decline branch"
+    assert "still missing: uv" in combined, "the missing dependency is not named"
+    assert "astral.sh/uv/install.sh" in combined, "no way to fix it is offered"
+    assert "uv sync failed" not in combined, (
+        "blamed the sync for a uv that was never installed"
+    )
 
 
 UV_RECORDER = """#!/bin/sh
@@ -422,14 +509,23 @@ def test_uv_sync_runs_in_the_repo(tmp_path):
 
 
 def test_a_failing_uv_sync_is_fatal(tmp_path):
-    """Without dependencies there is no cockpit; carrying on would lie."""
+    """Without dependencies there is no cockpit; carrying on would lie.
+
+    uv is present here and the sync itself fails, which is a different
+    failure from uv never having been installed (see
+    test_a_missing_uv_is_named_rather_than_blamed_on_the_sync) and must
+    not be described as that one: telling somebody who has uv to go and
+    install uv is worse than saying nothing.
+    """
     path_dir = stub_path(
         tmp_path, tools=("ffmpeg", "tmux", "curl"),
         scripts={"uv": UV_FAILS},
     )
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    combined = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "uv sync" in result.stdout + result.stderr
+    assert "uv sync failed" in combined
+    assert "still missing" not in combined, "reported a present uv as missing"
 
 
 def test_the_launcher_is_linked_not_copied(tmp_path):
@@ -532,14 +628,72 @@ def test_the_release_url_names_the_pinned_version(tmp_path):
 
 
 def test_a_failed_download_still_reaches_the_end(tmp_path):
-    """adsb-tui is degraded, never fatal: the cockpit must still open."""
+    """adsb-tui is degraded, never fatal: the cockpit must still open, and
+    it must say why the radar will be empty.
+
+    "radar" alone is not enough to prove the second half: install_adsb
+    prints "the radar pane" as its own banner *before* attempting the
+    download, so that substring is already on stdout whatever happens
+    next. Assert on "could not download", which only the failure branch
+    emits.
+    """
     path_dir = stub_path(
         tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
         scripts={"curl": CURL_FAILS},
     )
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    combined = (result.stdout + result.stderr).lower()
     assert result.returncode == 0, "a missing radar must not fail setup"
-    assert "radar" in (result.stdout + result.stderr).lower()
+    assert "could not download" in combined, "the degradation was never explained"
+    assert "everything else still works" in combined, "no reassurance, no re-run"
+
+
+CURL_EMPTY_ARCHIVE = """#!/bin/sh
+# A tarball that unpacks cleanly and contains no adsb-tui: `tar` exits 0,
+# so "the download worked" is true and "adsb-tui is installed" is not.
+d=$(mktemp -d)
+printf 'not a binary\\n' > "$d/RELEASE-NOTES"
+tar czf - -C "$d" RELEASE-NOTES
+"""
+
+
+def test_an_archive_with_no_binary_is_not_called_installed(tmp_path):
+    """`chmod ... || true` swallows the one signal that anything is wrong,
+    so without a check on the binary itself setup would print "Installed
+    ~/.local/bin/adsb-tui" for a file that does not exist."""
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_EMPTY_ARCHIVE},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, "still degraded, not fatal"
+    assert not (tmp_path / "home" / ".local" / "bin" / "adsb-tui").exists()
+    assert "Installed" not in combined, "claimed an install that did not happen"
+    assert "no usable binary" in combined, "said nothing about the empty archive"
+
+
+def test_preflight_and_install_agree_about_an_installed_adsb(tmp_path):
+    """~/.local/bin is where setup puts adsb-tui and is not necessarily on
+    PATH, so on the second run preflight used to report "missing
+    (optional)" and install_adsb then said "already installed" -- about the
+    same file, in the same run. One question, asked once."""
+    prefix = tmp_path / "home" / ".local" / "bin"
+    prefix.mkdir(parents=True)
+    binary = prefix / "adsb-tui"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"))
+    check = run_setup(tmp_path, path_dir, "--check")
+    assert check.returncode == 0
+    row = [l for l in check.stdout.splitlines() if "adsb-tui" in l]
+    assert row, "no adsb-tui row at all"
+    assert "found" in row[0], f"preflight does not see the installed binary: {row[0]}"
+
+    full = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    assert full.returncode == 0
+    assert "already installed" in full.stdout, "install_adsb disagreed"
 
 
 def test_the_radar_config_is_written(tmp_path):
