@@ -234,6 +234,44 @@ tmux split-window -h -l 48 'uv run squelch --feed kpdx3_twr'
 
 ## Install
 
+```bash
+git clone https://github.com/mikElse/kcgx.git
+cd kcgx
+./setup.sh
+```
+
+That is the whole install. `setup.sh` prints what it found, asks **once**
+before installing anything, then installs the missing prerequisites,
+syncs the Python dependencies, links the launcher onto your `PATH`,
+fetches the radar pane, writes its config, and opens the cockpit.
+
+```bash
+./setup.sh --check    # print the dependency table and exit, changing nothing
+./setup.sh --help
+```
+
+Running it again is safe: every phase is idempotent, so the second run —
+the one you do when you think something went wrong — ends in the same
+place as the first.
+
+Three things it deliberately does not do:
+
+- **It never edits your shell profile.** If `~/.local/bin` is not on your
+  `PATH` it prints the `export` line and leaves applying it to you.
+  (That matters more than it looks — see below.)
+- **It never installs Homebrew.** If `brew` is missing it stops and prints
+  the one-line install command instead of running it.
+- **It never builds `adsb-tui` from source**, and never invokes `cargo`.
+
+A failed `adsb-tui` download is not fatal: you get a cockpit with working
+audio and an empty radar pane, and a message saying so. A missing `uv`,
+`ffmpeg` or `tmux` is fatal, and setup stops with the command that fixes
+it rather than launching into a failure.
+
+macOS is what it is written for — it installs `ffmpeg` and `tmux` with
+Homebrew and fetches the macOS `adsb-tui` release. Elsewhere, do it by
+hand.
+
 ### What it needs
 
 | Tool | Why | Required? |
@@ -246,12 +284,42 @@ tmux split-window -h -l 48 'uv run squelch --feed kpdx3_twr'
 Only `squelch` needs `ffmpeg`; only the `kcgx` launcher needs `tmux`. You
 can run the audio pane on its own with neither `tmux` nor `adsb-tui`.
 
+### `~/.local/bin` must be on your `PATH`
+
+This is the one step `setup.sh` cannot finish for you, because finishing
+it means editing your shell profile.
+
 ```bash
-brew install ffmpeg tmux
-curl -LsSf https://astral.sh/uv/install.sh | sh   # if you don't have uv
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### The project
+Add that to your shell profile. It is not just so you can type `kcgx`:
+`Ctrl-b a` (the airport picker) is bound to `display-popup -E "kcgx go"`,
+which resolves `kcgx` by name through the tmux server's own environment.
+Without it the cockpit opens fine and the picker silently does nothing.
+
+If a tmux server is already running, it captured its environment when it
+started — restart it (`kcgx stop`, or `tmux kill-server`) before
+`Ctrl-b a` will find the launcher.
+
+### Doing it by hand
+
+Everything `setup.sh` does, as the individual steps — for anyone not on
+macOS, or who would rather run them themselves. Nothing here is required
+if you ran the script.
+
+**Prerequisites.**
+
+```bash
+brew install ffmpeg tmux
+curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh   # if you don't have uv
+```
+
+`INSTALLER_NO_MODIFY_PATH=1` is what stops that installer appending
+`. "$HOME/.local/bin/env"` to `~/.zshrc`, `~/.bash_profile` *and*
+`~/.profile`. Drop it if you would rather it managed your `PATH` for you.
+
+**The project.**
 
 ```bash
 git clone https://github.com/mikElse/kcgx.git
@@ -261,50 +329,19 @@ uv sync
 
 That is enough to run `squelch`. The cockpit needs two more steps.
 
-### Wiring the launcher
-
-`bin/kcgx` resolves its own repo root through symlinks, so link it onto
-your `PATH` rather than copying it:
+**Wiring the launcher.** `bin/kcgx` resolves its own repo root through
+symlinks, so link it onto your `PATH` rather than copying it:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
 ```
 
-`~/.local/bin` **must** be on your `PATH` — not just so you can type
-`kcgx`, but because `Ctrl-b a` (the airport picker) is bound to
-`display-popup -E "kcgx go"`, which resolves `kcgx` by name through the
-tmux server's own environment. Without it the cockpit opens fine and the
-picker silently does nothing.
+Then put `~/.local/bin` on your `PATH`, as above.
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Add that to your shell profile. If a tmux server is already running, it
-captured its environment when it started — restart it (`kcgx stop`, or
-`tmux kill-server`) before `Ctrl-b a` will find the launcher.
-
-### A note on `python`
-
-Every documented command goes through `uv run`, which uses the project's
-own 3.14 interpreter. If you have [pyenv](https://github.com/pyenv/pyenv)
-and its shims come first on your `PATH`, bare `python` will fail *inside
-this repo*:
-
-```
-pyenv: version `3.14' is not installed (set by .../.python-version)
-```
-
-That is expected and harmless — `uv run` ignores pyenv entirely. Install
-3.14 under pyenv if you want a working bare `python` here; nothing in kcgx
-needs it.
-
-### The radar pane
-
-`kcgx` opens `adsb-tui` in the left pane. Without it the cockpit still
-runs — you get the audio and status panes and a dead pane where the radar
-would be.
+**The radar pane.** `kcgx` opens `adsb-tui` in the left pane. Without it
+the cockpit still runs — you get the audio and status panes and a dead
+pane where the radar would be.
 
 It comes from [`j4v3l/ADS-B_TUI`](https://github.com/j4v3l/ADS-B_TUI).
 Note its licence is a custom **non-commercial** one, not OSI-approved.
@@ -335,6 +372,25 @@ launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
 Two seconds is deliberate: the free aggregators rate-limit to roughly one
 request per second, and `api.adsb.lol` returned `429` at this rate where
 `api.airplanes.live` did not.
+
+`setup.sh` writes exactly that file, and only if it does not already
+exist — `adsb-tui` rewrites its own config on exit, so it is yours.
+
+### A note on `python`
+
+Every documented command goes through `uv run`, which uses the project's
+own 3.14 interpreter. If you have [pyenv](https://github.com/pyenv/pyenv)
+and its shims come first on your `PATH`, bare `python` will fail *inside
+this repo*:
+
+```
+pyenv: version `3.14' is not installed (set by .../.python-version)
+```
+
+That is expected and harmless — `uv run` ignores pyenv entirely. Install
+3.14 under pyenv if you want a working bare `python` here; nothing in kcgx
+needs it. `setup.sh` detects this and says so rather than trying to fix
+your `PATH`.
 
 ## Running it
 
