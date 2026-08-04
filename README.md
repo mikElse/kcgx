@@ -271,11 +271,34 @@ mkdir -p ~/.local/bin
 ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
 ```
 
-If `~/.local/bin` isn't on your `PATH`, add it to your shell profile:
+`~/.local/bin` **must** be on your `PATH` — not just so you can type
+`kcgx`, but because `Ctrl-b a` (the airport picker) is bound to
+`display-popup -E "kcgx go"`, which resolves `kcgx` by name through the
+tmux server's own environment. Without it the cockpit opens fine and the
+picker silently does nothing.
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+Add that to your shell profile. If a tmux server is already running, it
+captured its environment when it started — restart it (`kcgx stop`, or
+`tmux kill-server`) before `Ctrl-b a` will find the launcher.
+
+### A note on `python`
+
+Every documented command goes through `uv run`, which uses the project's
+own 3.14 interpreter. If you have [pyenv](https://github.com/pyenv/pyenv)
+and its shims come first on your `PATH`, bare `python` will fail *inside
+this repo*:
+
+```
+pyenv: version `3.14' is not installed (set by .../.python-version)
+```
+
+That is expected and harmless — `uv run` ignores pyenv entirely. Install
+3.14 under pyenv if you want a working bare `python` here; nothing in kcgx
+needs it.
 
 ### The radar pane
 
@@ -291,6 +314,10 @@ Note its licence is a custom **non-commercial** one, not OSI-approved.
 curl -L https://github.com/j4v3l/ADS-B_TUI/releases/download/v0.2.1/adsb-tui-macos-arm64.tar.gz \
   | tar xzf - -C ~/.local/bin
 ```
+
+Use the release rather than building from source. `cargo build` works, but
+it pulls in Rust, LLVM and their dependencies — about **4 GB** of build
+toolchain for a 3 MB binary that upstream already publishes.
 
 **It also needs somewhere to get aircraft from.** Its default is
 `http://adsb.local/data/aircraft.json` — a receiver on your own network.
