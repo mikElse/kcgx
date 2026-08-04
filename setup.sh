@@ -88,6 +88,32 @@ check_width() {
     fi
 }
 
+# What to do about whatever the table reported as missing.
+#
+# It belongs here rather than only in dependency_gate: `--check` exits
+# straight after preflight, so for anyone who reads the table first -- which
+# is the point of --check -- the gate's remedies are three phases and one
+# commitment away. A table naming four tools and no way to get any of them is
+# the "which prerequisites do I need?" problem restated, not solved.
+#
+# adsb-tui is listed too, with setup.sh itself as the fix. Left out, the one
+# optional dependency is also the only one the table offers no answer for.
+missing_advice() {
+    local formulae
+    formulae="$(missing_formulae)"
+    [ -z "$formulae" ] && have_command uv && adsb_installed && return 0
+
+    say ""
+    say "To install what is missing:"
+    [ -n "$formulae" ] && say "  brew install$formulae"
+    have_command uv ||
+        say "  curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh"
+    adsb_installed ||
+        say "  ./setup.sh   fetches adsb-tui; optional, the cockpit runs without it"
+    say ""
+    say "Or run ./setup.sh, which does all of it behind one prompt."
+}
+
 preflight() {
     ARCH="$(detect_arch)"
     say "kcgx setup"
@@ -108,6 +134,7 @@ preflight() {
     adsb_installed && row adsb-tui "found" || row adsb-tui "missing (optional)"
     check_pyenv
     check_width
+    missing_advice
     say ""
 }
 

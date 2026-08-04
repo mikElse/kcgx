@@ -18,6 +18,288 @@ kcgx stop         # shut it down
 kcgx --help
 ```
 
+[Install](#install) · [What it needs](#what-it-needs) ·
+[Running it](#running-it) · [Getting out](#getting-out) ·
+[The cockpit](#the-cockpit-kcgx) · [squelch](#squelch) ·
+[Configuration](#configuration) · [Key bindings](#key-bindings)
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/mikElse/kcgx.git
+cd kcgx
+./setup.sh --check   # what you have and what you are missing; changes nothing
+./setup.sh           # install the missing pieces, then open the cockpit
+```
+
+That is the whole install. Start with `--check` if you want to know what
+you are in for: it prints the table below filled in for your machine —
+what is present, what is missing, what is too old — with the command that
+installs each missing piece, and touches nothing.
+
+### What it needs
+
+| Tool | Why | Required? |
+|---|---|---|
+| [`uv`](https://docs.astral.sh/uv/) | runs everything, and supplies Python 3.14 itself | yes |
+| [`ffmpeg`](https://ffmpeg.org/) | decodes each feed to PCM | yes |
+| [`tmux`](https://github.com/tmux/tmux) **3.1 or newer** | `kcgx` builds the pane layout with it | for the cockpit |
+| [`adsb-tui`](https://github.com/j4v3l/ADS-B_TUI) | the radar pane | optional |
+
+Only `squelch` needs `ffmpeg`; only the `kcgx` launcher needs `tmux`. You
+can run the audio pane on its own with neither `tmux` nor `adsb-tui`. The
+cockpit runs without `adsb-tui` too — the radar pane just says it is
+missing instead of showing traffic.
+
+**There is no Python to install.** This is a Python project, but `uv`
+supplies the 3.14 it requires: no system Python is read, no virtualenv is
+yours to create, and there is no `pip install` step. `uv sync` — which
+`setup.sh` runs for you — downloads the interpreter and the dependencies
+into `.venv/` here in the repo. See [A note on `python`](#a-note-on-python)
+for what that means if you have pyenv, and for the one place a bare
+`python` will surprise you.
+
+`setup.sh` installs the first three with **Homebrew**, so it is written for
+macOS. On anything else the table is still the list — get them however your
+system gets them, then follow [Doing it by hand](#doing-it-by-hand).
+
+### What `setup.sh` does
+
+It prints what it found, asks **once** before installing anything, then
+installs the missing prerequisites, syncs the Python dependencies, links
+the launcher onto your `PATH`, fetches the radar pane, writes its config,
+and opens the cockpit.
+
+Running it again is safe: every phase is idempotent, so the second run —
+the one you do when you think something went wrong — ends in the same
+place as the first.
+
+Three things it deliberately does not do:
+
+- **It never edits your shell profile.** If `~/.local/bin` is not on your
+  `PATH` it prints the `export` line and leaves applying it to you.
+  (That matters more than it looks — see below.)
+- **It never installs Homebrew.** If `brew` is missing it stops and prints
+  the one-line install command instead of running it.
+- **It never builds `adsb-tui` from source**, and never invokes `cargo`.
+
+A failed `adsb-tui` download is not fatal: you get a cockpit with working
+audio, and a radar pane that says the radar is missing. A missing `uv`,
+`ffmpeg` or `tmux` is fatal, and setup stops with the command that fixes
+it rather than launching into a failure.
+
+### `~/.local/bin` must be on your `PATH`
+
+This is the one step `setup.sh` cannot finish for you, because finishing
+it means editing your shell profile.
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Add that to your shell profile. It is not just so you can type `kcgx`:
+`Ctrl-b a` (the airport picker) is bound to `display-popup -E "kcgx go"`,
+which resolves `kcgx` by name through the tmux server's own environment.
+Without it the cockpit opens fine and the picker silently does nothing.
+
+If a tmux server is already running, it captured its environment when it
+started — restart it (`kcgx stop`, or `tmux kill-server`) before
+`Ctrl-b a` will find the launcher.
+
+### Doing it by hand
+
+Everything `setup.sh` does, as the individual steps — for anyone not on
+macOS, or who would rather run them themselves. Nothing here is required
+if you ran the script.
+
+**Prerequisites.**
+
+```bash
+brew install ffmpeg tmux
+curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh   # if you don't have uv
+```
+
+`INSTALLER_NO_MODIFY_PATH=1` is what stops that installer appending
+`. "$HOME/.local/bin/env"` to `~/.zshrc`, `~/.bash_profile` *and*
+`~/.profile`. Drop it if you would rather it managed your `PATH` for you.
+
+**The project.**
+
+```bash
+git clone https://github.com/mikElse/kcgx.git
+cd kcgx
+uv sync
+```
+
+That is enough to run `squelch`. The cockpit needs two more steps.
+
+**Wiring the launcher.** `bin/kcgx` resolves its own repo root through
+symlinks, so link it onto your `PATH` rather than copying it:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
+```
+
+Then put `~/.local/bin` on your `PATH`, as above.
+
+**The radar pane.** `kcgx` opens `adsb-tui` in the left pane. Without it
+the cockpit still runs — you get the audio and status panes, and a left
+pane that says the radar is missing and how to add it. Skip this step and
+come back to it later if you want; `Ctrl-b r` fills the pane in without a
+restart.
+
+It comes from [`j4v3l/ADS-B_TUI`](https://github.com/j4v3l/ADS-B_TUI).
+Note its licence is a custom **non-commercial** one, not OSI-approved.
+
+```bash
+# swap macos-arm64 for macos-x64 or linux-x64 as appropriate
+curl -L https://github.com/j4v3l/ADS-B_TUI/releases/download/v0.2.1/adsb-tui-macos-arm64.tar.gz \
+  | tar xzf - -C ~/.local/bin
+```
+
+Use the release rather than building from source. `cargo build` works, but
+it pulls in Rust, LLVM and their dependencies — about **4 GB** of build
+toolchain for a 3 MB binary that upstream already publishes.
+
+**It also needs somewhere to get aircraft from.** Its default is
+`http://adsb.local/data/aircraft.json` — a receiver on your own network.
+Without one, point it at a public aggregator instead:
+
+```toml
+# ~/.config/ads-b-tui/adsb-tui.toml
+url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
+refresh_secs = 2
+```
+
+No API key, no receiver hardware. `kcgx` fills in `{lat}`/`{lon}` per
+launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
+
+Two seconds is deliberate: the free aggregators rate-limit to roughly one
+request per second, and `api.adsb.lol` returned `429` at this rate where
+`api.airplanes.live` did not.
+
+`setup.sh` writes exactly that file, and only if it does not already
+exist — `adsb-tui` rewrites its own config on exit, so it is yours.
+
+### A note on `python`
+
+There is no Python installation step, and that is deliberate rather than
+an omission. `uv sync` reads `.python-version` (3.14), downloads that
+interpreter if you do not already have it, creates `.venv/` in the repo,
+and installs the dependencies into it. One command, no system Python
+involved:
+
+```bash
+uv sync              # interpreter + dependencies
+uv run pytest        # the test suite, in that environment
+```
+
+Every documented command goes through `uv run`, which uses that
+interpreter. **`uv run` finds the project from your working directory**,
+so run these from the repo — or pass `--project` and the path from
+anywhere else:
+
+```bash
+uv run --project ~/src/kcgx squelch
+```
+
+`bin/kcgx` always passes `--project` at its own repo root, which is why the
+cockpit works from any directory while a bare `uv run squelch` in your home
+directory does not.
+
+**If you would rather not use uv**, a virtualenv works, but you have to
+supply Python 3.14 yourself — the project requires it, and `pip` will
+refuse to install into anything older:
+
+```bash
+python3.14 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/squelch
+```
+
+Nothing in the project reads `uv` at runtime; `setup.sh` and the launcher
+do. `bin/kcgx` invokes `uv run` unconditionally, so a virtualenv install
+gets you `squelch` on its own, not the cockpit.
+
+If you have [pyenv](https://github.com/pyenv/pyenv) and its shims come
+first on your `PATH`, bare `python` will fail *inside this repo*:
+
+```
+pyenv: version `3.14' is not installed (set by .../.python-version)
+```
+
+That is expected and harmless — `uv run` ignores pyenv entirely. Install
+3.14 under pyenv if you want a working bare `python` here; nothing in kcgx
+needs it. `setup.sh` detects this and says so rather than trying to fix
+your `PATH`.
+
+## Running it
+
+The cockpit:
+
+```bash
+kcgx          # open it, or reattach to a running one from anywhere
+kcgx go       # re-pick the airport in a running cockpit
+kcgx stop     # shut this cockpit down
+```
+
+The audio pane on its own, without `tmux` or the radar — **from the repo
+directory**, since `uv run` locates the project from your working
+directory:
+
+```bash
+cd kcgx
+uv run squelch                       # uses the config file / defaults
+uv run squelch --feed kpdx3_twr      # override the feed ident
+uv run squelch --icao KSEA           # override the airport used by the feed picker (`f`)
+```
+
+From anywhere else, name the repo: `uv run --project ~/src/kcgx squelch`.
+Without one or the other, `uv` exits with ``Failed to spawn: `squelch` ``,
+which is uv telling you it is looking in the wrong project rather than
+anything being wrong with the install.
+
+Startup is immediate. Each feed resolves and connects on its own thread,
+so a slow or dead feed never holds up the others.
+
+If you resize your terminal, note the UI is laid out for exactly 48×42 and
+does not reflow past that.
+
+The header's `●` indicator is always truthful about playback: `STARTING`
+before the first audio frame has arrived,
+`LIVE` while streaming normally, `RECONNECTING` while the audio process is
+being respawned after a dropout, and `OFFLINE` if the stream could not be
+started or has stopped for good (in which case a warning also appears in
+the message log explaining why). The meter and clock keep running
+through a reconnect, so the pane never freezes.
+
+## Getting out
+
+The cockpit is a tmux session, so closing it is not the same keypress as
+quitting an ordinary program — and `q` belongs to `squelch`, which is no
+help when `squelch` is the thing that died. Three ways out, none of which
+need the others to be working:
+
+| Do this | To |
+|---|---|
+| `Ctrl-b` `q` | shut the cockpit down, from inside it. Asks `y/n` first. |
+| `Ctrl-b` `d` | detach and leave it running. Reattach later with `kcgx`. |
+| `kcgx stop` | shut it down from any other terminal. |
+
+`Ctrl-b` `q` is the one to reach for when a pane has crashed. It is a
+binding from `kcgx.tmux.conf`, so tmux runs it rather than any of the
+applications: it keeps working when every one of them is dead, and —
+unlike the picker's `^q` — it does not need `kcgx` to be on your `PATH`.
+It replaces tmux's own `q` (show pane numbers) inside this session.
+
+**Panes that die stay on screen** rather than collapsing the layout, with
+their last output and exit status: for a monitoring cockpit, noticing that
+something died is the point. `Ctrl-b` `r` respawns the pane under the
+cursor, which is how you restart one without restarting the session.
+
 ---
 
 ## The cockpit (`kcgx`)
@@ -119,7 +401,13 @@ search needs no network and no API key; regenerate it with
 
 **When something dies**, its pane stays visible with its final output and
 exit status instead of silently collapsing the layout. `Ctrl-b` then `r`
-respawns the pane under the cursor.
+respawns the pane under the cursor, and `Ctrl-b` then `q` shuts the whole
+cockpit down — see [Getting out](#getting-out).
+
+**With `adsb-tui` not installed**, the left pane says so, says where to get
+it, and says how to leave, rather than leaving the shell's `command not
+found` under a dead-pane banner next to two panes that work. Install it
+whenever you like and press `Ctrl-b` `r` there; nothing needs restarting.
 
 `kcgx` refuses to start below 100 columns, where there isn't room for both
 a readable traffic table and a 48-column pane.
@@ -232,203 +520,19 @@ tmux split-window -h -l 48 'uv run squelch --feed kpdx3_twr'
   only, for personal listening — consistent with LiveATC.net's terms of
   use, which govern rebroadcast and redistribution of their feeds.
 
-## Install
-
-```bash
-git clone https://github.com/mikElse/kcgx.git
-cd kcgx
-./setup.sh
-```
-
-That is the whole install. `setup.sh` prints what it found, asks **once**
-before installing anything, then installs the missing prerequisites,
-syncs the Python dependencies, links the launcher onto your `PATH`,
-fetches the radar pane, writes its config, and opens the cockpit.
-
-```bash
-./setup.sh --check    # print the dependency table and exit, changing nothing
-./setup.sh --help
-```
-
-Running it again is safe: every phase is idempotent, so the second run —
-the one you do when you think something went wrong — ends in the same
-place as the first.
-
-Three things it deliberately does not do:
-
-- **It never edits your shell profile.** If `~/.local/bin` is not on your
-  `PATH` it prints the `export` line and leaves applying it to you.
-  (That matters more than it looks — see below.)
-- **It never installs Homebrew.** If `brew` is missing it stops and prints
-  the one-line install command instead of running it.
-- **It never builds `adsb-tui` from source**, and never invokes `cargo`.
-
-A failed `adsb-tui` download is not fatal: you get a cockpit with working
-audio and an empty radar pane, and a message saying so. A missing `uv`,
-`ffmpeg` or `tmux` is fatal, and setup stops with the command that fixes
-it rather than launching into a failure.
-
-macOS is what it is written for — it installs `ffmpeg` and `tmux` with
-Homebrew and fetches the macOS `adsb-tui` release. Elsewhere, do it by
-hand.
-
-### What it needs
-
-| Tool | Why | Required? |
-|---|---|---|
-| [`uv`](https://docs.astral.sh/uv/) | runs everything, and supplies Python 3.14 itself | yes |
-| [`ffmpeg`](https://ffmpeg.org/) | decodes each feed to PCM | yes |
-| [`tmux`](https://github.com/tmux/tmux) | `kcgx` builds the pane layout with it | for the cockpit |
-| `adsb-tui` | the radar pane | optional |
-
-Only `squelch` needs `ffmpeg`; only the `kcgx` launcher needs `tmux`. You
-can run the audio pane on its own with neither `tmux` nor `adsb-tui`.
-
-### `~/.local/bin` must be on your `PATH`
-
-This is the one step `setup.sh` cannot finish for you, because finishing
-it means editing your shell profile.
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Add that to your shell profile. It is not just so you can type `kcgx`:
-`Ctrl-b a` (the airport picker) is bound to `display-popup -E "kcgx go"`,
-which resolves `kcgx` by name through the tmux server's own environment.
-Without it the cockpit opens fine and the picker silently does nothing.
-
-If a tmux server is already running, it captured its environment when it
-started — restart it (`kcgx stop`, or `tmux kill-server`) before
-`Ctrl-b a` will find the launcher.
-
-### Doing it by hand
-
-Everything `setup.sh` does, as the individual steps — for anyone not on
-macOS, or who would rather run them themselves. Nothing here is required
-if you ran the script.
-
-**Prerequisites.**
-
-```bash
-brew install ffmpeg tmux
-curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh   # if you don't have uv
-```
-
-`INSTALLER_NO_MODIFY_PATH=1` is what stops that installer appending
-`. "$HOME/.local/bin/env"` to `~/.zshrc`, `~/.bash_profile` *and*
-`~/.profile`. Drop it if you would rather it managed your `PATH` for you.
-
-**The project.**
-
-```bash
-git clone https://github.com/mikElse/kcgx.git
-cd kcgx
-uv sync
-```
-
-That is enough to run `squelch`. The cockpit needs two more steps.
-
-**Wiring the launcher.** `bin/kcgx` resolves its own repo root through
-symlinks, so link it onto your `PATH` rather than copying it:
-
-```bash
-mkdir -p ~/.local/bin
-ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
-```
-
-Then put `~/.local/bin` on your `PATH`, as above.
-
-**The radar pane.** `kcgx` opens `adsb-tui` in the left pane. Without it
-the cockpit still runs — you get the audio and status panes and a dead
-pane where the radar would be.
-
-It comes from [`j4v3l/ADS-B_TUI`](https://github.com/j4v3l/ADS-B_TUI).
-Note its licence is a custom **non-commercial** one, not OSI-approved.
-
-```bash
-# swap macos-arm64 for macos-x64 or linux-x64 as appropriate
-curl -L https://github.com/j4v3l/ADS-B_TUI/releases/download/v0.2.1/adsb-tui-macos-arm64.tar.gz \
-  | tar xzf - -C ~/.local/bin
-```
-
-Use the release rather than building from source. `cargo build` works, but
-it pulls in Rust, LLVM and their dependencies — about **4 GB** of build
-toolchain for a 3 MB binary that upstream already publishes.
-
-**It also needs somewhere to get aircraft from.** Its default is
-`http://adsb.local/data/aircraft.json` — a receiver on your own network.
-Without one, point it at a public aggregator instead:
-
-```toml
-# ~/.config/ads-b-tui/adsb-tui.toml
-url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
-refresh_secs = 2
-```
-
-No API key, no receiver hardware. `kcgx` fills in `{lat}`/`{lon}` per
-launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
-
-Two seconds is deliberate: the free aggregators rate-limit to roughly one
-request per second, and `api.adsb.lol` returned `429` at this rate where
-`api.airplanes.live` did not.
-
-`setup.sh` writes exactly that file, and only if it does not already
-exist — `adsb-tui` rewrites its own config on exit, so it is yours.
-
-### A note on `python`
-
-Every documented command goes through `uv run`, which uses the project's
-own 3.14 interpreter. If you have [pyenv](https://github.com/pyenv/pyenv)
-and its shims come first on your `PATH`, bare `python` will fail *inside
-this repo*:
-
-```
-pyenv: version `3.14' is not installed (set by .../.python-version)
-```
-
-That is expected and harmless — `uv run` ignores pyenv entirely. Install
-3.14 under pyenv if you want a working bare `python` here; nothing in kcgx
-needs it. `setup.sh` detects this and says so rather than trying to fix
-your `PATH`.
-
-## Running it
-
-The cockpit:
-
-```bash
-kcgx          # open it, or reattach to a running one from anywhere
-kcgx go       # re-pick the airport in a running cockpit
-kcgx stop     # shut this cockpit down
-```
-
-The audio pane on its own, without `tmux` or the radar:
-
-```bash
-uv run squelch                       # uses the config file / defaults
-uv run squelch --feed kpdx3_twr      # override the feed ident
-uv run squelch --icao KSEA           # override the airport used by the feed picker (`f`)
-```
-
-Startup is immediate. Each feed resolves and connects on its own thread,
-so a slow or dead feed never holds up the others.
-
-If you resize your terminal, note the UI is laid out for exactly 48×42 and
-does not reflow past that.
-
-The header's `●` indicator is always truthful about playback: `STARTING`
-before the first audio frame has arrived,
-`LIVE` while streaming normally, `RECONNECTING` while the audio process is
-being respawned after a dropout, and `OFFLINE` if the stream could not be
-started or has stopped for good (in which case a warning also appears in
-the message log explaining why). The meter and clock keep running
-through a reconnect, so the pane never freezes.
-
 ## Configuration
 
-squelch reads TOML from `~/.config/squelch/squelch.toml`. Every key is
-optional; anything not set (or the whole file, if it doesn't exist) falls
-back to the defaults below. Unknown keys in the file are ignored rather
+squelch reads TOML from `~/.config/squelch/squelch.toml`. **Nothing creates
+that directory for you** — squelch only ever reads the file, and `setup.sh`
+does not write one, so the first thing to do is make it:
+
+```bash
+mkdir -p ~/.config/squelch
+$EDITOR ~/.config/squelch/squelch.toml
+```
+
+Every key is optional; anything not set (or the whole file, if it doesn't
+exist) falls back to the defaults below. Unknown keys in the file are ignored rather
 than treated as an error, so an older binary can still read a newer config.
 Known keys *are* type-checked at startup: a bad value (say `feed = 3`)
 exits immediately with a message naming the file and the key, rather than
@@ -462,6 +566,17 @@ feed = "ksea_twr"
 run.
 
 ## Key bindings
+
+**The cockpit**, handled by tmux, so these work even when a pane has died:
+
+| Key | Action |
+|---------|--------|
+| `Ctrl-b` `a` | Open the airport search over the cockpit. |
+| `Ctrl-b` `r` | Respawn the pane under the cursor. |
+| `Ctrl-b` `q` | Shut the cockpit down (asks first). |
+| `Ctrl-b` `d` | Detach; the session keeps running. |
+
+**squelch**, in its own pane:
 
 | Key     | Action |
 |---------|--------|

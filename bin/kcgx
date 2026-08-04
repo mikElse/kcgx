@@ -95,6 +95,21 @@ apply_config() {
 }
 
 ADSB_CMD="${KCGX_ADSB_CMD:-adsb-tui}"
+
+# adsb-tui is optional, but "optional" used to reach the user as the shell's
+# own `adsb-tui: command not found` sitting under a dead-pane banner, next to
+# two panes that work. Nothing on screen says which of those it is, that the
+# radar is meant to be optional, or where the binary comes from -- and the
+# reflex it provokes is to start looking for the way out of a cockpit that
+# looks broken, which is its own problem. So run a pane that says all three.
+#
+# Decided on the command's first word rather than on the literal string
+# `adsb-tui`, so a KCGX_ADSB_CMD naming something that is not installed
+# explains itself the same way instead of failing in shell.
+ADSB_MISSING=""
+if ! command -v "${ADSB_CMD%% *}" >/dev/null 2>&1; then
+    ADSB_MISSING="${ADSB_CMD%% *}"
+fi
 # tmux runs the pane command through a shell, so quote the path: a repo cloned
 # somewhere with a space in it would otherwise word-split.
 SQUELCH_CMD="${KCGX_SQUELCH_CMD:-uv run --project '$REPO' squelch}"
@@ -159,6 +174,13 @@ airport_record() {
 # One spelling of each pane command, used by both the initial build and
 # every retarget. A second spelling is how launch and switch drift apart.
 adsb_cmd() {  # $1=lat $2=lon
+    # No --site-lat/--site-lon: the stand-in is a message, not a radar, and
+    # would only report the flags as unknown arguments. Quoted for the same
+    # reason SQUELCH_CMD is -- tmux runs pane commands through a shell.
+    if [ -n "$ADSB_MISSING" ]; then
+        printf "'%s' %s" "$REPO/bin/kcgx-no-radar" "$ADSB_MISSING"
+        return
+    fi
     if [ -n "$1" ] && [ -n "$2" ]; then
         printf '%s --site-lat %s --site-lon %s' "$ADSB_CMD" "$1" "$2"
     else

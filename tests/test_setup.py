@@ -23,7 +23,13 @@ SETUP = REPO / "setup.sh"
 BASE_TOOLS = ("bash", "sh", "env", "uname", "grep", "awk", "sed", "head",
               "dirname", "basename", "pwd", "mkdir", "ln", "rm", "cat",
               "printf", "tr", "sort", "id", "stty", "tar", "chmod",
-              "readlink")
+              "readlink",
+              # For `tar xzf` in install_adsb. macOS's bsdtar decompresses
+              # in-process and never looks for it, so the two download tests
+              # passed there while failing on Linux, where GNU tar shells out
+              # to gzip and a stubbed PATH without it makes every archive
+              # look corrupt.
+              "gzip")
 
 # setup.sh runs `uv sync --project $REPO`. Symlinking the real uv would make
 # every test that reaches phase 3 write to the actual repo's .venv while
@@ -189,6 +195,40 @@ def test_check_reports_every_dependency(tmp_path):
     assert result.returncode == 0
     for tool in ("uv", "ffmpeg", "tmux", "curl", "adsb-tui"):
         assert tool in result.stdout, f"{tool} missing from the table"
+
+
+def test_check_says_how_to_install_what_is_missing(tmp_path):
+    """A table naming four tools and no way to get any of them restates the
+    "which prerequisites do I need?" problem rather than answering it. The
+    gate prints remedies too, but only once you have committed to an install
+    -- three phases past where --check exits.
+    """
+    path_dir = stub_path(tmp_path, tools=("curl",))
+    result = run_setup(tmp_path, path_dir, "--check")
+    assert result.returncode == 0
+    assert "brew install" in result.stdout, result.stdout
+    for formula in ("ffmpeg", "tmux"):
+        assert formula in result.stdout.split("brew install")[1], result.stdout
+    assert "astral.sh/uv/install.sh" in result.stdout, result.stdout
+    # The one optional dependency is also the only one nothing else offers a
+    # fix for, so it gets named with setup.sh as its answer.
+    assert "adsb-tui" in result.stdout, result.stdout
+
+
+def test_check_offers_no_remedies_when_nothing_is_missing(tmp_path):
+    """Advice for a machine that needs none reads as a problem, and the whole
+    value of the table is that it can say "you are ready" in one look.
+    """
+    path_dir = stub_path(
+        tmp_path,
+        tools=("uv", "ffmpeg", "tmux", "curl"),
+        scripts={"adsb-tui": "#!/bin/sh\nexit 0\n"},
+    )
+    result = run_setup(tmp_path, path_dir, "--check")
+    assert result.returncode == 0
+    assert "missing" not in result.stdout, result.stdout
+    assert "brew install" not in result.stdout, result.stdout
+    assert "astral.sh" not in result.stdout, result.stdout
 
 
 def test_check_changes_nothing(tmp_path):
