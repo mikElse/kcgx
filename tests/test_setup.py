@@ -459,3 +459,88 @@ def test_a_path_with_the_prefix_does_not_warn(tmp_path):
     assert result.returncode == 0
     assert (prefix / "kcgx").is_symlink(), "link_launcher did not run to completion"
     assert "Ctrl-b a" not in result.stdout + result.stderr
+
+
+CURL_RECORDER = """#!/bin/sh
+# Record the URL, then emit a tarball containing a fake adsb-tui.
+for a in "$@"; do case "$a" in https://*) echo "$a" >> "$CURL_LOG";; esac; done
+d=$(mktemp -d)
+printf '#!/bin/sh\\nexit 0\\n' > "$d/adsb-tui"
+chmod +x "$d/adsb-tui"
+tar czf - -C "$d" adsb-tui
+"""
+
+CURL_FAILS = """#!/bin/sh
+echo "404" >&2
+exit 22
+"""
+
+
+def test_adsb_is_downloaded_and_made_executable(tmp_path):
+    log = tmp_path / "curl.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_RECORDER},
+    )
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(log))
+    binary = tmp_path / "home" / ".local" / "bin" / "adsb-tui"
+    assert binary.exists()
+    assert os.access(binary, os.X_OK)
+
+
+def test_the_release_url_names_the_pinned_version(tmp_path):
+    log = tmp_path / "curl.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_RECORDER},
+    )
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(log))
+    url = log.read_text()
+    assert "v0.2.1" in url
+    assert "macos-" in url, "the arch-specific asset must be selected"
+
+
+def test_a_failed_download_still_reaches_the_end(tmp_path):
+    """adsb-tui is degraded, never fatal: the cockpit must still open."""
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_FAILS},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    assert result.returncode == 0, "a missing radar must not fail setup"
+    assert "radar" in (result.stdout + result.stderr).lower()
+
+
+def test_the_radar_config_is_written(tmp_path):
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_RECORDER},
+    )
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(tmp_path / "c.log"))
+    config = tmp_path / "home" / ".config" / "ads-b-tui" / "adsb-tui.toml"
+    text = config.read_text()
+    assert "api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}" in text
+    assert "refresh_secs = 2" in text
+    assert "site_lat" not in text, "kcgx passes coordinates per launch"
+
+
+def test_an_existing_config_is_never_touched(tmp_path):
+    """adsb-tui rewrites this file itself on exit, so it is the user's."""
+    config = tmp_path / "home" / ".config" / "ads-b-tui" / "adsb-tui.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("theme = \"mono\"\n")
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_RECORDER},
+    )
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(tmp_path / "c.log"),
+    )
+    # Read-only-file assertions pass for free if the script died before
+    # write_adsb_config ever ran. Pin down that it actually reached and
+    # took the "leave it alone" branch: exit 0, plus the message only
+    # that branch prints.
+    assert result.returncode == 0, "setup did not run to completion"
+    combined = (result.stdout + result.stderr).lower()
+    assert "leaving it alone" in combined, "write_adsb_config never ran"
+    assert config.read_text() == "theme = \"mono\"\n"

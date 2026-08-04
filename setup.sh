@@ -207,6 +207,56 @@ Remove it yourself if you want setup to manage it."
     esac
 }
 
+install_adsb() {
+    if have_command adsb-tui || [ -x "$PREFIX/adsb-tui" ]; then
+        say "adsb-tui already installed."
+        return 0
+    fi
+    if [ "$ARCH" = "unsupported" ]; then
+        warn "no adsb-tui release for $(uname -m); the radar pane will be empty."
+        return 0
+    fi
+
+    say ""
+    say "Installing adsb-tui $ADSB_VERSION (the radar pane)."
+    say "  From https://github.com/j4v3l/ADS-B_TUI"
+    say "  Licence: ADS-B TUI Non-Commercial License -- not OSI-approved."
+    say "  Downloading the published release; nothing is built from source."
+    say ""
+
+    # Non-fatal by design: a cockpit with working audio beats no cockpit.
+    if curl -fL "$RELEASE_URL/$ADSB_VERSION/adsb-tui-$ARCH.tar.gz" \
+        | tar xzf - -C "$PREFIX" 2>/dev/null; then
+        chmod +x "$PREFIX/adsb-tui" 2>/dev/null || true
+        say "Installed $PREFIX/adsb-tui"
+    else
+        warn "could not download adsb-tui; the radar pane will be empty."
+        warn "Everything else still works. Re-run setup.sh to try again."
+    fi
+}
+
+# adsb-tui defaults to http://adsb.local/data/aircraft.json -- a receiver on
+# your own network. Without one the radar is empty, so point it at a public
+# aggregator. 2 s because both free providers rate-limit near 1 req/s and
+# api.adsb.lol returned 429 at that rate where api.airplanes.live did not.
+write_adsb_config() {
+    if [ -e "$ADSB_CONFIG" ]; then
+        say "adsb-tui config already exists; leaving it alone."
+        return 0
+    fi
+    mkdir -p "$(dirname "$ADSB_CONFIG")"
+    cat > "$ADSB_CONFIG" <<'TOML'
+# Written by kcgx setup.sh. Safe to edit -- setup never overwrites it.
+#
+# Live aircraft with no receiver hardware and no API key. kcgx fills in
+# {lat}/{lon} per launch from the airport you pick, so this file does not
+# pin a fixed location of its own.
+url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
+refresh_secs = 2
+TOML
+    say "Wrote $ADSB_CONFIG"
+}
+
 if [ "${1:-}" = "--check" ]; then
     preflight
     exit 0
@@ -216,3 +266,5 @@ preflight
 install_prerequisites
 sync_project
 link_launcher
+install_adsb
+write_adsb_config
