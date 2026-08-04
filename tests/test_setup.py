@@ -317,10 +317,15 @@ echo ":"
 
 CURL_FOR_UV_INSTALL = """#!/bin/sh
 echo "$@" >> "$CURL_LOG"
-# Create a dummy uv binary so sync_project can succeed
+# Emit an install script for sh to execute. This preserves the two-stage
+# pipeline: curl fetches, sh installs. Matches `curl ... | sh` in production.
+# sync_project runs unconditionally after install_prerequisites, so this test
+# must leave a working uv behind or the script dies at the next phase.
+cat << 'INSTALL_SCRIPT'
 mkdir -p "$HOME/.local/bin"
 printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/bin/uv"
 chmod +x "$HOME/.local/bin/uv"
+INSTALL_SCRIPT
 """
 
 
@@ -364,7 +369,13 @@ def test_uv_sync_runs_in_the_repo(tmp_path):
         scripts={"uv": UV_RECORDER},
     )
     run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", UV_LOG=str(log))
-    assert "sync" in log.read_text()
+    log_text = log.read_text()
+    assert "sync" in log_text
+    assert "--project" in log_text
+    # REPO is computed as $(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd),
+    # which resolves to the repo root where setup.sh lives.
+    repo_root = str(SETUP.parent)
+    assert repo_root in log_text
 
 
 def test_a_failing_uv_sync_is_fatal(tmp_path):
