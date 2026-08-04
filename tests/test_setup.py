@@ -16,8 +16,6 @@ import subprocess
 import termios
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parent.parent
 SETUP = REPO / "setup.sh"
 
@@ -27,38 +25,70 @@ BASE_TOOLS = ("bash", "sh", "env", "uname", "grep", "awk", "sed", "head",
               "printf", "tr", "sort", "id", "stty", "tar", "chmod",
               "readlink")
 
-# `uv` is ALWAYS a stub, never the real binary, and asking for "uv" in
-# `tools` gets you this rather than a symlink.
-#
 # setup.sh runs `uv sync --project $REPO`. Symlinking the real uv would make
 # every test that reaches phase 3 write to the actual repo's .venv while
 # HOME points at tmp_path -- so uv would find no cache, re-download the
 # whole 3.14 toolchain per test, and mutate the working tree the suite is
-# running from. Tests never install software or hit the network.
+# running from.
 UV_STUB = """#!/bin/sh
 exit 0
 """
+
+# setup.sh's only two uses of curl are `curl | sh` (the uv installer) and
+# `curl | tar` (the 9.6 MB adsb-tui release). A real curl on the stubbed
+# PATH therefore means a test that reaches phase 4 downloads that release
+# from github.com -- which it did, for ten tests, until this stub existed:
+# genuine Mach-O arm64 binaries turned up in the tests' tmp HOMEs. The
+# suite must pass with no network at all.
+#
+# So this fails, loudly and non-fatally, exactly as an offline machine
+# would. A test that needs curl to *do* something passes its own fake in
+# `scripts`, which wins over this.
+CURL_STUB = """#!/bin/sh
+echo "curl stub: tests never reach the network (tests/test_setup.py)" >&2
+exit 1
+"""
+
+# Names that are ALWAYS a stub, never the real binary, however `tools`
+# asks for them. Being in `tools` still means "this tool is present on
+# PATH", which is what preflight reports and what install_prerequisites
+# branches on -- only the behaviour is faked.
+NEVER_REAL = {"uv": UV_STUB, "curl": CURL_STUB}
 
 
 def stub_path(tmp_path, *, tools=(), scripts=None):
     """A directory to use as the entire PATH.
 
-    `tools` are symlinked from the real system; `scripts` is a mapping of
-    name -> shell source for fakes and wins over both. Anything not named
-    is absent, which is how "ffmpeg is missing" is expressed.
+    `tools` are symlinked from the real system, except for the NEVER_REAL
+    names which get a stub; `scripts` is a mapping of name -> shell source
+    for fakes and wins over both. Anything not named is absent, which is
+    how "ffmpeg is missing" is expressed.
+
+    A tool that cannot be found on the host is an error rather than a
+    silent omission: "present" and "absent" select opposite branches of
+    setup.sh, so quietly dropping an unavailable tool would flip a test to
+    the branch it was written to prove is *not* taken, and pass.
     """
     d = tmp_path / "stub_bin"
     d.mkdir(exist_ok=True)
     for tool in (*BASE_TOOLS, *tools):
-        if tool == "uv":
-            continue  # never the real one; handled below
+        if tool in NEVER_REAL:
+            continue
         found = shutil.which(tool)
-        if found and not (d / tool).exists():
+        if found is None:
+            raise RuntimeError(
+                f"stub_path: {tool!r} is not installed on this host, so "
+                f"this test cannot express 'setup.sh sees {tool}'. Install "
+                f"it, or the test silently exercises the missing-tool "
+                f"branch instead."
+            )
+        if not (d / tool).exists():
             (d / tool).symlink_to(found)
-    if "uv" in tools and "uv" not in (scripts or {}):
-        p = d / "uv"
-        p.write_text(UV_STUB)
-        p.chmod(0o755)
+    for tool in tools:
+        if tool in NEVER_REAL and tool not in (scripts or {}):
+            p = d / tool
+            p.write_text(NEVER_REAL[tool])
+            p.chmod(0o755)
     for name, body in (scripts or {}).items():
         p = d / name
         if p.exists() or p.is_symlink():
@@ -73,15 +103,31 @@ def stub_path(tmp_path, *, tools=(), scripts=None):
     return d
 
 
-def run_setup(tmp_path, path_dir, *args, **env):
+# The braces to CURL_STUB's belt, and the only user of setup.sh's
+# KCGX_SETUP_RELEASE_URL seam. Every invocation in this file points the
+# release download at a host that does not exist, so even a curl that got
+# onto PATH by some future accident cannot fetch anything from github.com.
+# `.invalid` is reserved by RFC 2606 and can never resolve, and the scheme
+# stays https so the URL keeps the shape the recorder stubs match on.
+OFFLINE_RELEASE_URL = "https://kcgx-tests.invalid/never-fetched"
+
+
+def setup_env(tmp_path, path_dir, **env):
+    """The environment every invocation of setup.sh in this file gets."""
     home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
+    home.mkdir(exist_ok=True, parents=True)
     environ = {
         "PATH": str(path_dir),
         "HOME": str(home),
         "KCGX_SETUP_NO_LAUNCH": "1",
+        "KCGX_SETUP_RELEASE_URL": OFFLINE_RELEASE_URL,
     }
     environ.update({k: str(v) for k, v in env.items()})
+    return environ
+
+
+def run_setup(tmp_path, path_dir, *args, **env):
+    environ = setup_env(tmp_path, path_dir, **env)
     return subprocess.run(
         [str(SETUP), *args],
         env=environ, capture_output=True, text=True, timeout=120,
@@ -112,14 +158,7 @@ def run_setup_with_pty(tmp_path, path_dir, *args, cols, rows=24, timeout=30,
     stderr stay on ordinary pipes, so captured output is exact -- no tty
     echo or CRLF translation to account for.
     """
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    environ = {
-        "PATH": str(path_dir),
-        "HOME": str(home),
-        "KCGX_SETUP_NO_LAUNCH": "1",
-    }
-    environ.update({k: str(v) for k, v in env.items()})
+    environ = setup_env(tmp_path, path_dir, **env)
 
     master_fd, slave_fd = pty.openpty()
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ,
@@ -187,11 +226,7 @@ def test_pyenv_shims_are_flagged(tmp_path):
 
     result = subprocess.run(
         [str(SETUP), "--check"],
-        env={
-            "PATH": f"{shims}:{path_dir}",
-            "HOME": str(tmp_path / "home"),
-            "KCGX_SETUP_NO_LAUNCH": "1",
-        },
+        env=setup_env(tmp_path, f"{shims}:{path_dir}"),
         capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, "an advisory must not fail the check"
@@ -307,10 +342,7 @@ def test_declining_the_prompt_installs_nothing(tmp_path):
     )
     result = subprocess.run(
         [str(SETUP)], input="n\n",
-        env={
-            "PATH": str(path_dir), "HOME": str(tmp_path / "home"),
-            "KCGX_SETUP_NO_LAUNCH": "1", "BREW_LOG": str(log),
-        },
+        env=setup_env(tmp_path, path_dir, BREW_LOG=str(log)),
         capture_output=True, text=True, timeout=120,
     )
     # An absent brew.log alone is also what a premature die/exit before the
@@ -325,11 +357,6 @@ def test_declining_the_prompt_installs_nothing(tmp_path):
     assert result.returncode != 0, "the gate should catch what decline left missing"
     assert not log.exists(), "declining still installed something"
 
-
-CURL_RECORDER = """#!/bin/sh
-echo "$@" >> "$CURL_LOG"
-echo ":"
-"""
 
 CURL_FOR_UV_INSTALL = """#!/bin/sh
 echo "$@" >> "$CURL_LOG"
@@ -566,8 +593,7 @@ def test_missing_tmux_is_stopped_by_the_gate(tmp_path):
     path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"))
     result = subprocess.run(
         [str(SETUP)], input="n\n",
-        env={"PATH": str(path_dir), "HOME": str(tmp_path / "home"),
-             "KCGX_SETUP_NO_LAUNCH": "1"},
+        env=setup_env(tmp_path, path_dir),
         capture_output=True, text=True, timeout=120,
     )
     combined = result.stdout + result.stderr
@@ -589,8 +615,7 @@ def test_an_old_tmux_is_stopped_by_the_gate(tmp_path):
     )
     result = subprocess.run(
         [str(SETUP)], input="n\n",
-        env={"PATH": str(path_dir), "HOME": str(tmp_path / "home"),
-             "KCGX_SETUP_NO_LAUNCH": "1"},
+        env=setup_env(tmp_path, path_dir),
         capture_output=True, text=True, timeout=120,
     )
     combined = result.stdout + result.stderr
