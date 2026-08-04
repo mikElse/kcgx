@@ -246,3 +246,59 @@ def test_stty_wide_terminal_stays_quiet(tmp_path):
     )
     assert result.returncode == 0
     assert "note: this terminal" not in result.stdout
+
+
+BREW_RECORDER = """#!/bin/sh
+echo "$@" >> "$BREW_LOG"
+exit 0
+"""
+
+
+def test_missing_tools_are_installed_via_brew(tmp_path):
+    log = tmp_path / "brew.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "curl"),
+        scripts={"brew": BREW_RECORDER},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(log))
+    assert log.exists(), "brew was never called"
+    calls = log.read_text()
+    assert "ffmpeg" in calls
+    assert "tmux" in calls
+
+
+def test_nothing_is_installed_when_everything_is_present(tmp_path):
+    """Idempotence: the second run must be a no-op."""
+    log = tmp_path / "brew.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
+        scripts={"brew": BREW_RECORDER},
+    )
+    run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", BREW_LOG=str(log))
+    assert not log.exists(), "brew ran with nothing to install"
+
+
+def test_no_homebrew_stops_with_the_install_line(tmp_path):
+    """Installing a package manager unattended is beyond setup's remit."""
+    path_dir = stub_path(tmp_path, tools=("uv", "curl"))  # no brew, no ffmpeg
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "brew.sh" in combined, "the user needs the actual install command"
+
+
+def test_declining_the_prompt_installs_nothing(tmp_path):
+    log = tmp_path / "brew.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "curl"),
+        scripts={"brew": BREW_RECORDER},
+    )
+    result = subprocess.run(
+        [str(SETUP)], input="n\n",
+        env={
+            "PATH": str(path_dir), "HOME": str(tmp_path / "home"),
+            "KCGX_SETUP_NO_LAUNCH": "1", "BREW_LOG": str(log),
+        },
+        capture_output=True, text=True, timeout=120,
+    )
+    assert not log.exists(), "declining still installed something"

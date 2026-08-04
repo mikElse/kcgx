@@ -101,9 +101,63 @@ preflight() {
     say ""
 }
 
+# Homebrew formulae still needed, space separated. tmux counts as missing
+# when it is present but older than 3.1 -- upgrading is the same command.
+missing_formulae() {
+    local needed=""
+    have_command ffmpeg || needed="$needed ffmpeg"
+    tmux_new_enough || needed="$needed tmux"
+    printf '%s' "${needed# }"
+}
+
+install_prerequisites() {
+    local needed reply
+    needed="$(missing_formulae)"
+
+    if [ -z "$needed" ] && have_command uv; then
+        return 0
+    fi
+
+    say "Setup wants to install:"
+    [ -n "$needed" ] && say "  via Homebrew:  $needed"
+    have_command uv || say "  via astral.sh: uv"
+    say ""
+
+    if [ -z "${KCGX_SETUP_YES:-}" ]; then
+        printf 'Proceed? [y/N] '
+        # From stdin, not /dev/tty. setup.sh is always a file, so stdin is
+        # free -- and a /dev/tty read is untestable: under pytest there is
+        # no controlling terminal, so it would fail open and "decline"
+        # regardless of what the test typed, making the decline test pass
+        # for the wrong reason.
+        read -r reply || reply=""
+        case "$reply" in
+            [yY]|[yY][eE][sS]) ;;
+            *) say "Nothing installed."; return 0 ;;
+        esac
+    fi
+
+    if [ -n "$needed" ]; then
+        have_command brew || die \
+"Homebrew is needed to install:$needed
+Install it first, then run this again:
+  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"
+See https://brew.sh"
+        # Word splitting is intended: $needed is a list of formulae.
+        # shellcheck disable=SC2086
+        brew install $needed
+    fi
+
+    if ! have_command uv; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        PATH="$HOME/.local/bin:$PATH"
+    fi
+}
+
 if [ "${1:-}" = "--check" ]; then
     preflight
     exit 0
 fi
 
 preflight
+install_prerequisites
