@@ -301,4 +301,38 @@ def test_declining_the_prompt_installs_nothing(tmp_path):
         },
         capture_output=True, text=True, timeout=120,
     )
+    # An absent brew.log alone is also what a premature die/exit before the
+    # `read` would look like. Pin down that the script actually reached and
+    # took the decline branch: exit 0, and the "Nothing installed." message
+    # that only that branch prints.
+    assert result.returncode == 0
+    assert "Nothing installed." in result.stdout
     assert not log.exists(), "declining still installed something"
+
+
+CURL_RECORDER = """#!/bin/sh
+echo "$@" >> "$CURL_LOG"
+echo ":"
+"""
+
+
+def test_missing_uv_is_installed_via_astral_curl(tmp_path):
+    """The uv-install branch (`curl ... | sh`) is a separate code path from
+    the brew branch and every other test always stubs `uv` into `tools`,
+    so without this test the branch never runs at all.
+
+    `curl` is stubbed to record the URL it was asked for and to print a
+    harmless no-op (`:`) for the piped `sh` to execute -- the real
+    installer must never run and the network must never be reached. `sh`
+    itself is left alone: it is in BASE_TOOLS and other things depend on
+    it.
+    """
+    log = tmp_path / "curl.log"
+    path_dir = stub_path(
+        tmp_path, tools=("ffmpeg", "tmux"),
+        scripts={"curl": CURL_RECORDER},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(log))
+    assert result.returncode == 0
+    assert log.exists(), "curl was never called"
+    assert "https://astral.sh/uv/install.sh" in log.read_text()
