@@ -159,6 +159,54 @@ sync_project() {
     uv sync --project "$REPO" || die "uv sync failed; nothing was wired up."
 }
 
+link_launcher() {
+    local target="$REPO/bin/kcgx" link="$PREFIX/kcgx"
+    mkdir -p "$PREFIX"
+
+    if [ -L "$link" ]; then
+        # Already ours? Nothing to do. Somebody else's? Never clobber it.
+        #
+        # A plain string compare against what we would write, deliberately:
+        # resolving the link through `cd`/`pwd` inside a test is a command
+        # substitution that can fail under `set -e`, and anything that does
+        # not match exactly is treated as foreign. Conservative in the safe
+        # direction -- the cost of a false "foreign" is one message, the
+        # cost of a false "ours" is destroying somebody's launcher.
+        if [ "$(readlink "$link")" = "$target" ]; then
+            say "Launcher already linked."
+        else
+            die "$link already exists and points somewhere else.
+Remove it yourself if you want setup to manage it."
+        fi
+    elif [ -e "$link" ]; then
+        die "$link already exists and is not a symlink.
+Remove it yourself if you want setup to manage it."
+    else
+        ln -s "$target" "$link"
+        say "Linked $link -> $target"
+    fi
+
+    case ":$PATH:" in
+        *":$PREFIX:"*) ;;
+        *)
+            say ""
+            say "WARNING: $PREFIX is not on your PATH."
+            say "  Add this to your shell profile:"
+            say "      export PATH=\"\$HOME/.local/bin:\$PATH\""
+            say ""
+            say "  This is not just about typing \`kcgx\`. Ctrl-b a (the"
+            say "  airport picker) is bound to \`display-popup -E \"kcgx go\"\`,"
+            say "  which resolves kcgx by name through the tmux server's own"
+            say "  environment -- so without this the cockpit opens fine and"
+            say "  the picker silently does nothing."
+            say ""
+            say "  A running tmux server captured its environment when it"
+            say "  started, so restart it (kcgx stop) after changing PATH."
+            say ""
+            ;;
+    esac
+}
+
 if [ "${1:-}" = "--check" ]; then
     preflight
     exit 0
@@ -167,3 +215,4 @@ fi
 preflight
 install_prerequisites
 sync_project
+link_launcher
