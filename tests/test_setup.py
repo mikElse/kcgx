@@ -551,7 +551,18 @@ def test_an_existing_config_is_never_touched(tmp_path):
 
 
 def test_missing_tmux_is_stopped_by_the_gate(tmp_path):
-    """Declining the prompt with tmux absent must not reach the launcher."""
+    """Declining the prompt with tmux absent must not reach the launcher.
+
+    `preflight` runs unconditionally, before the gate, and always prints a
+    tmux row -- so a bare "tmux" (or "3.1") substring check would pass
+    even if the gate were deleted outright, or if the script died for an
+    unrelated reason anywhere after preflight. Assert on the gate's own
+    die message instead: "cannot open without these" is text only
+    `launch_gate` emits, and "tmux(3.1+)" is the literal token it builds
+    into `$blocked` -- distinct from preflight's row text ("missing" / "too
+    old (needs 3.1+)", with a space before the parenthesis, not glued to
+    "tmux").
+    """
     path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"))
     result = subprocess.run(
         [str(SETUP)], input="n\n",
@@ -559,12 +570,19 @@ def test_missing_tmux_is_stopped_by_the_gate(tmp_path):
              "KCGX_SETUP_NO_LAUNCH": "1"},
         capture_output=True, text=True, timeout=120,
     )
+    combined = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "tmux" in result.stdout + result.stderr
+    assert "cannot open without these" in combined
+    assert "tmux(3.1+)" in combined
 
 
 def test_an_old_tmux_is_stopped_by_the_gate(tmp_path):
-    """bin/kcgx refuses below 3.1, so setup must not hand off to it."""
+    """bin/kcgx refuses below 3.1, so setup must not hand off to it.
+
+    See the sibling test above for why the assertions target the gate's
+    own die message rather than a substring preflight's row already
+    prints.
+    """
     path_dir = stub_path(
         tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"),
         scripts={"tmux": "#!/bin/sh\necho 'tmux 2.8'\n"},
@@ -575,8 +593,10 @@ def test_an_old_tmux_is_stopped_by_the_gate(tmp_path):
              "KCGX_SETUP_NO_LAUNCH": "1"},
         capture_output=True, text=True, timeout=120,
     )
+    combined = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "3.1" in result.stdout + result.stderr
+    assert "cannot open without these" in combined
+    assert "tmux(3.1+)" in combined
 
 
 def test_a_complete_environment_reaches_the_launch(tmp_path):
@@ -628,3 +648,27 @@ def test_no_cargo_call_appears_in_the_script(tmp_path):
     source = "\n".join(code)
     assert "cargo" not in source
     assert "rustc" not in source
+
+
+def test_exec_hands_off_by_absolute_path(tmp_path):
+    """Load-bearing, not cosmetic: a user who has not reloaded their shell
+    profile yet must still get a cockpit on this first run, which only
+    works if the hand-off resolves `bin/kcgx` by absolute path rather than
+    trusting PATH to contain it already.
+
+    No test exercises the `exec` line itself -- every test in this file
+    sets KCGX_SETUP_NO_LAUNCH=1, so the script always exits before
+    reaching it. This is the cheap, static substitute: assert the source
+    on disk, comments stripped first exactly as in the cargo test above,
+    so a comment mentioning the bare name cannot trip it.
+    """
+    code = [
+        line for line in SETUP.read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    exec_lines = [line for line in code if line.strip().startswith("exec ")]
+    assert exec_lines, "no exec line found in setup.sh"
+    assert all('"$REPO/' in line for line in exec_lines), (
+        f"exec must hand off by absolute $REPO path, not a bare command "
+        f"name resolved through PATH: {exec_lines}"
+    )
