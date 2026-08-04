@@ -315,10 +315,14 @@ def test_declining_the_prompt_installs_nothing(tmp_path):
     )
     # An absent brew.log alone is also what a premature die/exit before the
     # `read` would look like. Pin down that the script actually reached and
-    # took the decline branch: exit 0, and the "Nothing installed." message
-    # that only that branch prints.
-    assert result.returncode == 0
+    # took the decline branch via the "Nothing installed." message that
+    # only it prints -- not the exit code: ffmpeg and tmux are genuinely
+    # absent from this PATH, so declining leaves them missing and the run
+    # now correctly fails later, at the launch gate (see
+    # test_missing_tmux_is_stopped_by_the_gate). That downstream failure is
+    # the gate doing its job, not evidence against the decline branch.
     assert "Nothing installed." in result.stdout
+    assert result.returncode != 0, "the gate should catch what decline left missing"
     assert not log.exists(), "declining still installed something"
 
 
@@ -544,3 +548,83 @@ def test_an_existing_config_is_never_touched(tmp_path):
     combined = (result.stdout + result.stderr).lower()
     assert "leaving it alone" in combined, "write_adsb_config never ran"
     assert config.read_text() == "theme = \"mono\"\n"
+
+
+def test_missing_tmux_is_stopped_by_the_gate(tmp_path):
+    """Declining the prompt with tmux absent must not reach the launcher."""
+    path_dir = stub_path(tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"))
+    result = subprocess.run(
+        [str(SETUP)], input="n\n",
+        env={"PATH": str(path_dir), "HOME": str(tmp_path / "home"),
+             "KCGX_SETUP_NO_LAUNCH": "1"},
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode != 0
+    assert "tmux" in result.stdout + result.stderr
+
+
+def test_an_old_tmux_is_stopped_by_the_gate(tmp_path):
+    """bin/kcgx refuses below 3.1, so setup must not hand off to it."""
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "curl", "mktemp"),
+        scripts={"tmux": "#!/bin/sh\necho 'tmux 2.8'\n"},
+    )
+    result = subprocess.run(
+        [str(SETUP)], input="n\n",
+        env={"PATH": str(path_dir), "HOME": str(tmp_path / "home"),
+             "KCGX_SETUP_NO_LAUNCH": "1"},
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode != 0
+    assert "3.1" in result.stdout + result.stderr
+
+
+def test_a_complete_environment_reaches_the_launch(tmp_path):
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={"curl": CURL_RECORDER},
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1",
+                       CURL_LOG=str(tmp_path / "c.log"))
+    assert result.returncode == 0
+    # The gate's own message, not merely the string "kcgx" -- which appears
+    # in the symlink line long before the gate and would pass either way.
+    assert "Setup complete" in result.stdout
+
+
+def test_setup_never_invokes_cargo(tmp_path):
+    """Building adsb-tui from source pulled 4,103 MB of Rust toolchain onto
+    the development machine. The published release exists to prevent that,
+    so a cargo call is a regression, not a fallback."""
+    log = tmp_path / "cargo.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "mktemp"),
+        scripts={
+            "curl": CURL_FAILS,   # worst case: the download failed
+            "cargo": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
+            "rustc": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
+        },
+    )
+    result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1")
+    # An absent cargo.log alone is also what a premature die/exit before
+    # install_adsb ever ran would look like. Pin down that the script
+    # actually ran far enough to have called cargo if it were going to.
+    assert result.returncode == 0, "setup did not run to completion"
+    assert "Setup complete" in result.stdout
+    assert not log.exists(), "setup fell back to building from source"
+
+
+def test_no_cargo_call_appears_in_the_script(tmp_path):
+    """Belt and braces: the test above only covers paths it exercises.
+
+    Comments are stripped first. The whole point of this constraint is
+    worth writing down in the script, and a naive substring check would
+    turn documenting it into a test failure.
+    """
+    code = [
+        line for line in SETUP.read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    source = "\n".join(code)
+    assert "cargo" not in source
+    assert "rustc" not in source
