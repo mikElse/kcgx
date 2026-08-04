@@ -268,3 +268,31 @@ sync_project
 link_launcher
 install_adsb
 write_adsb_config
+
+# Re-checked rather than trusted from phase 1: the prompt may have been
+# declined, or Homebrew may have failed. Launching into a failure the
+# script already knew about would be worse than stopping here.
+launch_gate() {
+    local blocked=""
+    have_command ffmpeg || blocked="$blocked ffmpeg"
+    tmux_new_enough || blocked="$blocked tmux(3.1+)"
+    [ -z "$blocked" ] && return 0
+
+    say ""
+    die "still missing:$blocked
+The cockpit cannot open without these. Install them and run this again:
+  brew install$blocked"
+}
+
+launch_gate
+
+say ""
+say "Setup complete. Opening the cockpit..."
+
+if [ -n "${KCGX_SETUP_NO_LAUNCH:-}" ]; then
+    exit 0
+fi
+
+# By absolute path, not by name: a PATH the user has not reloaded yet must
+# not stop the cockpit opening on this first run.
+exec "$REPO/bin/kcgx"
