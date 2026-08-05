@@ -125,6 +125,7 @@ class SquelchApp(App):
         sessions: Sequence,
         *,
         feed_loader: Callable[[], list[Feed]] | None = None,
+        feed_opener: Callable[[Feed], Any] | None = None,
         radar_theme: RadarTheme | None = None,
         mixer: Any = None,
     ) -> None:
@@ -132,6 +133,10 @@ class SquelchApp(App):
         self._config = config
         self._sessions = list(sessions)
         self._feed_loader = feed_loader
+        # Builds and returns an unstarted session for a feed the stack does
+        # not have. None outside a real run, where opening one has nowhere
+        # to get a mixer channel from.
+        self._feed_opener = feed_opener
         self._selected = 0
         self._solo = Solo()
         self._resorter = Resorter()
@@ -343,19 +348,57 @@ class SquelchApp(App):
         self._apply_selection()
 
     def jump_to_feed(self, feed) -> None:
-        """Move the selection to `feed`'s row.
+        """Move the selection to `feed`'s row, opening it if it is not open.
 
         The picker used to exist to report an ident, which stopped making
         sense when the row stopped showing one. What it is good for now is
         finding a frequency quickly -- which matters more once activity
         sorting is moving rows around.
+
+        Opening is the other half, and it is what makes `f` a real recovery
+        from a failed startup rather than a suggestion. When LiveATC's
+        listing is refused at launch, squelch opens the configured feed
+        alone (or nothing) and says "press f to retry". Pressing `f`
+        refetches the listing and usually succeeds -- but every feed it
+        turned up then answered "is not open", which is true, unhelpful,
+        and the end of the road short of restarting the app.
         """
         for index, session in enumerate(self._sessions):
             if session.feed.ident == feed.ident:
                 self._selected = index
                 self._apply_selection()
                 return
-        self.warn(f"{feed.ident} is not open")
+        self.open_feed(feed)
+
+    def open_feed(self, feed) -> None:
+        """Add a feed to the running stack, metering and audible.
+
+        Audible rather than muted: this is only reached by picking a feed
+        that is not open, which is an explicit request to hear it -- and
+        arriving at a new muted row among a dozen others is indistinguishable
+        from nothing having happened.
+        """
+        if self._feed_opener is None:
+            self.warn(f"{feed.ident} is not open")
+            return
+        try:
+            session = self._feed_opener(feed)
+        except Exception as exc:  # a dead feed must not take the app with it
+            self.warn(f"could not open {feed.ident}: {exc}")
+            return
+
+        self._sessions.append(session)
+        row = FeedRow(session, classes="feed")
+        self._rows[id(session)] = row
+        if self._feed_list is not None:
+            self._feed_list.mount(row)
+        # Started after mounting, so its first state change has a row to
+        # land on -- the session's opening act can be a warning.
+        session.start()
+        self._selected = len(self._sessions) - 1
+        self._apply_selection()
+        self._refresh_header()
+        self.warn(f"opened {feed.ident}")
 
     def action_cursor_down(self) -> None:
         if not self._sessions:

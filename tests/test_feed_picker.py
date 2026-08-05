@@ -371,3 +371,171 @@ async def test_the_picker_still_shows_idents_as_secondary_text():
         assert len(labels) == len(FEEDS), (
             "every picker row must mark its ident as secondary text"
         )
+
+
+# ---------------------------------------------------------------------------
+# Opening a feed that is not open
+#
+# `f` is what squelch tells you to press when the feed list could not be had
+# at launch -- "press f to retry". It refetches, and usually succeeds, since
+# LiveATC's refusal is a coin flip rather than an answer. But every feed the
+# retry turned up then answered "kpdx_gnd is not open", which is true, and
+# leaves restarting the app as the only way to act on a successful retry.
+
+
+
+def _log_text(app):
+    """Everything in the message log, as one string.
+
+    The warnings are mounted Static widgets rather than notifications -- see
+    SquelchApp.warn for why. `Static.content` is the public accessor in this
+    Textual version; older releases exposed `renderable`, and the private
+    `_content` this first reached for belongs to Widget, not Static, so it
+    read back empty for every message.
+    """
+    return " ".join(
+        str(getattr(w, "content", "")) for w in app.query_one("#messages").children
+    )
+
+
+class _OpenableSession(_FakeSession):
+    """A session that records having been started, like the real one does.
+
+    Carries the full surface FeedRow reads -- level, activity, ambient,
+    soloed -- which `_FakeSession` does not: rows for the sessions the app
+    was constructed with are built during `compose`, before the timers that
+    touch those attributes are running, and a row mounted mid-session is not.
+    """
+
+    def __init__(self, ident, label):
+        super().__init__(ident, label)
+        self.started = False
+        self.stopped = False
+        self.muted = False
+        self.level = -96.0
+        self.activity = 0.0
+        self.ambient = False
+        self.soloed = False
+
+    def toggle_ambient(self):
+        self.ambient = not self.ambient
+        return self.ambient
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+
+def make_app_with_opener(n=0, opener=None, feeds=None):
+    opened = []
+
+    def default_opener(feed):
+        session = _OpenableSession(feed.ident, feed.label)
+        opened.append(session)
+        return session
+
+    app = SquelchApp(
+        Config(),
+        _sessions(n),
+        feed_loader=lambda: feeds if feeds is not None else FEEDS,
+        feed_opener=opener or default_opener,
+    )
+    app.opened = opened
+    return app
+
+
+async def test_picking_a_feed_that_is_not_open_opens_it():
+    """The recovery the "press f to retry" hint promises."""
+    app = make_app_with_opener(n=0)          # nothing open at all
+    async with app.run_test(size=SIZE) as pilot:
+        await open_picker(pilot, app)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert len(app.opened) == 1, "no session was built"
+    assert app.opened[0].feed.ident == FEEDS[0].ident
+    assert app.opened[0].started, "the session was never started"
+    assert app._sessions[-1] is app.opened[0], "not added to the stack"
+
+
+async def test_an_opened_feed_is_audible():
+    """Arriving at a new muted row among a dozen others is indistinguishable
+    from nothing having happened, and picking it was a request to hear it.
+    """
+    app = make_app_with_opener(n=0)
+    async with app.run_test(size=SIZE) as pilot:
+        await open_picker(pilot, app)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.opened[0].muted is False
+
+
+async def test_an_opened_feed_gets_a_row_and_the_selection():
+    app = make_app_with_opener(n=2)
+    async with app.run_test(size=SIZE) as pilot:
+        before = len(app.query("FeedRow"))
+        await open_picker(pilot, app)
+        # FEEDS[2] is the one _sessions(2) did not cover.
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        after = len(app.query("FeedRow"))
+
+    assert app.opened and app.opened[0].feed.ident == FEEDS[2].ident
+    assert after == before + 1, "no row was mounted for the opened feed"
+    assert app._sessions[app._selected] is app.opened[0], "selection did not follow"
+
+
+async def test_picking_a_feed_that_is_already_open_does_not_reopen_it():
+    """The picker's original job. Jumping must stay a jump."""
+    app = make_app_with_opener(n=3)
+    async with app.run_test(size=SIZE) as pilot:
+        await open_picker(pilot, app)
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.opened == [], "reopened a feed that was already in the stack"
+    assert app._sessions[app._selected].feed.ident == FEEDS[1].ident
+
+
+async def test_a_feed_that_will_not_open_warns_instead_of_crashing():
+    """One dead feed must not take the app down -- that is the rule
+    everywhere else in squelch, and opening one late is no different.
+    """
+    def explode(feed):
+        raise RuntimeError("ffmpeg said no")
+
+    # n=0, so the first row in the picker is genuinely not open. With a
+    # session already carrying FEEDS[0]'s ident, enter would jump to it and
+    # the opener would never be called.
+    app = make_app_with_opener(n=0, opener=explode)
+    async with app.run_test(size=SIZE) as pilot:
+        await open_picker(pilot, app)
+        await pilot.press("enter")
+        await pilot.pause()
+        text = _log_text(app)
+        # Inside the block: run_test stops the app on the way out, so this
+        # reads False afterwards whether or not the open took it down.
+        assert app.is_running, "a failed open killed the app"
+
+    assert "ffmpeg said no" in text, text
+
+
+async def test_without_an_opener_it_says_so_rather_than_pretending():
+    """SquelchApp is constructed without one in tests and any other context
+    with no mixer to hang a channel off. Saying nothing would read as the
+    keypress having been ignored.
+    """
+    app = SquelchApp(Config(), _sessions(0), feed_loader=lambda: FEEDS)
+    async with app.run_test(size=SIZE) as pilot:
+        await open_picker(pilot, app)
+        await pilot.press("enter")
+        await pilot.pause()
+        text = _log_text(app)
+
+    assert "not open" in text, text

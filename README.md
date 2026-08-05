@@ -35,7 +35,7 @@ cd kcgx
 ```
 
 That is the whole install, on **macOS or Linux**. `setup.sh` works through
-eight steps, asks before each one that changes anything, and finishes by
+nine steps, asks before each one that changes anything, and finishes by
 running every moving part to prove the cockpit will open. It is idempotent,
 so the second run — the one you do when you think something went wrong —
 ends where the first did.
@@ -79,7 +79,7 @@ into `.venv/` here in the repo. See [A note on `python`](#a-note-on-python)
 for what that means if you have pyenv, and for the one place a bare
 `python` will surprise you.
 
-### The eight steps
+### The nine steps
 
 | | Step | Asks before |
 |---|---|---|
@@ -90,16 +90,24 @@ for what that means if you have pyenv, and for the one place a bare
 | 5 | The launcher on your `PATH` | appending to your shell profile |
 | 6 | `adsb-tui` | downloading it, licence named |
 | 7 | Where the radar gets its aircraft | writing its config |
-| 8 | Checking it works | — |
+| 8 | The LiveATC feed list | fetching it |
+| 9 | Checking it works | — |
 
 ```bash
 ./setup.sh --check     # step 1 alone, then exit
-./setup.sh --verify    # step 8 alone, against this machine
+./setup.sh --verify    # step 9 alone, against this machine
 ./setup.sh --yes       # take every default; for unattended installs
 ./setup.sh --help
 ```
 
-**Step 8 runs things rather than looking for files.** It executes `ffmpeg`,
+**Step 8 fills squelch's feed cache** before the first launch needs it.
+LiveATC refuses roughly three requests in four, and a cold launch that
+loses that coin flip opens on a single feed — see
+[when it opens on one feed](#when-it-opens-on-one-feed). Out here nobody is
+waiting on a UI, so it can retry twenty times instead of eight. It is not
+fatal: the feed list is a week-long cache, not a dependency.
+
+**Step 9 runs things rather than looking for files.** It executes `ffmpeg`,
 `tmux` and `adsb-tui`, imports `numpy`/`sounddevice`/`textual` through the
 project's own interpreter, starts `squelch`, counts audio output devices,
 and reaches LiveATC and airplanes.live. An install that reports success and
@@ -312,6 +320,7 @@ cd kcgx
 uv run squelch                       # uses the config file / defaults
 uv run squelch --feed kpdx3_twr      # override the feed ident
 uv run squelch --icao KSEA           # override the airport used by the feed picker (`f`)
+uv run squelch --refresh-feeds       # fill the feed cache and exit; no UI, no audio
 ```
 
 From anywhere else, name the repo: `uv run --project ~/src/kcgx squelch`.
@@ -702,13 +711,20 @@ that is live.
 
 ### Feed picker
 
-Pressing `f` lists the feeds LiveATC publishes for the configured airport.
-Since squelch already opens all of them, the picker is a jump list rather
-than a switch: selecting a row moves the selection to that feed and scrolls
-it into view, which is the quick way to a specific frequency. If the list
-can't be loaded, a warning appears in the message log instead of a crash.
+Pressing `f` lists the feeds LiveATC publishes for the configured airport
+and jumps to the one you choose — the quick way to a specific frequency,
+which matters more once activity sorting is moving rows around.
+
+**If the feed you pick is not open, it opens it**, audible, with its own
+row and meter. That is what makes `f` a real recovery rather than a
+suggestion: when the listing is refused at launch (see below) squelch opens
+the configured feed alone and says "press f to retry", and pressing `f`
+usually gets through. Before, every feed the retry turned up answered
+"kpdx_gnd is not open" — true, and the end of the road short of restarting.
+
 The fetch runs off the event loop, so a slow or hanging LiveATC request
-never stalls playback or the UI.
+never stalls playback or the UI. If the list can't be loaded at all, a
+warning appears in the message log instead of a crash.
 
 ## Feed discovery and LiveATC's bot protection
 
@@ -719,12 +735,53 @@ allowed through anyway**. (The `/play/*.pls` endpoints squelch actually
 streams from are not protected, which is why audio works regardless.)
 
 squelch therefore treats a 403 on the listing as a coin flip to re-flip,
-not an answer — up to five attempts with backoff — and caches the result
-for a week under `~/.cache/squelch/`. A normal launch needs no request at
-all. When a refresh is due and every attempt is refused, it falls back to
-the cached list (feed lists change on the order of months) and only opens
-the single configured feed if there is no cache at all. Each of those
-fallbacks says so in the message log.
+not an answer, and caches the result for a week under `~/.cache/squelch/`.
+**A normal launch makes no request at all.** The retry budget depends on
+what a failure costs:
+
+| | Attempts | Failure rate | Because |
+|---|---|---|---|
+| Launch, cache present | 5 | ~24% | costs a week-old list |
+| Launch, no cache | 8 | ~10% | costs an empty or one-feed pane |
+| `--refresh-feeds` | 20 | ~0.3% | costs a wall clock nobody is watching |
+
+When a refresh is due and every attempt is refused, it falls back to the
+cached list — feed lists change on the order of months — and only opens the
+single configured feed if there is no cache at all. Each of those fallbacks
+says so in the message log.
+
+### When it opens on one feed
+
+This is the failure worth recognising, because it does not look like one.
+On a **first** launch at an airport there is no cache, so a run of refusals
+leaves squelch with nothing to open but `feed` from the config. At the
+default airport that is `kpdx3_twr`, so the pane comes up showing KPDX
+Tower and nothing else, as though that were all LiveATC had:
+
+```
+⚠ KPDX — could not reach LiveATC's listing (HTTP Error 403: Forbidden);
+  opening kpdx3_twr only; press f to retry
+```
+
+Press `f`. It refetches the listing, and now that you have the picker open
+you can open any feed it found. Or fill the cache from outside the app,
+which is what `setup.sh` step 8 does for you:
+
+```bash
+uv run --project . squelch --refresh-feeds              # the configured airport
+uv run --project . squelch --refresh-feeds --icao KSEA  # any other
+```
+
+That is worth running by hand after `kcgx go` points you at a new airport
+for the first time — the cache is per-ICAO, so a new airport is a cold one.
+It needs no audio device and no `ffmpeg`; it fetches, writes the cache, and
+prints what it found.
+
+**squelch will never fall back to a different airport's audio.** The
+one-feed fallback only fires when the configured feed's ident starts with
+the configured ICAO, so retargeting to KORD and losing the listing gives
+you an empty pane with a message rather than Portland tower under a header
+reading KORD.
 
 ## Cost
 

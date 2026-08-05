@@ -14,6 +14,7 @@ from squelch.app import SquelchApp
 from squelch.config import Config, ConfigError, load_config
 from squelch.feeds import (
     CACHE_TTL_SECONDS,
+    REFRESH_ATTEMPTS,
     Feed,
     FeedError,
     cached_age_seconds,
@@ -53,7 +54,55 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--feed", help="LiveATC feed ident to leave unmuted, e.g. kpdx3_twr"
     )
     parser.add_argument("--icao", help="Airport whose feeds to open")
+    parser.add_argument(
+        "--refresh-feeds",
+        action="store_true",
+        help="fetch and cache the airport's feed list, then exit; no UI, no audio",
+    )
     return parser.parse_args(argv)
+
+
+def refresh_feeds(
+    config: Config,
+    *,
+    out: Callable[[str], None] = print,
+    fetch: Callable[..., list[Feed]] = fetch_feeds,
+    cache_dir: Path | None = None,
+) -> int:
+    """Fill the feed cache for `config.icao` from outside the UI.
+
+    This exists because of where the waiting can happen. LiveATC fronts its
+    listing with Cloudflare and refuses roughly three requests in four, so a
+    cold launch is a coin flip: squelch tries eight times and then opens the
+    single configured feed, which at the default airport reads as "squelch
+    only found KPDX tower" and gives no sign that the other eleven feeds
+    exist. More attempts at launch is not the answer -- that trades a wrong
+    pane for a pane that takes a minute to appear.
+
+    Out here nobody is waiting on a UI, so it can afford to be patient. Once
+    this has run, launches read the cache and make no request at all.
+    """
+    out(f"Fetching the LiveATC feed list for {config.icao}...")
+    try:
+        feeds = fetch(
+            config.icao, cache_dir=cache_dir, attempts=REFRESH_ATTEMPTS
+        )
+    except FeedError:
+        out(f"LiveATC publishes no feeds for {config.icao}.")
+        return 1
+    except Exception as exc:
+        out(f"Could not reach LiveATC's listing for {config.icao}: {exc}")
+        out("This is usually its bot protection rather than anything local.")
+        out("Nothing was cached; try again, or just start squelch.")
+        return 1
+    if not feeds:
+        out(f"LiveATC publishes no feeds for {config.icao}.")
+        return 1
+    write_cached_feeds(config.icao, feeds, directory=cache_dir)
+    out(f"Cached {len(feeds)} feed(s) for {config.icao}:")
+    for feed in feeds:
+        out(f"  {feed.ident:<18} {feed.label}")
+    return 0
 
 
 def safe_call(app: Any, func: Callable[..., None], *args: Any) -> None:
@@ -109,10 +158,16 @@ def _no_feeds(
     # The `config.icao and` guard is load-bearing -- see the docstring; an
     # empty ICAO would match every feed. Its absence on config.feed is not
     # an oversight.
-    if config.icao and config.feed.lower().startswith(config.icao.lower()):
-        warn(f"{config.icao} — {reason}; opening {config.feed}")
-        return [Feed(ident=config.feed, label=config.feed)]
+    # The hint belongs on both branches. It used to be on the second only,
+    # so the case that actually happens on a first launch -- default config,
+    # default airport, Cloudflare refusing the listing -- said "opening
+    # kpdx3_twr" and nothing else. One feed out of twelve, no reason given
+    # for the other eleven, and no suggestion that anything could be done
+    # about it.
     tail = "; press f to retry" if retryable else ""
+    if config.icao and config.feed.lower().startswith(config.icao.lower()):
+        warn(f"{config.icao} — {reason}; opening {config.feed} only{tail}")
+        return [Feed(ident=config.feed, label=config.feed)]
     warn(f"{config.icao} — {reason}{tail}")
     return []
 
@@ -142,7 +197,11 @@ def load_feeds(
             return cached
 
     try:
-        feeds = fetch(config.icao)
+        # cache_dir threaded through deliberately: fetch_feeds picks its
+        # retry budget from whether a cache exists, and reading a different
+        # directory than this function writes makes it choose the cold
+        # budget for a warm airport, or the reverse.
+        feeds = fetch(config.icao, cache_dir=cache_dir)
     except FeedError:
         # The page loaded and had no feeds on it. Retrying will not
         # conjure one, so do not suggest it.
@@ -192,7 +251,7 @@ def picker_feeds(
     feeds" is useless. A stale list is a far better answer than an error.
     """
     try:
-        feeds = fetch(config.icao)
+        feeds = fetch(config.icao, cache_dir=cache_dir)
     except Exception:
         return read_cached_feeds(config.icao, directory=cache_dir) or []
     if feeds:
@@ -268,6 +327,11 @@ def main(
     if args.icao:
         config = replace(config, icao=args.icao)
 
+    # Before the ffmpeg check: filling the cache needs no decoder, and a
+    # machine part-way through setup should still be able to warm it.
+    if args.refresh_feeds:
+        return refresh_feeds(config)
+
     if which("ffmpeg") is None:
         print(f"squelch: {FFMPEG_MISSING}", file=sys.stderr)
         return 2
@@ -295,10 +359,21 @@ def main(
     # with the other startup warnings once the UI is up.
     mixer.start()
     report_audio_failure(mixer, pending.append)
+    def open_feed(feed: Feed) -> Any:
+        """An unstarted session for a feed the stack does not have.
+
+        Its own mixer channel, unmuted: the only route here is picking a
+        feed that is not open, which is a request to hear it. The app
+        mounts the row and starts it.
+        """
+        return sessions_builder([feed], replace(config, feed=feed.ident),
+                                events, mixer=mixer)[0]
+
     app = app_factory(
         config,
         sessions,
         feed_loader=lambda: picker_feeds(config),
+        feed_opener=open_feed,
         mixer=mixer,
         # Defaults to the real os.environ and subprocess.run, and does
         # nothing at all when KCGX_RADAR_PANE is unset -- so this is safe
@@ -324,7 +399,10 @@ def main(
         # first -- the callback reads the channels the sessions are still
         # writing to.
         mixer.stop()
-        for session in sessions:
+        # app._sessions, not the local: a feed opened from the picker after
+        # startup is not in the list built above, and leaving it out leaks
+        # an ffmpeg process and a thread per feed opened that way.
+        for session in getattr(app, "_sessions", sessions) or sessions:
             session.stop()
     return 0
 
