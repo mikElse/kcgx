@@ -10,11 +10,17 @@ from squelch.__main__ import (
     load_feeds,
     main,
     parse_args,
+    refresh_feeds,
     report_audio_failure,
     safe_call,
 )
 from squelch.config import Config
-from squelch.feeds import Feed
+from squelch.feeds import (
+    COLD_FETCH_ATTEMPTS,
+    REFRESH_ATTEMPTS,
+    Feed,
+    read_cached_feeds,
+)
 from squelch.mixer import Mixer
 from squelch.session import FeedSession
 
@@ -46,7 +52,7 @@ def test_feed_and_icao_overrides():
 def test_load_feeds_returns_everything_the_airport_publishes(tmp_path):
     warnings = []
     feeds = load_feeds(
-        Config(), warn=warnings.append, fetch=lambda icao: FEEDS, cache_dir=tmp_path
+        Config(), warn=warnings.append, fetch=lambda icao, **_: FEEDS, cache_dir=tmp_path
     )
     assert feeds == FEEDS
     assert warnings == []
@@ -55,7 +61,7 @@ def test_load_feeds_returns_everything_the_airport_publishes(tmp_path):
 def test_load_feeds_falls_back_to_the_configured_feed_when_discovery_fails(tmp_path):
     """An empty pane is worse than one known-good feed."""
 
-    def boom(icao):
+    def boom(icao, **_):
         raise RuntimeError("network down")
 
     warnings = []
@@ -75,7 +81,7 @@ def test_load_feeds_falls_back_when_the_airport_lists_nothing(tmp_path):
     feeds = load_feeds(
         Config(feed="kpdx3_twr"),
         warn=warnings.append,
-        fetch=lambda i: [],
+        fetch=lambda i, **_: [],
         cache_dir=tmp_path,
     )
     assert [f.ident for f in feeds] == ["kpdx3_twr"]
@@ -287,7 +293,7 @@ def test_a_fresh_cache_is_used_without_hitting_the_network(tmp_path):
     write_cached_feeds("KPDX", FEEDS, directory=tmp_path)
     calls = []
 
-    def fetch(icao):
+    def fetch(icao, **_):
         calls.append(icao)
         raise AssertionError("must not fetch when the cache is fresh")
 
@@ -304,7 +310,7 @@ def test_a_successful_fetch_populates_the_cache(tmp_path):
     load_feeds(
         Config(icao="KPDX"),
         warn=[].append,
-        fetch=lambda icao: FEEDS,
+        fetch=lambda icao, **_: FEEDS,
         cache_dir=tmp_path,
     )
     assert read_cached_feeds("KPDX", directory=tmp_path) == FEEDS
@@ -322,7 +328,7 @@ def test_a_stale_cache_beats_falling_back_to_one_feed(tmp_path):
     ancient = time.time() - (30 * 24 * 60 * 60)
     os.utime(path, (ancient, ancient))
 
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     warnings = []
@@ -337,7 +343,7 @@ def test_a_stale_cache_beats_falling_back_to_one_feed(tmp_path):
 
 
 def test_no_cache_and_a_blocked_fetch_still_opens_the_configured_feed(tmp_path):
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     warnings = []
@@ -366,7 +372,7 @@ def test_picker_refreshes_but_falls_back_to_the_cache(tmp_path):
 
     write_cached_feeds("KPDX", FEEDS, directory=tmp_path)
 
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     assert (
@@ -380,7 +386,7 @@ def test_picker_prefers_a_successful_refresh_and_recaches_it(tmp_path):
 
     write_cached_feeds("KPDX", [Feed("old", "Old")], directory=tmp_path)
     fresh = picker_feeds(
-        Config(icao="KPDX"), fetch=lambda icao: FEEDS, cache_dir=tmp_path
+        Config(icao="KPDX"), fetch=lambda icao, **_: FEEDS, cache_dir=tmp_path
     )
     assert fresh == FEEDS
     assert read_cached_feeds("KPDX", directory=tmp_path) == FEEDS
@@ -390,7 +396,7 @@ def test_picker_returns_empty_when_there_is_no_cache_and_no_network(tmp_path):
     """Empty is what makes the app say 'could not load feeds'."""
     from squelch.__main__ import picker_feeds
 
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     assert picker_feeds(Config(icao="KPDX"), fetch=blocked, cache_dir=tmp_path) == []
@@ -404,7 +410,7 @@ def test_picker_returns_empty_when_there_is_no_cache_and_no_network(tmp_path):
 
 
 def test_a_failed_lookup_at_a_new_airport_opens_nothing(tmp_path):
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     warnings = []
@@ -419,7 +425,7 @@ def test_a_failed_lookup_at_a_new_airport_opens_nothing(tmp_path):
 
 
 def test_the_configured_feed_is_still_used_at_its_own_airport(tmp_path):
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     warnings = []
@@ -441,7 +447,7 @@ def test_an_empty_icao_does_not_trust_any_feed_as_its_own(tmp_path):
     reach this: `_checked` only validates that `icao` is a string, not
     that it's non-empty.
     """
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     warnings = []
@@ -455,7 +461,7 @@ def test_an_empty_icao_does_not_trust_any_feed_as_its_own(tmp_path):
 
 
 def test_an_unreachable_listing_says_it_can_be_retried(tmp_path):
-    def blocked(icao):
+    def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
 
     warnings = []
@@ -472,7 +478,7 @@ def test_an_airport_liveatc_does_not_cover_does_not_suggest_retrying(tmp_path):
     """Retrying a field with no feeds will never produce one."""
     from squelch.feeds import FeedError
 
-    def empty(icao):
+    def empty(icao, **_):
         raise FeedError("no feeds found on page")
 
     warnings = []
@@ -585,3 +591,150 @@ def test_no_warning_when_the_device_opened():
     mixer.start(stream_factory=lambda **kw: FakeStream(**kw))
     report_audio_failure(mixer, warnings.append)
     assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# --refresh-feeds
+#
+# The cold-launch problem, moved somewhere it can be solved. LiveATC refuses
+# roughly three requests in four, so squelch's eight attempts fail about 10%
+# of the time -- and when they do, the pane opens on the single configured
+# feed with nothing said about the other eleven. Raising the launch budget
+# trades a wrong pane for a slow one. This runs where nobody is waiting.
+
+def test_refresh_feeds_caches_what_it_finds(tmp_path):
+    out = []
+    code = refresh_feeds(
+        Config(icao="KPDX"),
+        out=out.append,
+        fetch=lambda icao, **_: FEEDS,
+        cache_dir=tmp_path,
+    )
+    assert code == 0
+    assert read_cached_feeds("KPDX", directory=tmp_path) == FEEDS
+    printed = "\n".join(out)
+    for feed in FEEDS:
+        assert feed.ident in printed, printed
+
+
+def test_refresh_feeds_asks_for_more_attempts_than_a_launch_does(tmp_path):
+    """The whole reason it exists. Eight attempts fail ~10% of the time at
+    one-in-four; twenty fail ~0.3%, and the cost is a wall clock nobody is
+    watching.
+    """
+    seen = {}
+
+    def record(icao, **kwargs):
+        seen.update(kwargs)
+        return FEEDS
+
+    refresh_feeds(
+        Config(icao="KPDX"), out=lambda _: None, fetch=record, cache_dir=tmp_path
+    )
+    assert seen.get("attempts") == REFRESH_ATTEMPTS
+    assert REFRESH_ATTEMPTS > COLD_FETCH_ATTEMPTS
+
+
+def test_refresh_feeds_reports_a_refusal_without_caching_anything(tmp_path):
+    def blocked(icao, **_):
+        raise OSError("HTTP Error 403: Forbidden")
+
+    out = []
+    code = refresh_feeds(
+        Config(icao="KPDX"), out=out.append, fetch=blocked, cache_dir=tmp_path
+    )
+    assert code != 0
+    assert read_cached_feeds("KPDX", directory=tmp_path) is None
+    printed = "\n".join(out).lower()
+    assert "403" in printed, "the actual error is what tells you whose fault it is"
+    assert "bot protection" in printed, "no hint that this is usually not local"
+
+
+def test_refresh_feeds_does_not_need_ffmpeg_or_a_ui(tmp_path, monkeypatch):
+    """It runs from setup.sh, potentially before the audio path is complete,
+    and has no business starting a mixer or an app to fill a JSON file.
+    """
+    monkeypatch.setattr("squelch.feeds.CACHE_DIR", tmp_path)
+    built = []
+
+    def app_factory(*args, **kwargs):
+        built.append(args)
+        raise AssertionError("--refresh-feeds started the UI")
+
+    code = main(
+        ["--refresh-feeds", "--icao", "KPDX"],
+        app_factory=app_factory,
+        which=lambda name: None,          # ffmpeg absent
+    )
+    assert code in (0, 1), code
+    assert built == [], "the app was constructed"
+
+
+# ---------------------------------------------------------------------------
+
+def test_the_fallback_to_one_feed_still_says_how_to_retry(tmp_path):
+    """The case that actually happens on a first launch: default config,
+    default airport, listing refused. It opened kpdx3_twr and said so, and
+    that was the entire message -- one feed out of twelve, no reason given
+    for the other eleven, and nothing to suggest the listing was worth
+    asking for again.
+    """
+    def blocked(icao, **_):
+        raise OSError("HTTP Error 403: Forbidden")
+
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KPDX", feed="kpdx3_twr"),
+        warn=warnings.append,
+        fetch=blocked,
+        cache_dir=tmp_path,
+    )
+    assert [f.ident for f in feeds] == ["kpdx3_twr"]
+    message = " ".join(warnings)
+    assert "kpdx3_twr" in message, message
+    assert "press f to retry" in message, message
+    assert "403" in message, message
+
+
+def test_a_feed_opened_after_startup_is_still_stopped_at_shutdown():
+    """Shutdown used to iterate the list built before the app existed, which
+    is not where a feed opened from the picker lands. Missing one leaks an
+    ffmpeg process and a decode thread per feed opened that way -- and the
+    picker is the documented recovery from a refused listing, so it is the
+    path most likely to be used on a bad day.
+    """
+    holder = {}
+    late = []
+
+    class OpeningApp(FakeApp):
+        def run(self):
+            self.on_start()
+            # What SquelchApp.open_feed does: build a session, append it to
+            # the app's own list, start it.
+            session = self._opener(Feed(ident="kpdx_gnd", label="Ground"))
+            late.append(session)
+            self._sessions.append(session)
+
+    def app_factory(config, sessions, **kwargs):
+        app = OpeningApp(config, sessions, **kwargs)
+        app._sessions = list(sessions)
+        app._opener = kwargs["feed_opener"]
+        holder["app"] = app
+        return app
+
+    code = main(
+        [],
+        app_factory=app_factory,
+        feeds_loader=lambda config, warn: FEEDS[:1],
+        sessions_builder=lambda feeds, config, events, mixer=None: [
+            StubSession(f, events) for f in feeds
+        ],
+        which=lambda name: f"/usr/bin/{name}",
+    )
+    assert code == 0
+    assert late, "the opener was never reachable from the app"
+    # The point of the test: it is deliberately not in the list main built
+    # before the app existed, which is what shutdown used to iterate.
+    assert late[0] not in holder["app"].sessions
+    assert late[0].stopped, "a feed opened from the picker was left running"
+    assert all(s.stopped for s in holder["app"]._sessions)

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # setup.sh — install everything kcgx needs, prove it works, open the cockpit.
 #
-# Eight steps. Each announces itself, each asks before changing anything, and
+# Nine steps. Each announces itself, each asks before changing anything, and
 # each is idempotent -- so the second run, the one you do when you think
 # something went wrong, ends exactly where the first did.
 #
 # The contract is that reaching the end means the cockpit works: every
-# dependency installed, every config written, and step 8 having actually run
+# dependency installed, every config written, and step 9 having actually run
 # each moving part rather than having checked that a file exists. A setup
 # script that finishes and leaves you with a broken pane has not finished.
 #
@@ -39,7 +39,7 @@ PREFIX="$HOME/.local/bin"
 # variable -- setup reported success and the radar came up empty.
 ADSB_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ads-b-tui/adsb-tui.toml"
 MIN_COLS=100
-STEPS=8
+STEPS=9
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'setup: %s\n' "$*" >&2; }
@@ -186,7 +186,7 @@ adsb_binary() {
     if have_command adsb-tui; then command -v adsb-tui; else printf '%s' "$PREFIX/adsb-tui"; fi
 }
 
-# The install decision only. The truth is `import sounddevice` in step 8:
+# The install decision only. The truth is `import sounddevice` in step 9:
 # ldconfig can be absent or unreadable, and a false "missing" here costs one
 # no-op package install, while a false "present" costs a silent audio failure.
 portaudio_present() {
@@ -538,7 +538,7 @@ edit. Add the line above to it yourself."
     mkdir -p "$(dirname "$profile")"
     printf '\n%s\n%s\n' "$PATH_MARKER" "$(profile_line)" >> "$profile"
     say "Appended to $profile."
-    # This shell, so step 8's checks and the launch below see it too.
+    # This shell, so step 9's checks and the launch below see it too.
     PATH="$PREFIX:$PATH"
     say ""
     say "Already-running tmux servers captured their environment when they"
@@ -635,6 +635,54 @@ TOML
 
 # -- step 8 -----------------------------------------------------------------
 
+# LiveATC fronts its listing with Cloudflare and refuses roughly three
+# requests in four. squelch handles that by caching the result for a week,
+# so the launch you actually do makes no request at all -- but the *first*
+# launch at an airport has no cache to read, tries eight times, and then
+# opens the single configured feed. At the default airport that reads as
+# "squelch could only find KPDX tower", with no sign that eleven other feeds
+# exist and nothing said about why.
+#
+# Filling the cache here is the fix, because here is where waiting is free.
+# Nobody is looking at a UI, so it can try twenty times.
+#
+# Not fatal: the feed list is a week-long cache, not a dependency, and
+# LiveATC being unreachable at this moment is no reason to refuse to install
+# an airport radar and a launcher.
+warm_feed_cache() {
+    local icao
+    step 8 "The LiveATC feed list"
+
+    icao="$(uv run --project "$REPO" python -c '
+from squelch.config import load_config
+print(load_config().icao)
+' 2>/dev/null || true)"
+    if [ -z "$icao" ]; then
+        warn "could not work out which airport to prefetch; skipping."
+        return 0
+    fi
+
+    say "squelch opens every feed an airport publishes, which means asking"
+    say "LiveATC for the list. That request is behind Cloudflare and is"
+    say "refused about three times in four, so squelch caches the answer for"
+    say "a week -- but the first launch at a new airport has nothing cached,"
+    say "gives up after eight tries, and opens one feed instead of twelve."
+    say ""
+    say "Fetching it now avoids that: out here it can retry twenty times and"
+    say "nobody is waiting. Takes a minute or two if it is being refused."
+    say ""
+    if ! confirm "Fetch the feed list for $icao now?" y; then
+        say "Skipped. Run \`uv run --project '$REPO' squelch --refresh-feeds\`"
+        say "later, or just start squelch and press f if it opens short."
+        return 0
+    fi
+
+    uv run --project "$REPO" squelch --refresh-feeds ||
+        warn "could not cache the feed list; squelch will try again on launch."
+}
+
+# -- step 9 -----------------------------------------------------------------
+
 VERIFY_FAILED=0
 VERIFY_WARNED=0
 
@@ -653,7 +701,7 @@ reachable() {  # $1=url
 
 verify() {
     local version devices cols
-    step 8 "Checking it works"
+    step 9 "Checking it works"
 
     say "Running each moving part rather than checking that a file exists --"
     say "an install that reports success and then opens a broken pane has"
@@ -769,7 +817,7 @@ usage() {
     say "  (no arguments)  install everything kcgx needs and open the cockpit,"
     say "                  asking before each step that changes anything"
     say "  --check         print what you have and what is missing, then exit"
-    say "  --verify        run the step 8 checks against this machine, then exit"
+    say "  --verify        run the step 9 checks against this machine, then exit"
     say "  --yes           take every prompt's default (including appending to"
     say "                  your shell profile); for unattended installs"
     say "  --help, -h      this message"
@@ -809,6 +857,7 @@ sync_project
 link_launcher
 install_adsb
 write_adsb_config
+warm_feed_cache
 verify
 
 say ""

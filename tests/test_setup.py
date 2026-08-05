@@ -1396,8 +1396,8 @@ def test_the_steps_are_numbered_and_counted(tmp_path):
     path_dir = complete_env(tmp_path)
     result = run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh")
     assert result.returncode == 0
-    for n in range(1, 9):
-        assert f"Step {n}/8" in result.stdout, f"step {n} never announced"
+    for n in range(1, 10):
+        assert f"Step {n}/9" in result.stdout, f"step {n} never announced"
 
 
 def test_the_radar_config_follows_xdg_config_home(tmp_path):
@@ -1414,3 +1414,77 @@ def test_the_radar_config_follows_xdg_config_home(tmp_path):
     assert result.returncode == 0
     assert (xdg / "ads-b-tui" / "adsb-tui.toml").exists(), "not written under XDG"
     assert not (tmp_path / "home" / ".config" / "ads-b-tui").exists()
+
+
+# ---------------------------------------------------------------------------
+# Step 8: the feed cache
+#
+# LiveATC refuses roughly three requests in four, so squelch's eight
+# launch-time attempts fail about 10% of the time -- and when they do the
+# pane opens on the single configured feed with no sign the airport has
+# eleven others. Filling the cache here is the fix, because out here nobody
+# is waiting on a UI and it can afford twenty tries.
+
+def test_the_feed_cache_is_warmed_before_the_launch(tmp_path):
+    log = tmp_path / "uv.log"
+    uv = f"""#!/bin/sh
+echo "$@" >> "{log}"
+case "$*" in
+    *load_config*) echo KPDX ;;
+esac
+echo 2
+exit 0
+"""
+    path_dir = complete_env(tmp_path, uv=uv)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--refresh-feeds" in log.read_text(), log.read_text()
+    assert "The LiveATC feed list" in result.stdout
+
+
+def test_a_refused_feed_list_does_not_fail_the_install(tmp_path):
+    """It is a week-long cache, not a dependency. LiveATC being unreachable
+    right now is no reason to refuse to install a radar and a launcher --
+    and squelch tries again on launch anyway.
+    """
+    uv = """#!/bin/sh
+case "$*" in
+    *load_config*) echo KPDX; exit 0 ;;
+    *--refresh-feeds*) echo "Could not reach LiveATC" >&2; exit 1 ;;
+esac
+echo 2
+exit 0
+"""
+    path_dir = complete_env(tmp_path, uv=uv)
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh",
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "could not cache the feed list" in combined, combined
+    assert "Setup complete" in result.stdout
+
+
+def test_the_feed_fetch_can_be_declined(tmp_path):
+    log = tmp_path / "uv.log"
+    uv = f"""#!/bin/sh
+echo "$@" >> "{log}"
+case "$*" in
+    *load_config*) echo KPDX ;;
+esac
+echo 2
+exit 0
+"""
+    path_dir = complete_env(tmp_path, uv=uv)
+    # Prompts, in order: sync (4), profile (5), radar config (7), feeds (8).
+    # adsb-tui is downloaded by complete_env's curl but step 6 still asks.
+    result = subprocess.run(
+        [str(SETUP)], input="y\ny\ny\ny\nn\n",
+        env=setup_env(tmp_path, path_dir, SHELL="/bin/zsh"),
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--refresh-feeds" not in log.read_text()
+    assert "Skipped" in result.stdout, result.stdout

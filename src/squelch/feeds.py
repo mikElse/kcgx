@@ -143,6 +143,12 @@ FETCH_ATTEMPTS = 5
 # four getting through, five attempts succeed about 76% of the time and
 # eight about 90% -- worth a few extra seconds exactly once per airport.
 COLD_FETCH_ATTEMPTS = 8
+# For `squelch --refresh-feeds`, which runs with nobody waiting on a UI --
+# from setup.sh, or by hand. At roughly one request in four getting through,
+# twenty attempts fail about 0.3% of the time against eight's 10%, and the
+# only thing it costs is a wall clock nobody is watching. Launch keeps the
+# smaller budget: there, the cost of patience is a pane that does not appear.
+REFRESH_ATTEMPTS = 20
 
 CACHE_DIR = Path.home() / ".cache" / "squelch"
 # Feed lists change on the order of months, and every fetch is a request to
@@ -229,14 +235,22 @@ def fetch_feeds(
     cache_dir: Path | None = None,
     get: Fetcher | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    attempts: int | None = None,
 ) -> list[Feed]:
+    """Every feed LiveATC lists for `icao`, retrying the bot protection.
+
+    `attempts` overrides the budget outright, for `--refresh-feeds`. Left
+    alone it is chosen by whether a cache exists: with one, a failure costs
+    a stale list; without, it costs an empty pane.
+    """
     if fetch is not None:
         return parse_airport_page(fetch(airport_url(icao)))
-    attempts = (
-        FETCH_ATTEMPTS
-        if cached_age_seconds(icao, directory=cache_dir) is not None
-        else COLD_FETCH_ATTEMPTS
-    )
+    if attempts is None:
+        attempts = (
+            FETCH_ATTEMPTS
+            if cached_age_seconds(icao, directory=cache_dir) is not None
+            else COLD_FETCH_ATTEMPTS
+        )
     return parse_airport_page(
         http_get_with_retry(
             airport_url(icao), get=get, sleep=sleep, attempts=attempts
