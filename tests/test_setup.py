@@ -464,6 +464,32 @@ echo "$@" >> "$BREW_LOG"
 exit 0
 """
 
+# Every Linux machine that can install anything has sudo, so a Linux test
+# that omits it is not testing Linux -- it is testing the no-root branch,
+# and stops six steps before whatever it meant to assert.
+#
+# A stub rather than a symlink to the real thing, always: a suite that can
+# reach /usr/bin/sudo can escalate, and would block on a password prompt
+# the moment it did. This one drops sudo's own flags and runs the rest.
+SUDO_PASSTHROUGH = """#!/bin/sh
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+"""
+
+# ldconfig reporting PortAudio already there, for Linux tests whose subject
+# is some later step: without it step 2 tries to install it and the run
+# stops there, nowhere near what the test meant to assert.
+LDCONFIG_WITH_PORTAUDIO = (
+    "#!/bin/sh\n"
+    "echo '\tlibportaudio.so.2 (libc6,x86-64) => "
+    "/lib/x86_64-linux-gnu/libportaudio.so.2'\n"
+)
+
 
 def test_missing_tools_are_installed_via_brew(tmp_path):
     log = tmp_path / "brew.log"
@@ -521,6 +547,49 @@ def test_no_package_manager_on_linux_names_the_packages(tmp_path):
     assert "ffmpeg" in combined and "tmux" in combined
     for manager in ("apt-get", "dnf", "pacman"):
         assert manager in combined, f"{manager} not named among what was looked for"
+
+
+@pytest.mark.skipif(
+    os.getuid() == 0,
+    reason="as root there is nothing for sudo to provide, and the branch "
+           "under test is the one that needs it",
+)
+def test_no_sudo_on_linux_is_explained_rather_than_dying_silently(tmp_path):
+    """A Linux box with no sudo used to exit 1 having printed the banner.
+
+    `detect_sudo` ended in `have_command sudo && SUDO="sudo"`, which made a
+    missing sudo the function's own exit status. An `&&` list does not trip
+    `set -e` inside a function, but the unguarded `detect_sudo` in preflight
+    is a plain command, so the script died there -- before step 1, with
+    nothing on stdout or stderr to say why.
+
+    install_packages has always had the right message for this case; it
+    could just never be reached. macOS never saw any of it, because
+    PKG=brew returns from detect_sudo two lines earlier.
+    """
+    path_dir = stub_path(
+        # No sudo, and no apt-get either: if this run ever gets as far as
+        # attempting the install, that is the bug back again.
+        tmp_path, tools=("uv", "ffmpeg", "tmux", "curl"),
+        scripts={
+            "curl": CURL_SERVING_ADSB,
+            # Nothing in its output, so PortAudio is genuinely missing and
+            # root is genuinely required.
+            "ldconfig": "#!/bin/sh\nexit 0\n",
+        },
+    )
+    result = run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="apt",
+        KCGX_SETUP_PLATFORM="linux-x64",
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, "a package it cannot install is fatal"
+    # The regression itself: dying inside preflight leaves only the banner,
+    # so reaching step 1 at all is the thing being pinned.
+    assert "Step 1/9" in combined, f"died before preflight finished: {combined!r}"
+    assert "sudo is not available" in combined, combined
+    assert "libportaudio2" in combined, "never named what has to be installed"
 
 
 def test_declining_the_prompt_installs_nothing(tmp_path):
@@ -1099,7 +1168,7 @@ def test_an_unsupported_platform_stops_rather_than_installing_the_wrong_binary(
     tmp_path,
 ):
     """The failure this replaces was silent, which is what made it expensive."""
-    path_dir = complete_env(tmp_path)
+    path_dir = complete_env(tmp_path, ldconfig=LDCONFIG_WITH_PORTAUDIO)
     result = run_setup(
         tmp_path, path_dir, KCGX_SETUP_YES="1",
         KCGX_SETUP_PLATFORM="unsupported", KCGX_SETUP_OS="linux",
@@ -1130,6 +1199,7 @@ def test_portaudio_is_installed_on_linux(tmp_path):
         scripts={
             "curl": CURL_SERVING_ADSB,
             "apt-get": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
+            "sudo": SUDO_PASSTHROUGH,
             # No libportaudio in its output: the missing case.
             "ldconfig": "#!/bin/sh\nexit 0\n",
         },
@@ -1162,11 +1232,7 @@ def test_a_present_portaudio_is_not_reinstalled(tmp_path):
         scripts={
             "curl": CURL_SERVING_ADSB,
             "apt-get": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
-            "ldconfig": (
-                "#!/bin/sh\n"
-                "echo '\tlibportaudio.so.2 (libc6,x86-64) => "
-                "/lib/x86_64-linux-gnu/libportaudio.so.2'\n"
-            ),
+            "ldconfig": LDCONFIG_WITH_PORTAUDIO,
         },
     )
     result = run_setup(

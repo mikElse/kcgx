@@ -118,7 +118,13 @@ resolve_platform() {
 detect_sudo() {
     [ "$PKG" = "brew" ] && return 0
     [ "$(id -u)" = "0" ] && return 0
-    have_command sudo && SUDO="sudo"
+    if have_command sudo; then SUDO="sudo"; fi
+    # Explicit: the `&&` form this replaced made a missing sudo the
+    # function's own exit status, and under `set -e` an unguarded call
+    # then killed the script after the banner and before step 1 -- no
+    # message, exit 1. install_packages owns that case (it dies with
+    # something to act on), and can only own it if we return here.
+    return 0
 }
 
 # $1 = ffmpeg | tmux | portaudio. Empty output means "not a package here".
