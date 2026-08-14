@@ -595,8 +595,14 @@ Check your connection and run this again."
 
 # adsb-tui defaults to http://adsb.local/data/aircraft.json -- a receiver on
 # your own network. Without one the radar is empty, so point it at a public
-# aggregator. 2 s because both free providers rate-limit near 1 req/s and
-# api.adsb.lol returned 429 at that rate where api.airplanes.live did not.
+# aggregator. 2 s because the free providers rate-limit near 1 req/s.
+#
+# This was airplanes.live until 2026-08-13, when it began answering 403 on
+# every endpoint -- its own root included -- for unauthenticated clients,
+# directing you to email contact@airplanes.live describing your project. A
+# gate, not an outage: the same 403 came back from two unrelated networks
+# and with a browser User-Agent. adsb.lol serves the identical path shape
+# and schema, so the switch is one line.
 write_adsb_config() {
     step 7 "Where the radar gets its aircraft"
 
@@ -610,7 +616,7 @@ write_adsb_config() {
     say "empty, so setup can point it at a public aggregator instead -- no"
     say "API key, no receiver hardware:"
     say ""
-    say "  url_template = \"https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}\""
+    say "  url_template = \"https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}\""
     say "  refresh_secs = 2"
     say ""
     say "kcgx fills in {lat}/{lon} per launch from the airport you pick."
@@ -627,7 +633,7 @@ write_adsb_config() {
 # Live aircraft with no receiver hardware and no API key. kcgx fills in
 # {lat}/{lon} per launch from the airport you pick, so this file does not
 # pin a fixed location of its own.
-url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
+url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
 refresh_secs = 2
 TOML
     say "Wrote $ADSB_CONFIG"
@@ -775,10 +781,10 @@ print(sum(1 for d in sounddevice.query_devices() if d["max_output_channels"] > 0
         else
             meh "liveatc.net" "unreachable; feeds will not load"
         fi
-        if reachable "https://api.airplanes.live/v2/point/45.6/-122.6/5"; then
-            ok "airplanes.live" "reachable"
+        if reachable "https://api.adsb.lol/v2/point/45.6/-122.6/5"; then
+            ok "adsb.lol" "reachable"
         else
-            meh "airplanes.live" "unreachable; the radar will stay empty"
+            meh "adsb.lol" "unreachable; the radar will stay empty"
         fi
     fi
 

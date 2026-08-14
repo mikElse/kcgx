@@ -159,7 +159,7 @@ def setup_env(tmp_path, path_dir, **env):
         "KCGX_SETUP_OS": "macos",
         "KCGX_SETUP_PLATFORM": "macos-arm64",
         "KCGX_SETUP_PKG": "brew",
-        # Step 8 probes liveatc.net and api.airplanes.live. The suite must
+        # Step 8 probes liveatc.net and api.adsb.lol. The suite must
         # pass with no network at all, and a probe that has to time out is
         # 8 seconds per test besides.
         "KCGX_SETUP_SKIP_NET": "1",
@@ -868,9 +868,13 @@ def test_the_radar_config_is_written(tmp_path):
     run_setup(tmp_path, path_dir, KCGX_SETUP_YES="1", CURL_LOG=str(tmp_path / "c.log"))
     config = tmp_path / "home" / ".config" / "ads-b-tui" / "adsb-tui.toml"
     text = config.read_text()
-    assert "api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}" in text
+    assert "api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}" in text
     assert "refresh_secs = 2" in text
     assert "site_lat" not in text, "kcgx passes coordinates per launch"
+    # airplanes.live gated its API behind an email request on 2026-08-13 and
+    # now 403s every endpoint unauthenticated. Shipping it means a silently
+    # empty radar for everyone who runs setup.sh.
+    assert "api.airplanes.live" not in text, "the gated provider is back"
 
 
 def test_an_existing_config_is_never_touched(tmp_path):

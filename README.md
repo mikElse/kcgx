@@ -110,7 +110,7 @@ fatal: the feed list is a week-long cache, not a dependency.
 **Step 9 runs things rather than looking for files.** It executes `ffmpeg`,
 `tmux` and `adsb-tui`, imports `numpy`/`sounddevice`/`textual` through the
 project's own interpreter, starts `squelch`, counts audio output devices,
-and reaches LiveATC and airplanes.live. An install that reports success and
+and reaches LiveATC and adsb.lol. An install that reports success and
 then opens a broken pane has not succeeded — and running `adsb-tui --help`
 is the only check that catches a binary built for the wrong platform, which
 is present, executable, and unable to run.
@@ -232,7 +232,7 @@ Without one, point it at a public aggregator instead:
 ```toml
 # $XDG_CONFIG_HOME/ads-b-tui/adsb-tui.toml, i.e. ~/.config/... unless you
 # have set XDG_CONFIG_HOME. adsb-tui resolves it under XDG and nowhere else.
-url_template = "https://api.airplanes.live/v2/point/{lat}/{lon}/{range_nm}"
+url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
 refresh_secs = 2
 ```
 
@@ -240,8 +240,21 @@ No API key, no receiver hardware. `kcgx` fills in `{lat}`/`{lon}` per
 launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
 
 Two seconds is deliberate: the free aggregators rate-limit to roughly one
-request per second, and `api.adsb.lol` returned `429` at this rate where
-`api.airplanes.live` did not.
+request per second.
+
+**This used to be `api.airplanes.live`.** On 2026-08-13 it began answering
+`403` on every endpoint — its own root included — for unauthenticated
+clients, with a body directing you to email `contact@airplanes.live` and
+describe your project and user base. That is a gate rather than an outage
+or a rate-limit ban: the same `403` comes back from unrelated networks and
+with a browser `User-Agent`, while their API guide still advertises v2 as
+keyless. If you get access, `adsb-tui` takes `api_key` with
+`api_key_header = "api-auth"`, which is the header they key feeders on.
+
+One thing `adsb.lol` costs you: route lookups. Its only routeset path,
+`/api/0/routeset`, answers `201` with an empty body even for a live
+callsign, so origin/destination columns stay blank. Set
+`route_enabled = false` to stop the pane asking every 15 s.
 
 `setup.sh` writes exactly that file, and only if it does not already
 exist — `adsb-tui` rewrites its own config on exit, so it is yours.
@@ -457,7 +470,7 @@ Neither `squelch.toml` nor `adsb-tui.toml` is
 modified — adsb-tui rewrites its own config with defaults on exit, so an
 edit made to it by hand would not survive the next launch. Instead
 adsb-tui is retargeted with `--site-lat`/`--site-lon`, which also moves
-its airplanes.live query. Airports LiveATC doesn't cover still get a
+its adsb.lol query. Airports LiveATC doesn't cover still get a
 working radar; squelch just shows an empty pane with a message instead —
 it will never fall back to playing a different airport's feed under the
 wrong header. The search dataset is `src/kcgx/data/airports.csv`, 4,737
