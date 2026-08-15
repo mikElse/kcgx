@@ -32,7 +32,7 @@
 #                      goes on reading whatever path the server was born
 #                      with, however this script is invoked afterwards.
 #   KCGX_SQUELCH_COLS  width of the right column       (default: 48)
-#   KCGX_STATUS_ROWS   height of the status pane       (default: 4)
+#   KCGX_STATUS_ROWS   height of the status pane       (default: 8)
 #   KCGX_STATUS_CMD    command for the status pane
 #   KCGX_MIN_COLS      refuse to build below this      (default: 100)
 
@@ -57,7 +57,7 @@ REPO="$(cd -P "$(dirname "$self")/.." && pwd)"
 CONF="$REPO/kcgx.tmux.conf"
 
 SQUELCH_COLS="${KCGX_SQUELCH_COLS:-48}"
-STATUS_ROWS="${KCGX_STATUS_ROWS:-4}"
+STATUS_ROWS="${KCGX_STATUS_ROWS:-8}"
 MIN_COLS="${KCGX_MIN_COLS:-100}"
 
 die() { printf 'kcgx: %s\n' "$*" >&2; exit 1; }

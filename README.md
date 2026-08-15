@@ -408,14 +408,32 @@ draggable by mouse:
 
 The right column starts at exactly 48 columns because that is `squelch`'s
 design width; below it the header truncates and the level meter loses
-resolution. The status pane starts four rows tall so squelch keeps most of
-the column. These are starting positions, not constraints — drag them.
+resolution. The status pane starts eight rows tall — two of padding and
+six of content, four of which are the ICAO banner. These are starting
+positions, not constraints — drag them.
 
-**The status pane** sits above squelch and shows, on its first line, the
-current ICAO and airport name, and on its second, the time in Zulu and in
-your own timezone (`1955Z   12:55 PDT`) alongside `▾ airport (^b a)`.
-Clicking that hint opens the same picker popup as `Ctrl-b a` — both are the
-same `tmux display-popup` call, pinned together by a test.
+**The status pane** sits above squelch and draws the current ICAO in
+block capitals, four rows tall:
+
+```
+▗▖ ▗▖ ▗▄▄▖ ▗▄▄▖▗▖  ▗▖
+▐▌▗▞▘▐▌   ▐▌    ▝▚▞▘
+▐▛▚▖ ▐▌   ▐▌▝▜▌  ▐▌
+▐▌ ▐▌▝▚▄▄▖▝▚▄▞▘▗▞▘▝▚▖
+```
+
+It is the one thing here you read from across the room, so it is drawn
+rather than printed. The glyphs are Unicode quadrant blocks, so they need
+no font the radar does not already require. Under it sit the airport name,
+and the time in Zulu and in your own timezone (`1955Z   12:55 PDT`)
+alongside `▾ airport (^b a)`. Clicking that hint opens the same picker
+popup as `Ctrl-b a` — both are the same `tmux display-popup` call, pinned
+together by a test.
+
+Drag the pane narrower than the banner and the code goes back to being
+printed beside the name, exactly as it was before the banner existed —
+half a block letter reads as a different letter, so it is dropped whole
+rather than clipped.
 
 In the picker: `↵` goes to the highlighted airport, `esc` closes it and
 leaves the cockpit where it is, and **`^q` shuts every cockpit down** — all

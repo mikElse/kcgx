@@ -1165,7 +1165,15 @@ def test_every_pane_carries_its_role(cockpit):
     assert set(roles(tmux, session)) == {"adsb", "status", "squelch"}
 
 
-def test_the_status_pane_sits_above_squelch_and_is_four_rows(cockpit):
+def test_the_status_pane_sits_above_squelch_at_the_height_the_app_expects(cockpit):
+    """Asserted against status.STATUS_ROWS rather than a number written
+    here. tmux believes this launcher, so if the two ever disagree the app
+    formats for a pane it did not get -- and the ICAO banner, which is the
+    tallest thing in it, is what clips. test_status_app.py pins the same
+    pair from the other side.
+    """
+    from kcgx.status import STATUS_ROWS
+
     run, tmux, session = cockpit
     run(KCGX_STATUS_CMD=FAKE_STATUS)
     by_id = {}
@@ -1173,7 +1181,9 @@ def test_the_status_pane_sits_above_squelch_and_is_four_rows(cockpit):
         pane_id, top, height = line.split("\t")
         by_id[pane_id] = (int(top), int(height))
     r = roles(tmux, session)
-    assert by_id[r["status"]][1] == 4, "status pane should be four rows"
+    assert by_id[r["status"]][1] == STATUS_ROWS, (
+        f"status pane is {by_id[r['status']][1]} rows, app expects {STATUS_ROWS}"
+    )
     assert by_id[r["status"]][0] < by_id[r["squelch"]][0], "status sits above"
 
 
