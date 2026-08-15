@@ -944,6 +944,12 @@ def test_the_radar_config_is_written(tmp_path):
     # now 403s every endpoint unauthenticated. Shipping it means a silently
     # empty radar for everyone who runs setup.sh.
     assert "api.airplanes.live" not in text, "the gated provider is back"
+    # The radar is the point of the pane; adsb-tui's own default is "full",
+    # which opens on the table instead.
+    assert 'layout = "radar"' in text, "the pane does not open on the radar"
+    # Without an aspect suited to the pane the range ring renders as a
+    # clipped ellipse rather than a circle -- a default that looks broken.
+    assert "radar_aspect" in text, "no aspect, so the range ring is an ellipse"
 
 
 def test_an_existing_config_is_never_touched(tmp_path):

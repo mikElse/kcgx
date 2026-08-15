@@ -641,6 +641,18 @@ write_adsb_config() {
 # pin a fixed location of its own.
 url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
 refresh_secs = 2
+
+# The radar is the point of the left pane, so open on it. adsb-tui's own
+# default is "full", which opens on the table and the stats panel instead.
+layout = "radar"
+
+# Terminal cells are about twice as tall as they are wide, so a circular
+# range ring needs aspect = 2 * (rows - 8) / (cols - 2) -- measured on the
+# radar pane, not the whole terminal. 0.49 suits kcgx's left pane in a
+# ~197-column terminal. Left unset the ring renders as a clipped ellipse,
+# so a wrong-ish number here beats no number; recompute it if your
+# terminal is much narrower or wider.
+radar_aspect = 0.49
 TOML
     say "Wrote $ADSB_CONFIG"
 }

@@ -234,10 +234,21 @@ Without one, point it at a public aggregator instead:
 # have set XDG_CONFIG_HOME. adsb-tui resolves it under XDG and nowhere else.
 url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
 refresh_secs = 2
+layout = "radar"
+radar_aspect = 0.49
 ```
 
 No API key, no receiver hardware. `kcgx` fills in `{lat}`/`{lon}` per
 launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
+
+`layout` is set because adsb-tui opens on the table by default and the
+radar is the point of the pane. `radar_aspect` goes with it: terminal
+cells are about twice as tall as they are wide, so a circular range ring
+needs `2 * (rows - 8) / (cols - 2)` measured on the radar pane. 0.49
+suits the left pane in a ~197-column terminal; unset, the ring renders
+as a clipped ellipse. Both are starting positions: `R` switches to the
+radar at runtime, `l` toggles full/compact, `t` cycles themes, and
+adsb-tui writes whichever you leave it on back into this file on exit.
 
 Two seconds is deliberate: the free aggregators rate-limit to roughly one
 request per second.
