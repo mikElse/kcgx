@@ -938,8 +938,15 @@ def test_the_radar_config_is_written(tmp_path):
     config = tmp_path / "home" / ".config" / "ads-b-tui" / "adsb-tui.toml"
     text = config.read_text()
     assert "api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}" in text
-    assert "refresh_secs = 2" in text
+    # 15 s, not the 2 s this used to say: 2 s and 5 s both drew a steady
+    # stream of 429s from adsb.lol, and the refusals outlasted a slowdown.
+    assert "refresh_secs = 15" in text
     assert "site_lat" not in text, "kcgx passes coordinates per launch"
+    # adsb.lol 403s a request carrying no User-Agent, and adsb-tui sends none
+    # unless something puts one in the api_key slot. The cockpit passes the
+    # pair as flags, so this copy is what makes `adsb-tui` work on its own.
+    assert 'api_key_header = "User-Agent"' in text, "the radar will 403 alone"
+    assert "api_key = \"kcgx/" in text, "the header is named but left empty"
     # airplanes.live gated its API behind an email request on 2026-08-13 and
     # now 403s every endpoint unauthenticated. Shipping it means a silently
     # empty radar for everyone who runs setup.sh.
@@ -952,8 +959,37 @@ def test_the_radar_config_is_written(tmp_path):
     assert "radar_aspect" in text, "no aspect, so the range ring is an ellipse"
 
 
+def test_setup_and_the_launcher_send_the_same_user_agent():
+    """One User-Agent, spelled in two scripts that cannot source each other.
+
+    setup.sh writes it into adsb-tui.toml in step 7 and probes adsb.lol with
+    it in step 9; bin/kcgx passes it to the radar pane on every launch. A
+    check that sends a different request than the pane does proves nothing
+    about the pane, which is the whole reason step 9 sends a UA at all -- so
+    make the drift fail here, where it is cheap, rather than there, where it
+    would just quietly stop meaning anything.
+    """
+    setup_ua = re.search(r'^ADSB_UA="([^"]+)"$', SETUP.read_text(), re.M)
+    launcher_ua = re.search(
+        r'^ADSB_UA="\$\{KCGX_ADSB_UA-([^}]+)\}"$',
+        (REPO / "bin" / "kcgx").read_text(),
+        re.M,
+    )
+    assert setup_ua, "setup.sh no longer spells ADSB_UA where this can read it"
+    assert launcher_ua, "bin/kcgx no longer spells ADSB_UA where this can read it"
+    assert setup_ua.group(1) == launcher_ua.group(1), (
+        "setup.sh and bin/kcgx disagree about the User-Agent: "
+        f"{setup_ua.group(1)!r} vs {launcher_ua.group(1)!r}"
+    )
+    # adsb.lol's 403 is "User-Agent too generic; include valid contact info",
+    # so a bare product token is refused exactly like no header at all.
+    assert "http" in setup_ua.group(1) or "@" in setup_ua.group(1), (
+        "no contact in the User-Agent; adsb.lol calls that too generic"
+    )
+
+
 def test_an_existing_config_is_never_touched(tmp_path):
-    """adsb-tui rewrites this file itself on exit, so it is the user's."""
+    """The file is the user's: theirs to edit, and theirs to have kept."""
     config = tmp_path / "home" / ".config" / "ads-b-tui" / "adsb-tui.toml"
     config.parent.mkdir(parents=True)
     config.write_text("theme = \"mono\"\n")

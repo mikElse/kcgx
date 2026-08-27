@@ -342,8 +342,11 @@ def test_a_missing_radar_command_gets_a_pane_that_explains_itself(cockpit):
     cmd = pane_command(tmux, session, "adsb")
     assert "kcgx-no-radar" in cmd, cmd
     # A message pane has no site to be pointed at, and would report the flags
-    # as unknown arguments if it were given them.
+    # as unknown arguments if it were given them. The User-Agent pair is the
+    # same kind of thing: a stand-in that has to explain itself cannot afford
+    # to be arguing about argv instead.
     assert "--site-lat" not in cmd, cmd
+    assert "--api-key" not in cmd, cmd
 
 
 def test_the_no_radar_pane_names_the_fix_and_the_way_out(cockpit):
@@ -650,6 +653,48 @@ def test_launch_points_both_panes_at_the_resolved_airport(
     assert "--site-lat 41.9786" in adsb
     assert "--site-lon -87.9048" in adsb
     assert "--icao KORD" in squelch
+
+
+def test_the_radar_pane_carries_a_user_agent(cockpit):
+    """adsb.lol answers 403 to a request that sends none, and adsb-tui sends
+    none: no --user-agent flag, so it goes in as the API key with the header
+    renamed.
+
+    On the command line rather than in adsb-tui.toml, which used to be the
+    only copy -- and adsb-tui deletes api_key from that file every time its
+    own config screen saves (`C` then `w`, having edited nothing, is enough),
+    so a keypress in the radar pane silently disarmed it until someone
+    noticed ERR 403 two launches later.
+    """
+    run, tmux, session = cockpit
+    assert run().returncode == 0
+
+    adsb = pane_command(tmux, session, "adsb")
+    assert "--api-key-header User-Agent" in adsb, adsb
+    assert "kcgx/0.1 (+https://github.com/mikElse/kcgx)" in adsb, adsb
+
+
+def test_the_user_agent_can_be_replaced(cockpit):
+    """Whoever forks this is the one adsb.lol would be contacting."""
+    run, tmux, session = cockpit
+    assert run(KCGX_ADSB_UA="wxyz/9 (+mailto:pilot@example.test)").returncode == 0
+
+    adsb = pane_command(tmux, session, "adsb")
+    assert "--api-key 'wxyz/9 (+mailto:pilot@example.test)'" in adsb, adsb
+    assert "mikElse" not in adsb, "the default is still being sent"
+
+
+def test_an_empty_user_agent_sends_no_header_at_all(cockpit):
+    """Empty is an answer, not an omission: a receiver on your own network
+    has no interest in who is asking, and another provider wants the key
+    slot back for an actual key.
+    """
+    run, tmux, session = cockpit
+    assert run(KCGX_ADSB_UA="").returncode == 0
+
+    adsb = pane_command(tmux, session, "adsb")
+    assert "--api-key" not in adsb, adsb
+    assert "User-Agent" not in adsb, adsb
 
 
 def test_go_moves_both_panes_to_the_new_airport(cockpit, airport_stub):

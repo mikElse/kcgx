@@ -110,7 +110,9 @@ fatal: the feed list is a week-long cache, not a dependency.
 **Step 9 runs things rather than looking for files.** It executes `ffmpeg`,
 `tmux` and `adsb-tui`, imports `numpy`/`sounddevice`/`textual` through the
 project's own interpreter, starts `squelch`, counts audio output devices,
-and reaches LiveATC and adsb.lol. An install that reports success and
+and asks LiveATC and adsb.lol for the exact thing the panes ask them for,
+insisting on a `200` — "something answered" is not the same claim, and a
+`403` answers. An install that reports success and
 then opens a broken pane has not succeeded — and running `adsb-tui --help`
 is the only check that catches a binary built for the wrong platform, which
 is present, executable, and unable to run.
@@ -233,13 +235,39 @@ Without one, point it at a public aggregator instead:
 # $XDG_CONFIG_HOME/ads-b-tui/adsb-tui.toml, i.e. ~/.config/... unless you
 # have set XDG_CONFIG_HOME. adsb-tui resolves it under XDG and nowhere else.
 url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
-refresh_secs = 2
+refresh_secs = 15
 layout = "radar"
 radar_aspect = 0.49
+api_key_header = "User-Agent"
+api_key = "kcgx/0.1 (+https://github.com/mikElse/kcgx)"
 ```
 
 No API key, no receiver hardware. `kcgx` fills in `{lat}`/`{lon}` per
 launch from the airport you pick, so don't set `site_lat`/`site_lon` here.
+
+**The last two lines are not an API key.** `adsb.lol` answers `403
+User-Agent too generic; include valid contact info.` to any request that
+sends no `User-Agent` at all, and that is exactly what `adsb-tui`'s HTTP
+client sends. It has no flag for one, but `api_key_header` names an
+arbitrary header, so pointing it at `User-Agent` makes the "key" the UA.
+Nothing is lost by spending the slot: the one provider that wants a real
+key is `airplanes.live`, which this file no longer talks to. Put your own
+contact in if you fork this — being reachable is what `adsb.lol` is asking
+for. Without those two lines the radar sits on `ERR 403` and stays empty
+while every other check passes, which is a hard fault to read.
+
+**The cockpit does not rely on them, though.** `kcgx` passes the same pair
+to `adsb-tui` as `--api-key-header`/`--api-key` on every launch, because the
+file cannot be trusted to keep them: adsb-tui's own config screen deletes
+`api_key` whenever it saves. Measured — open it with `C`, press `w` having
+changed nothing, and the line is gone (the file also gains some forty
+default keys it did not have, `url` and `theme` and the rest). It is
+deliberate on adsb-tui's part; it treats the value as a secret and chmods
+the file `600`. But nothing says so at the time, so the User-Agent goes
+silently and surfaces as `ERR 403` at some later launch. The lines above
+are therefore what makes `adsb-tui` work when you run it yourself, and a
+backstop for the flags. `KCGX_ADSB_UA` overrides the string the launcher
+sends; set it empty to send no `User-Agent` at all.
 
 `layout` is set because adsb-tui opens on the table by default and the
 radar is the point of the pane. `radar_aspect` goes with it: terminal
@@ -247,11 +275,24 @@ cells are about twice as tall as they are wide, so a circular range ring
 needs `2 * (rows - 8) / (cols - 2)` measured on the radar pane. 0.49
 suits the left pane in a ~197-column terminal; unset, the ring renders
 as a clipped ellipse. Both are starting positions: `R` switches to the
-radar at runtime, `l` toggles full/compact, `t` cycles themes, and
-adsb-tui writes whichever you leave it on back into this file on exit.
+radar at runtime, `l` toggles full/compact, and `t` cycles themes — none of
+which is written back. adsb-tui saves this file only from its own config
+screen (`C`), never on exit, so what you leave on screen is not what you
+get next launch.
 
-Two seconds is deliberate: the free aggregators rate-limit to roughly one
-request per second.
+**Fifteen seconds is deliberate, and two is much too fast.** adsb.lol
+says outright that [rate limits are dynamic based on the environment
+load](https://github.com/adsblol/api), and it behaves like it. Measured
+from one address, 2 s and 5 s polling drew a steady stream of `429`s — and
+once the limit was tripped, the refusals persisted through *slower*
+intervals as well, which makes it an over-rate penalty rather than a
+per-request check. So there is no interval that is provably safe, only
+intervals that are polite; 15 s polled clean for as long as it was
+watched. Nothing much is lost by slowing down: `adsb-tui` interpolates
+positions between polls and holds the last fix for `stale_secs`, so the
+radar still reads live. Lower it if you want, and expect `ERR 429` in the
+pane header when you do — that is the header reporting a refused refresh,
+not a blank radar.
 
 **This used to be `api.airplanes.live`.** On 2026-08-13 it began answering
 `403` on every endpoint — its own root included — for unauthenticated
@@ -260,7 +301,11 @@ describe your project and user base. That is a gate rather than an outage
 or a rate-limit ban: the same `403` comes back from unrelated networks and
 with a browser `User-Agent`, while their API guide still advertises v2 as
 keyless. If you get access, `adsb-tui` takes `api_key` with
-`api_key_header = "api-auth"`, which is the header they key feeders on.
+`api_key_header = "api-auth"`, which is the header they key feeders on —
+but note that reclaims the slot the `User-Agent` above is using, and
+`adsb-tui` sends only one such header. Going back to `airplanes.live`
+means giving up the `adsb.lol` workaround, which is fine, because you
+would no longer be talking to `adsb.lol`.
 
 One thing `adsb.lol` costs you: route lookups. Its only routeset path,
 `/api/0/routeset`, answers `201` with an empty body even for a live
@@ -268,7 +313,10 @@ callsign, so origin/destination columns stay blank. Set
 `route_enabled = false` to stop the pane asking every 15 s.
 
 `setup.sh` writes exactly that file, and only if it does not already
-exist — `adsb-tui` rewrites its own config on exit, so it is yours.
+exist, so it is yours to edit — comments and keys adsb-tui does not
+recognise both survive a save from its config screen (`C`), measured.
+`api_key` is the one thing that does not, deleted on every such save,
+which is why the launcher passes it as a flag instead.
 
 **Checking it.** `./setup.sh --verify` runs step 8 against whatever you have
 built by hand, and changes nothing.
@@ -499,10 +547,10 @@ there. With nothing ever picked, it falls back to `icao` in
 `squelch.toml`, then to `KPDX`.
 
 Neither `squelch.toml` nor `adsb-tui.toml` is
-modified — adsb-tui rewrites its own config with defaults on exit, so an
-edit made to it by hand would not survive the next launch. Instead
-adsb-tui is retargeted with `--site-lat`/`--site-lon`, which also moves
-its adsb.lol query. Airports LiveATC doesn't cover still get a
+modified — the airport changes several times a session, and a config file
+is the wrong home for something that transient. Instead adsb-tui is
+retargeted with `--site-lat`/`--site-lon`, which also moves its adsb.lol
+query. Airports LiveATC doesn't cover still get a
 working radar; squelch just shows an empty pane with a message instead —
 it will never fall back to playing a different airport's feed under the
 wrong header. The search dataset is `src/kcgx/data/airports.csv`, 4,737
