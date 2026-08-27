@@ -24,6 +24,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from kcgx.airports import Airport, find, load_airports
+from kcgx import bigtext
 from kcgx.state import current_icao
 
 # The right column starts at 48 columns; one cell of padding each side
@@ -32,8 +33,17 @@ from kcgx.state import current_icao
 # layout tells it how wide it really is. See content_width().
 STATUS_WIDTH = 48
 CONTENT_WIDTH = STATUS_WIDTH - 2
-# One row of padding, two content lines, one row of padding.
-STATUS_ROWS = 4
+# #body pads one cell on every side, so two of these rows are padding and
+# the rest are content: bigtext.HEIGHT rows of banner, the name, the clock.
+# Derived rather than written down -- one too few drops the clock line, and
+# the layout does that silently rather than complaining.
+#
+# bin/kcgx declares this height too, and tmux believes the launcher rather
+# than the app. test_the_launcher_and_the_app_agree_about_the_pane_height
+# welds the two -- drift means formatting for a pane you did not get.
+BODY_PADDING_ROWS = 2
+CONTENT_ROWS = bigtext.HEIGHT + 2      # banner, the name, the clock line
+STATUS_ROWS = BODY_PADDING_ROWS + CONTENT_ROWS
 
 PICKER_HINT = "▾ airport (^b a)"
 PICKER_HINT_SHORT = "▾"
@@ -58,6 +68,36 @@ def airport_line(airport: Airport | None, icao: str, width: int) -> str:
     if airport is None:
         return fit(icao, width)
     return fit(f"{airport.icao}  {airport.name}", width)
+
+
+def banner_text(icao: str, width: int) -> str:
+    """The code as block capitals, or "" when `width` cannot hold them.
+
+    Empty rather than clipped: tmux cuts without an ellipsis, and half a
+    letter reads as a different letter. The caller treats "" as "no banner"
+    and puts the code back on the detail line, which is exactly what the
+    pane showed before the banner existed.
+    """
+    if not icao or bigtext.width(icao) > width:
+        return ""
+    return "\n".join(bigtext.render(icao))
+
+
+def detail_line(
+    airport: Airport | None, icao: str, width: int, banner: str
+) -> str:
+    """The line under the banner.
+
+    With a banner the code is already the largest thing in the pane, so
+    this is the name alone; without one it falls back to `airport_line`
+    and carries the code itself. An unknown code leaves it blank -- the
+    banner spells the code, and there is no name to add.
+    """
+    if not banner:
+        return airport_line(airport, icao, width)
+    if airport is None:
+        return fit("", width)
+    return fit(airport.name, width)
 
 
 def clock_text(now_utc: datetime, now_local: datetime) -> str:
@@ -132,14 +172,15 @@ class StatusPane(App[None]):
     here, so the contract is documented rather than enforced.
     """
 
-    CSS = """
-    Screen { background: $surface; }
-    #body { padding: 1; }
-    #airport { height: 1; }
-    #line2 { height: 1; }
-    #clock { width: auto; }
-    #hint { width: 1fr; text-align: right; color: $text-muted; }
-    #hint:hover { color: $text; }
+    CSS = f"""
+    Screen {{ background: $surface; }}
+    #body {{ padding: 1; }}
+    #banner {{ height: {bigtext.HEIGHT}; }}
+    #airport {{ height: 1; }}
+    #line2 {{ height: 1; }}
+    #clock {{ width: auto; }}
+    #hint {{ width: 1fr; text-align: right; color: $text-muted; }}
+    #hint:hover {{ color: $text; }}
     """
 
     def __init__(
@@ -178,6 +219,7 @@ class StatusPane(App[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="body"):
+            yield Static("", id="banner")
             yield Static("", id="airport")
             with Horizontal(id="line2"):
                 yield Static("", id="clock")
@@ -224,8 +266,12 @@ class StatusPane(App[None]):
             pass
         else:
             line1 = self.query_one("#airport", Static)
+            banner = self.query_one("#banner", Static)
+            drawn = banner_text(icao, content_width(banner))
+            banner.update(drawn, layout=False)
             line1.update(
-                airport_line(airport, icao, content_width(line1)), layout=False
+                detail_line(airport, icao, content_width(line1), drawn),
+                layout=False,
             )
 
         try:

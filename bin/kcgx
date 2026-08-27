@@ -15,6 +15,8 @@
 #   KCGX_SIZE          WIDTHxHEIGHT instead of the real terminal
 #   KCGX_DETACHED      build the session but do not attach
 #   KCGX_ADSB_CMD      command for the left pane       (default: adsb-tui)
+#   KCGX_ADSB_UA       User-Agent the radar identifies itself with; empty
+#                      sends none at all
 #   KCGX_SQUELCH_CMD   command for the squelch pane
 #   KCGX_AIRPORT_CMD   command that resolves/picks an airport
 #   KCGX_RADAR_PANE    tmux pane id squelch samples for its theme; set by
@@ -32,7 +34,7 @@
 #                      goes on reading whatever path the server was born
 #                      with, however this script is invoked afterwards.
 #   KCGX_SQUELCH_COLS  width of the right column       (default: 48)
-#   KCGX_STATUS_ROWS   height of the status pane       (default: 4)
+#   KCGX_STATUS_ROWS   height of the status pane       (default: 8)
 #   KCGX_STATUS_CMD    command for the status pane
 #   KCGX_MIN_COLS      refuse to build below this      (default: 100)
 
@@ -57,7 +59,7 @@ REPO="$(cd -P "$(dirname "$self")/.." && pwd)"
 CONF="$REPO/kcgx.tmux.conf"
 
 SQUELCH_COLS="${KCGX_SQUELCH_COLS:-48}"
-STATUS_ROWS="${KCGX_STATUS_ROWS:-4}"
+STATUS_ROWS="${KCGX_STATUS_ROWS:-8}"
 MIN_COLS="${KCGX_MIN_COLS:-100}"
 
 die() { printf 'kcgx: %s\n' "$*" >&2; exit 1; }
@@ -95,6 +97,34 @@ apply_config() {
 }
 
 ADSB_CMD="${KCGX_ADSB_CMD:-adsb-tui}"
+
+# adsb.lol refuses a request that carries no User-Agent, and adsb-tui sends
+# none: it has no --user-agent flag of its own, so the UA rides in as the API
+# key, with --api-key-header naming the header to spend it on.
+#
+# Passed per launch even though setup.sh writes the same pair into
+# adsb-tui.toml, because that file cannot be trusted to keep it: adsb-tui
+# strips api_key from its config every time its own config screen saves --
+# deliberately, it treats the value as a secret. Measured: open it with `C`
+# and press `w`, having changed nothing, and the api_key line is gone (the
+# file also gains some forty default keys it did not have). Nothing says so
+# at the time. The radar comes up on ERR 403 at some *later* launch, by
+# which point the keypress that caused it is long out of sight. A flag
+# cannot be deleted by the app it is passed to.
+#
+# The same string lives in setup.sh, which is what step 9 probes adsb.lol
+# with; tests/test_setup.py fails if the two drift, because a check that
+# sends a different request than the pane does proves nothing about the pane.
+# Put your own contact in if you fork this -- being reachable is the whole
+# thing adsb.lol is asking for. Set it empty to send no User-Agent at all,
+# which is what a private receiver or another provider may well want.
+ADSB_UA="${KCGX_ADSB_UA-kcgx/0.1 (+https://github.com/mikElse/kcgx)}"
+ADSB_UA_FLAGS=""
+if [ -n "$ADSB_UA" ]; then
+    # Single-quoted: the UA has spaces and parentheses in it, and tmux runs
+    # every pane command through a shell.
+    ADSB_UA_FLAGS=" --api-key-header User-Agent --api-key '$ADSB_UA'"
+fi
 
 # adsb-tui is optional, but "optional" used to reach the user as the shell's
 # own `adsb-tui: command not found` sitting under a dead-pane banner, next to
@@ -182,9 +212,10 @@ adsb_cmd() {  # $1=lat $2=lon
         return
     fi
     if [ -n "$1" ] && [ -n "$2" ]; then
-        printf '%s --site-lat %s --site-lon %s' "$ADSB_CMD" "$1" "$2"
+        printf '%s --site-lat %s --site-lon %s%s' \
+            "$ADSB_CMD" "$1" "$2" "$ADSB_UA_FLAGS"
     else
-        printf '%s' "$ADSB_CMD"
+        printf '%s%s' "$ADSB_CMD" "$ADSB_UA_FLAGS"
     fi
 }
 

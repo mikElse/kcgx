@@ -38,6 +38,16 @@ PREFIX="$HOME/.local/bin"
 # ~/.config wrote a file it would never read on a machine that sets the
 # variable -- setup reported success and the radar came up empty.
 ADSB_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ads-b-tui/adsb-tui.toml"
+# adsb.lol 403s a request that carries no User-Agent. One spelling, shared by
+# the config step 7 writes and the check step 9 makes -- a check that proves a
+# different request than the app sends proves nothing.
+#
+# bin/kcgx holds the same string, because the cockpit passes the UA to
+# adsb-tui as a flag rather than trusting the config file to still hold it
+# (the comment on ADSB_UA there has the why). Two literals in two scripts is
+# the price of neither one being sourceable by the other; tests/test_setup.py
+# fails the moment they disagree.
+ADSB_UA="kcgx/0.1 (+https://github.com/mikElse/kcgx)"
 MIN_COLS=100
 STEPS=9
 
@@ -601,7 +611,7 @@ Check your connection and run this again."
 
 # adsb-tui defaults to http://adsb.local/data/aircraft.json -- a receiver on
 # your own network. Without one the radar is empty, so point it at a public
-# aggregator. 2 s because the free providers rate-limit near 1 req/s.
+# aggregator, slowly enough that the aggregator keeps answering.
 #
 # This was airplanes.live until 2026-08-13, when it began answering 403 on
 # every endpoint -- its own root included -- for unauthenticated clients,
@@ -609,6 +619,18 @@ Check your connection and run this again."
 # gate, not an outage: the same 403 came back from two unrelated networks
 # and with a browser User-Agent. adsb.lol serves the identical path shape
 # and schema, so the switch is one line.
+#
+# adsb.lol has a gate of its own, and it is easy to mistake for the same
+# wall: it answers 403 "User-Agent too generic; include valid contact info."
+# to a request carrying no User-Agent, which is precisely what adsb-tui's
+# HTTP client sends by default. adsb-tui has no --user-agent flag, so the
+# config below smuggles one in through api_key_header.
+#
+# bin/kcgx passes the same pair as flags on every launch, so the cockpit
+# does not depend on these two lines surviving -- and they do not always:
+# adsb-tui deletes api_key from this file whenever its own config screen
+# (C) saves. What the file buys is adsb-tui run on its own, outside the
+# cockpit, which has nothing passing it flags.
 write_adsb_config() {
     step 7 "Where the radar gets its aircraft"
 
@@ -623,7 +645,8 @@ write_adsb_config() {
     say "API key, no receiver hardware:"
     say ""
     say "  url_template = \"https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}\""
-    say "  refresh_secs = 2"
+    say "  refresh_secs = 15"
+    say "  api_key_header = \"User-Agent\"   # adsb.lol 403s a request without one"
     say ""
     say "kcgx fills in {lat}/{lon} per launch from the airport you pick."
     say ""
@@ -633,14 +656,41 @@ write_adsb_config() {
     fi
 
     mkdir -p "$(dirname "$ADSB_CONFIG")"
-    cat > "$ADSB_CONFIG" <<'TOML'
+    cat > "$ADSB_CONFIG" <<TOML
 # Written by kcgx setup.sh. Safe to edit -- setup never overwrites it.
 #
 # Live aircraft with no receiver hardware and no API key. kcgx fills in
 # {lat}/{lon} per launch from the airport you pick, so this file does not
 # pin a fixed location of its own.
 url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
-refresh_secs = 2
+
+# 15 s, not the 2 s that reads like the obvious choice for a live radar.
+# adsb.lol states plainly that "rate limits are dynamic based on the
+# environment load", and it behaves like it: measured from one address,
+# 2 s and 5 s polling drew a steady stream of 429s, and once the limit was
+# tripped the refusal persisted through slower intervals too. That is an
+# over-rate penalty rather than a per-request check, which is why there is
+# no interval that is provably safe -- only intervals that are polite.
+# 15 s polled clean. adsb-tui interpolates between polls and holds the last
+# fix for stale_secs, so the radar still reads live at this rate.
+refresh_secs = 15
+
+# adsb.lol refuses a request that sends no User-Agent -- 403 "User-Agent too
+# generic; include valid contact info." -- and adsb-tui's HTTP client sends
+# none. It has no flag for one either, but api_key_header names an arbitrary
+# header, so point that at User-Agent and the key becomes the UA. The header
+# slot is free: the only provider that wants a real key is airplanes.live,
+# which is not what this file talks to. Put your own contact in here if you
+# fork it -- being reachable is the whole thing adsb.lol is asking for.
+#
+# adsb-tui deletes the api_key line below whenever its own config screen
+# saves -- open it with C and press w, having edited nothing, and it is
+# gone. That is deliberate on its part; it treats the value as a secret.
+# The cockpit survives that because bin/kcgx passes the same pair as flags
+# on every launch, so this line is really for adsb-tui run on its own. Put
+# it back if that stops working.
+api_key_header = "User-Agent"
+api_key = "$ADSB_UA"
 
 # The radar is the point of the left pane, so open on it. adsb-tui's own
 # default is "full", which opens on the table and the stats panel instead.
@@ -723,6 +773,23 @@ reachable() {  # $1=url
     [ -n "$code" ] && [ "$code" != "000" ]
 }
 
+# `reachable` only proves that something answered, and a 403 answers. Both
+# providers now refuse a request shape rather than going down, so the checks
+# that matter send exactly what the app sends and insist on a 200. Reporting
+# "adsb.lol reachable" over a radar pane stuck on ERR 403 is how this went
+# unnoticed for a fortnight.
+serves() {  # $1=url $2=user-agent (optional)
+    local code
+    if [ -n "${2:-}" ]; then
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+            -A "$2" "$1" 2>/dev/null || true)"
+    else
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+            "$1" 2>/dev/null || true)"
+    fi
+    [ "$code" = "200" ]
+}
+
 verify() {
     local version devices cols
     step 9 "Checking it works"
@@ -755,7 +822,28 @@ verify() {
     fi
 
     if [ -e "$ADSB_CONFIG" ]; then
-        ok "radar config" "$ADSB_CONFIG"
+        # Existence is not the interesting question. Step 7 leaves an existing
+        # config alone by design, so a config written before adsb.lol started
+        # refusing User-Agent-less requests is still sitting there pointing at
+        # adsb.lol with no UA. The cockpit no longer hangs on that -- bin/kcgx
+        # passes the pair as flags -- but adsb-tui run on its own still does,
+        # and so does anything else reading this file. Worth being specific
+        # either way: the cure is two lines, and nothing else in the file
+        # hints at them.
+        if grep -q 'adsb\.lol' "$ADSB_CONFIG" 2>/dev/null &&
+           ! grep -qi '^[[:space:]]*api_key_header[[:space:]]*=[[:space:]]*"User-Agent"' \
+                "$ADSB_CONFIG" 2>/dev/null; then
+            meh "radar config" \
+                "reads adsb.lol with no User-Agent; adsb-tui alone gets a 403"
+            say "      The cockpit is fine: kcgx passes the User-Agent to the"
+            say "      radar pane as a flag on every launch. Running adsb-tui"
+            say "      yourself is not -- it sends none and has no flag for"
+            say "      one. Add these two lines to $ADSB_CONFIG:"
+            say "        api_key_header = \"User-Agent\""
+            say "        api_key = \"$ADSB_UA\""
+        else
+            ok "radar config" "$ADSB_CONFIG"
+        fi
     else
         meh "radar config" "absent; the radar will have nowhere to read from"
     fi
@@ -794,15 +882,19 @@ print(sum(1 for d in sounddevice.query_devices() if d["max_output_channels"] > 0
     fi
 
     if [ -z "${KCGX_SETUP_SKIP_NET:-}" ]; then
-        if reachable "https://www.liveatc.net/"; then
-            ok "liveatc.net" "reachable"
+        # /play/*.pls is the path audio actually comes from, and it is not
+        # the one behind the Cloudflare challenge -- so it is the one worth
+        # checking. The listing at /search/ refuses most requests even when
+        # everything is working; failing the install over it would be noise.
+        if serves "https://www.liveatc.net/play/kpdx_twr.pls"; then
+            ok "liveatc.net" "streaming reachable"
         else
-            meh "liveatc.net" "unreachable; feeds will not load"
+            meh "liveatc.net" "refused /play/; feeds will not play"
         fi
-        if reachable "https://api.adsb.lol/v2/point/45.6/-122.6/5"; then
-            ok "adsb.lol" "reachable"
+        if serves "https://api.adsb.lol/v2/point/45.6/-122.6/5" "$ADSB_UA"; then
+            ok "adsb.lol" "serving aircraft"
         else
-            meh "adsb.lol" "unreachable; the radar will stay empty"
+            meh "adsb.lol" "refused the request; the radar will stay empty"
         fi
     fi
 

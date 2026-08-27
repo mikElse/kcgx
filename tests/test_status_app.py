@@ -48,6 +48,17 @@ def rendered(app, size=SIZE):
     return [s.text for s in strips], strips
 
 
+def shows(joined, code):
+    """Is `code` on screen, drawn as block capitals?
+
+    The tests below were written when the code was printed as text. It is
+    the same assertion -- the pane is showing this airport -- so they get a
+    spelling of it that survives the change rather than a weaker check.
+    """
+    from kcgx import bigtext as _bt
+    return all(row.rstrip() in joined for row in _bt.render(code) if row.strip())
+
+
 def make(icaos=("KPDX",), times=(T1,), clicks=None):
     """Build a pane whose resolver and clock are scripted, not real.
 
@@ -80,7 +91,7 @@ async def test_capture_sees_mounted_widget_content():
     app = make()
     async with app.run_test(size=SIZE):
         text, _ = rendered(app)
-        assert any("KPDX" in line for line in text)
+        assert shows("\n".join(text), "KPDX")
 
 
 @pytest.mark.asyncio
@@ -88,7 +99,7 @@ async def test_it_shows_the_airport_and_both_clocks():
     app = make()
     async with app.run_test(size=SIZE):
         joined = "\n".join(rendered(app)[0])
-        assert "KPDX" in joined
+        assert shows(joined, "KPDX")
         assert "Portland International Airport" in joined
         assert "1955Z" in joined
         assert "12:55" in joined
@@ -118,11 +129,11 @@ async def test_a_changed_airport_is_picked_up_on_the_next_tick():
     """This is what lets `kcgx go` leave the status pane alone."""
     app = make(icaos=("KPDX", "KORD"))
     async with app.run_test(size=SIZE) as pilot:
-        assert "KPDX" in "\n".join(rendered(app)[0])
+        assert shows("\n".join(rendered(app)[0]), "KPDX")
         app.tick()
         await pilot.pause()
         joined = "\n".join(rendered(app)[0])
-        assert "KORD" in joined
+        assert shows(joined, "KORD")
         assert "Chicago O'Hare International Airport" in joined
 
 
@@ -167,13 +178,13 @@ async def test_the_pane_ticks_by_itself_with_nobody_driving_it():
     """
     app = make(icaos=("KPDX", "KORD"))
     async with app.run_test(size=SIZE) as pilot:
-        assert "KPDX" in "\n".join(rendered(app)[0])
+        assert shows("\n".join(rendered(app)[0]), "KPDX")
 
         await asyncio.sleep(min(TICK_SECONDS, TICK_WAIT_CEILING) * 1.5)
         await pilot.pause()
 
         joined = "\n".join(rendered(app)[0])
-        assert "KORD" in joined, "the pane never ticked without being told to"
+        assert shows(joined, "KORD"), "the pane never ticked without being told to"
         assert "Chicago O'Hare International Airport" in joined
 
 
@@ -181,7 +192,7 @@ async def test_the_pane_ticks_by_itself_with_nobody_driving_it():
 async def test_an_unknown_icao_shows_the_bare_code():
     app = make(icaos=("ZZZZ",))
     async with app.run_test(size=SIZE):
-        assert "ZZZZ" in "\n".join(rendered(app)[0])
+        assert shows("\n".join(rendered(app)[0]), "ZZZZ")
 
 
 @pytest.mark.asyncio
@@ -220,9 +231,9 @@ async def test_an_unknown_remembered_icao_falls_back_where_the_launcher_pointed(
     )
     async with app.run_test(size=SIZE):
         joined = "\n".join(rendered(app)[0])
-        assert "ZZZZ" not in joined, "the pane is naming an airport nothing else is on"
+        assert not shows(joined, "ZZZZ"), "the pane is naming an airport nothing else is on"
         assert FALLBACK_ICAO == "KPDX"
-        assert "KPDX" in joined
+        assert shows(joined, "KPDX")
         assert "Portland International Airport" in joined
 
 
@@ -257,7 +268,7 @@ async def test_a_failing_resolver_keeps_the_last_known_airport_and_the_clock_sti
     )
     async with app.run_test(size=SIZE) as pilot:
         joined = "\n".join(rendered(app)[0])
-        assert "KPDX" in joined
+        assert shows(joined, "KPDX")
         assert "1955Z" in joined
 
         app.tick()
@@ -265,7 +276,7 @@ async def test_a_failing_resolver_keeps_the_last_known_airport_and_the_clock_sti
 
         assert app.is_running
         joined = "\n".join(rendered(app)[0])
-        assert "KPDX" in joined
+        assert shows(joined, "KPDX")
         assert "2030Z" in joined
 
 
@@ -298,7 +309,7 @@ async def test_a_failing_clock_keeps_the_last_known_time_and_the_airport_still_u
     )
     async with app.run_test(size=SIZE) as pilot:
         joined = "\n".join(rendered(app)[0])
-        assert "KPDX" in joined
+        assert shows(joined, "KPDX")
         assert "1955Z" in joined
 
         app.tick()
@@ -306,7 +317,7 @@ async def test_a_failing_clock_keeps_the_last_known_time_and_the_airport_still_u
 
         assert app.is_running
         joined = "\n".join(rendered(app)[0])
-        assert "KORD" in joined
+        assert shows(joined, "KORD")
         assert "Chicago O'Hare International Airport" in joined
         assert "1955Z" in joined
 
@@ -440,3 +451,90 @@ def test_open_picker_shells_out_to_tmux():
     calls = []
     open_picker(run=lambda argv, **kw: calls.append(argv))
     assert calls == [("tmux", *PICKER_POPUP)]
+
+
+# ---------------------------------------------------------------------------
+# The ICAO as block capitals
+#
+# The code is what you read from across the room, so it is drawn rather
+# than printed. That has two consequences the tests below pin: the literal
+# code is no longer on screen as text, and the pane needs four rows for the
+# banner where it used to need one line for the whole airport.
+
+from pathlib import Path            # noqa: E402
+import re                           # noqa: E402
+
+from kcgx import bigtext            # noqa: E402
+from kcgx.status import banner_text, detail_line   # noqa: E402
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.asyncio
+async def test_the_code_is_drawn_as_block_capitals():
+    app = make()
+    async with app.run_test(size=SIZE):
+        joined = "\n".join(rendered(app)[0])
+    for row in bigtext.render("KPDX"):
+        assert row.rstrip() in joined, f"missing banner row: {row!r}"
+
+
+@pytest.mark.asyncio
+async def test_the_name_line_no_longer_repeats_the_code():
+    """The banner carries the code, so printing it again alongside the
+    name would spend a line of a four-line pane saying it twice."""
+    app = make()
+    async with app.run_test(size=SIZE):
+        joined = "\n".join(rendered(app)[0])
+    assert "Portland International Airport" in joined
+    assert "KPDX" not in joined, "the code is still being printed as text"
+
+
+@pytest.mark.asyncio
+async def test_a_pane_too_narrow_for_the_banner_falls_back_to_the_plain_line():
+    """Every splitter here is drag-resizable. Narrower than the banner, the
+    pane goes back to exactly what it showed before this feature existed --
+    a wrapped or clipped banner would be worse than no banner."""
+    narrow = (bigtext.width("KPDX") - 1 + 2, STATUS_ROWS)
+    app = make()
+    async with app.run_test(size=narrow) as pilot:
+        # on_mount paints before the first layout, when every widget still
+        # reports width 0 and the design width stands in -- so the banner
+        # decision on that frame is made against 46 columns, not these.
+        app.tick()
+        await pilot.pause()
+        joined = "\n".join(rendered(app, narrow)[0])
+    # The literal string, deliberately: the whole point of the fallback
+    # is that the code goes back to being printed rather than drawn.
+    assert "KPDX" in joined, "no fallback to the plain code"
+    for row in bigtext.render("KPDX"):
+        assert row.rstrip() not in joined, "banner drawn into a pane too narrow"
+
+
+def test_banner_text_is_empty_when_it_will_not_fit():
+    assert banner_text("KPDX", bigtext.width("KPDX")) != ""
+    assert banner_text("KPDX", bigtext.width("KPDX") - 1) == ""
+
+
+def test_the_detail_line_carries_the_code_only_when_the_banner_does_not():
+    wide = CONTENT_WIDTH
+    assert detail_line(PDX, "KPDX", wide, banner="drawn").strip() == PDX.name
+    assert detail_line(PDX, "KPDX", wide, banner="").strip().startswith("KPDX")
+
+
+def test_an_unknown_code_leaves_the_detail_line_blank():
+    """The banner still spells the code, so there is nothing to add."""
+    assert detail_line(None, "ZZZZ", CONTENT_WIDTH, banner="drawn").strip() == ""
+
+
+def test_the_launcher_and_the_app_agree_about_the_pane_height():
+    """The height is declared twice -- here and in bin/kcgx -- and tmux
+    believes the launcher. If they drift, the pane the app formats for is
+    not the pane it gets and the banner clips with nothing to show for it.
+    """
+    source = (REPO / "bin" / "kcgx").read_text()
+    match = re.search(r'STATUS_ROWS="\$\{KCGX_STATUS_ROWS:-(\d+)\}"', source)
+    assert match, "could not find the launcher's STATUS_ROWS default"
+    assert int(match.group(1)) == STATUS_ROWS, (
+        f"bin/kcgx defaults to {match.group(1)} rows, status.py says {STATUS_ROWS}"
+    )
