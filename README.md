@@ -473,10 +473,13 @@ the tmux server, so any other tmux sessions you have keep running. Stopping
 something that isn't running is not an error.
 
 **Mouse behaviour.** tmux handles drags on pane borders. Clicks and scrolls
-*inside* a pane go to the application if it asked for mouse reporting —
-`squelch` does, so its feed picker stays clickable. `adsb-tui` most likely
-does not, so scrolling over it enters tmux's copy-mode, which gives you
-scrollback over the traffic table.
+*inside* a pane go to the application if it asked for mouse reporting, and
+both panes ask: `squelch` keeps its feed picker clickable, and `adsb-tui`
+takes a scroll to move through the traffic table and a left click to select
+a row. Measured rather than assumed — `tmux display -p '#{mouse_any_flag}'`
+answers `1` over either pane. So nothing here falls through to tmux's
+copy-mode on a scroll, and there would be no scrollback behind it if it
+did: both panes draw on the alternate screen.
 
 **Picking an airport.** `Ctrl-b` then `a` opens an airport search in a
 popup over the cockpit, and so does clicking `▾ airport (^b a)` in the
