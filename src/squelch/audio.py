@@ -14,6 +14,8 @@ from collections.abc import Callable, Iterator
 
 import numpy as np
 
+from squelch.feeds import USER_AGENT
+
 Spawner = Callable[[str], subprocess.Popen]
 
 SAMPLE_RATE = 16_000
@@ -49,12 +51,20 @@ def rms_dbfs(pcm: bytes) -> float:
 RECONNECT_TICK_S = 0.25
 
 
+# LiveATC's stream servers answer 403 to ffmpeg's own User-Agent ("Lavf/..."),
+# any version, while serving the identical request under any other name --
+# measured 2026-10-10: curl, a bare "Mozilla/5.0" and squelch's own UA all got
+# 200 from the same server that refused Lavf. Nothing on screen says so: the
+# feed just sits on "connecting" forever, because a 403 looks like any other
+# dropout to the reconnect loop. So name ourselves, as the feed-list fetch does.
 def ffmpeg_command(url: str) -> list[str]:
     return [
         "ffmpeg",
         "-hide_banner",
         "-loglevel", "error",
         "-nostdin",
+        # An input option: it has to come before the -i it applies to.
+        "-user_agent", USER_AGENT,
         "-i", url,
         "-vn",
         "-ac", "1",
