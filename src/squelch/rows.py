@@ -43,6 +43,8 @@ _STATE_DOTS = {
     "reconnecting": "◐",
     "offline": "○",
     "starting": "◌",
+    # Over LiveATC's stream limit: not connected, and asking for nothing.
+    "parked": "‖",
 }
 
 

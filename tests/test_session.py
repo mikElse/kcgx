@@ -274,3 +274,110 @@ def test_frames_reach_the_channel_s_ring_buffer():
     assert ch.buffer.available == 0
     session.write(b"\x00\x40" * 320)
     assert ch.buffer.available == 320
+
+
+# -- parking (see slots.py) ------------------------------------------------
+
+
+class BlockingPipeline:
+    """Runs until stopped, like a live stream does."""
+
+    instances: list = []
+
+    def __init__(self, reader, sink, events):
+        self.events = events
+        self.done = threading.Event()
+        BlockingPipeline.instances.append(self)
+
+    def run(self):
+        self.events.on_state("live")
+        self.done.wait(5)
+
+    def stop(self):
+        self.done.set()
+
+
+def wait_for(predicate, timeout=2.0):
+    deadline = threading.Event()
+    for _ in range(int(timeout / 0.01)):
+        if predicate():
+            return True
+        deadline.wait(0.01)
+    return predicate()
+
+
+def test_a_session_is_not_connected_until_started():
+    session, _ = make()
+    assert session.connected is False
+
+
+def test_park_stops_the_stream_and_says_parked():
+    BlockingPipeline.instances.clear()
+    session, got = make(pipeline_factory=BlockingPipeline)
+    session.start()
+    assert wait_for(lambda: ("kpdx3_twr", "live") in got["states"])
+    session.park()
+    assert session.connected is False
+    assert session.state == "parked"
+    assert BlockingPipeline.instances[0].done.is_set(), "the stream kept running"
+
+
+def test_a_parked_feed_does_not_then_report_offline():
+    """The parked pipeline's thread unwinds after park() returns, and its
+    closing "offline" would overwrite "parked" on the row."""
+    BlockingPipeline.instances.clear()
+    session, got = make(pipeline_factory=BlockingPipeline)
+    session.start()
+    assert wait_for(lambda: session.state == "live")
+    session.park()
+    session._thread.join(2)
+    assert session.state == "parked"
+    assert got["states"][-1] == ("kpdx3_twr", "parked")
+
+
+def test_a_parked_feed_can_be_started_again():
+    BlockingPipeline.instances.clear()
+    session, got = make(pipeline_factory=BlockingPipeline)
+    session.start()
+    assert wait_for(lambda: session.state == "live")
+    session.park()
+    session.start()
+    assert session.connected is True
+    assert wait_for(lambda: len(BlockingPipeline.instances) == 2)
+    assert wait_for(lambda: session.state == "live")
+    session.stop()
+
+
+def test_parked_while_resolving_opens_no_stream():
+    """resolve() is an HTTP fetch; a park that lands during it must stop the
+    stream that would otherwise be opened once it returns."""
+    BlockingPipeline.instances.clear()
+    resolving = threading.Event()
+    release = threading.Event()
+
+    def slow_resolve(ident):
+        resolving.set()
+        release.wait(2)
+        return f"https://example.test/{ident}"
+
+    session, got = make(resolve=slow_resolve, pipeline_factory=BlockingPipeline)
+    session.start()
+    assert resolving.wait(2)
+    session.park()
+    release.set()
+    session._thread.join(2)
+    assert session.state == "parked"
+    assert session._pipeline is None
+    # A pipeline may have been built, but never run: run() is what reads the
+    # reader, and the reader is what spawns ffmpeg.
+    assert ("kpdx3_twr", "live") not in got["states"]
+
+
+def test_start_twice_opens_one_stream():
+    BlockingPipeline.instances.clear()
+    session, _ = make(pipeline_factory=BlockingPipeline)
+    session.start()
+    session.start()
+    assert wait_for(lambda: session.state == "live")
+    assert len(BlockingPipeline.instances) == 1
+    session.stop()

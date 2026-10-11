@@ -395,8 +395,9 @@ def main(
     def start_everything() -> None:
         for message in pending:
             app.warn(message)
-        for session in sessions:
-            session.start()
+        # Not every session: LiveATC streams a handful of feeds to one
+        # address, and the app decides which (see slots.py).
+        app.start_streams()
 
     # Started from on_mount, not here: a call_from_thread issued before
     # App.run() has the loop up raises "App is not running" and is lost.

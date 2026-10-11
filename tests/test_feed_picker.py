@@ -18,6 +18,17 @@ class _FakeSession:
         self.name = label
         self.muted = True
         self.state = "live"
+        self.activity = 0.0
+        # Already streaming, as the sessions an app is built with are by the
+        # time anyone can press `f`.
+        self.connected = True
+
+    def start(self):
+        self.connected = True
+
+    def park(self):
+        self.connected = False
+        self.state = "parked"
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -411,6 +422,7 @@ class _OpenableSession(_FakeSession):
         super().__init__(ident, label)
         self.started = False
         self.stopped = False
+        self.connected = False
         self.muted = False
         self.level = -96.0
         self.activity = 0.0
@@ -423,6 +435,7 @@ class _OpenableSession(_FakeSession):
 
     def start(self):
         self.started = True
+        self.connected = True
 
     def stop(self):
         self.stopped = True

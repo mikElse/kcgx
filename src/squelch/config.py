@@ -42,6 +42,10 @@ class Config:
     # the cost of lag, lower it to stay closer to live at the cost of
     # dropouts.
     buffer_seconds: float = 4.0
+    # How many streams to hold open at once. LiveATC cuts an address off
+    # past seven; feeds beyond this are parked instead of left knocking.
+    # See slots.py for the measurement.
+    max_streams: int = 7
 
 
 def load_config(path: Path | None = None) -> Config:

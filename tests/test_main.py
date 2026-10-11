@@ -175,6 +175,12 @@ class FakeApp:
     def warn(self, message):
         self.warnings.append(message)
 
+    def start_streams(self):
+        # Which sessions get a stream is SquelchApp's call (tests/test_app.py
+        # covers it); here every one does, so main's wiring is what is tested.
+        for session in self.sessions:
+            session.start()
+
     def run(self):
         self.ran = True
         self.on_start()

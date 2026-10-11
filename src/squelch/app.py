@@ -27,6 +27,7 @@ from squelch.activity import Resorter, rank
 from squelch.radar_theme import POLL_SECONDS, RadarTheme
 from squelch.themes import METER_PALETTES, TEXTUAL_THEME_PREFIX, textual_theme
 from squelch.solo import Solo
+from squelch import slots
 from squelch.rows import (
     BLOCKS,
     FLOOR_DBFS,
@@ -138,6 +139,9 @@ class SquelchApp(App):
         # to get a mixer channel from.
         self._feed_opener = feed_opener
         self._selected = 0
+        # At least one: a limit of zero would park everything, including the
+        # feed you are listening to, and look exactly like a dead network.
+        self._max_streams = max(1, config.max_streams)
         self._solo = Solo()
         self._resorter = Resorter()
         self._resort_timer = None
@@ -387,18 +391,92 @@ class SquelchApp(App):
             self.warn(f"could not open {feed.ident}: {exc}")
             return
 
+        if not session.muted and self._audible_count() >= self._max_streams:
+            # Open it muted rather than not at all: the row is still what
+            # was asked for, and unmuting it later is one key.
+            session.muted = True
+            self.warn(
+                f"{self._max_streams} feeds already audible — LiveATC's "
+                f"limit. Opened {session.name} muted."
+            )
         self._sessions.append(session)
         row = FeedRow(session, classes="feed")
         self._rows[id(session)] = row
         if self._feed_list is not None:
             self._feed_list.mount(row)
-        # Started after mounting, so its first state change has a row to
+        # Connected after mounting, so its first state change has a row to
         # land on -- the session's opening act can be a warning.
-        session.start()
+        self.reconcile_streams()
         self._selected = len(self._sessions) - 1
         self._apply_selection()
         self._refresh_header()
         self.warn(f"opened {feed.ident}")
+
+    # -- stream slots --------------------------------------------------
+
+    def start_streams(self) -> None:
+        """Connect the feeds that get a slot, and say why the rest wait.
+
+        Called once the app is running, in place of starting every session:
+        an airport can publish four times as many feeds as LiveATC will
+        stream to one address.
+        """
+        self.reconcile_streams()
+        parked = sum(1 for s in self._sessions if not s.connected)
+        if parked:
+            self.warn(
+                f"LiveATC streams {self._max_streams} feeds at once — "
+                f"{parked} parked (‖). Unmute one to bring it in; "
+                f"the quietest muted feed gives up its place."
+            )
+
+    def reconcile_streams(self) -> None:
+        """Park and connect feeds until the slots match slots.plan().
+
+        Parking first, so the stream count never goes over the limit even
+        for the moment between the two -- that moment is a connection
+        LiveATC resets.
+        """
+        wanted = {
+            id(s)
+            for s in slots.plan(
+                self._sessions,
+                self._max_streams,
+                audible_of=lambda s: not s.muted,
+                connected_of=lambda s: s.connected,
+                activity_of=lambda s: s.activity,
+            )
+        }
+        for session in self._sessions:
+            # Also parks a feed never started, so it says "parked" rather
+            # than sitting on "starting" for a start that is not coming.
+            if id(session) not in wanted and (
+                session.connected or session.state != "parked"
+            ):
+                session.park()
+                # park() announces itself through the session's events, but
+                # those marshal with call_from_thread -- which refuses to run
+                # on the UI thread, where we are, and the refusal is
+                # swallowed. Redraw the row from here instead.
+                self.set_state(session, session.state)
+        for session in self._sessions:
+            if not session.connected and id(session) in wanted:
+                session.start()
+        self._refresh_header()
+
+    def _audible_count(self) -> int:
+        return sum(1 for s in self._sessions if not s.muted)
+
+    def _refuse_over_limit(self, session) -> bool:
+        """Warn and return True if unmuting `session` would need a slot
+        that only another audible feed could give up."""
+        if not session.muted or self._audible_count() < self._max_streams:
+            return False
+        self.warn(
+            f"{self._max_streams} feeds already audible — LiveATC's limit. "
+            f"Mute one to hear {session.name}."
+        )
+        return True
 
     def action_cursor_down(self) -> None:
         if not self._sessions:
@@ -421,7 +499,10 @@ class SquelchApp(App):
             # is no longer the one they want back.
             self._solo.cancel()
             self._clear_solo_marks()
+        if self._refuse_over_limit(session):
+            return
         session.toggle_mute()
+        self.reconcile_streams()
         self._refresh_row(session)
         self._reorder_now()
 
@@ -436,6 +517,10 @@ class SquelchApp(App):
         else:
             states = {id(s): s.muted for s in self._sessions}
             self._apply_mix(self._solo.engage(id(session), states))
+        # Solo can move audibility to a parked feed, and returning from it
+        # can move it back to several. The restored mix fit the limit when
+        # it was recorded, because every unmute along the way was checked.
+        self.reconcile_streams()
         self._clear_solo_marks()
         self._refresh_rows()
         self._reorder_now()
