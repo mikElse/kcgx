@@ -85,6 +85,16 @@ class FeedSession:
         self._pipeline: Any = None
         self._reader: Any = None
         self._thread: threading.Thread | None = None
+        # A session is started and parked repeatedly as stream slots move
+        # between feeds (see slots.py), and a parked feed's thread can still
+        # be inside resolve() or unwinding its pipeline when the next start
+        # comes. Each start is a new generation; anything a stale one tries
+        # to do -- install a pipeline, report a state -- is dropped, so a
+        # feed parked a moment ago cannot reappear as "offline", or worse,
+        # quietly open a second stream.
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._connected = False
 
     # -- audio ---------------------------------------------------------
 
@@ -147,56 +157,100 @@ class FeedSession:
 
     # -- lifecycle -----------------------------------------------------
 
+    @property
+    def connected(self) -> bool:
+        """Whether this feed holds one of the stream slots.
+
+        True from start() to park() or stop(), whatever the stream itself is
+        doing -- a feed that is reconnecting still holds its slot.
+        """
+        return self._connected
+
     def start(self) -> None:
-        self._thread = threading.Thread(target=self.run, daemon=True)
+        with self._lock:
+            if self._connected:
+                return
+            self._connected = True
+            self._generation += 1
+            generation = self._generation
+        self._thread = threading.Thread(
+            target=self.run, args=(generation,), daemon=True
+        )
         self._thread.start()
 
-    def run(self) -> None:
+    def park(self) -> None:
+        """Give up the stream slot, and say so on the row."""
+        self._disconnect()
+        self._set_state("parked")
+
+    def run(self, generation: int | None = None) -> None:
+        if generation is None:
+            generation = self._generation
         try:
-            self._run()
+            self._run(generation)
         except Exception as exc:
             # A daemon thread that dies with an unhandled exception prints
             # nothing and leaves this feed's row frozen at whatever it last
             # said. One feed's failure is its own business, but it has to be
             # visible as such.
-            self._fail(f"{type(exc).__name__}: {exc}")
+            self._fail(f"{type(exc).__name__}: {exc}", generation)
 
-    def _run(self) -> None:
+    def _run(self, generation: int) -> None:
         try:
             url = self._resolve(self.feed.ident)
         except Exception:
-            self._fail("could not resolve feed")
+            self._fail("could not resolve feed", generation)
             return
 
-        self._reader = self._reader_factory(url)
-        self._pipeline = self._pipeline_factory(
-            self._reader,
+        reader = self._reader_factory(url)
+        pipeline = self._pipeline_factory(
+            reader,
             # This session is the sink: the pipeline hands it frames and it
             # decodes them into the mixer channel's ring buffer.
             self,
             Events(
-                on_state=lambda state: self._set_state(state),
+                on_state=lambda state: self._set_state(state, generation),
                 on_activity=self._on_activity,
             ),
         )
-        self._pipeline.run()
+        with self._lock:
+            # Parked or stopped while resolve() was in flight. The reader
+            # has not spawned ffmpeg yet -- that happens on its first read --
+            # so dropping both here opens nothing.
+            if generation != self._generation:
+                return
+            self._reader = reader
+            self._pipeline = pipeline
+        pipeline.run()
         # run() only returns when the reader stops, which for a live feed
         # means we asked it to.
-        self._set_state("offline")
+        self._set_state("offline", generation)
 
     def stop(self) -> None:
-        if self._pipeline is not None:
+        self._disconnect()
+
+    def _disconnect(self) -> None:
+        with self._lock:
+            self._connected = False
+            self._generation += 1
+            pipeline, self._pipeline = self._pipeline, None
+            self._reader = None
+        if pipeline is not None:
             try:
-                self._pipeline.stop()
+                pipeline.stop()
             except Exception:
                 pass
 
     # -- state ---------------------------------------------------------
 
-    def _set_state(self, state: str) -> None:
+    def _set_state(self, state: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._generation:
+            return
         self.state = state
         self.events.on_state(self, state)
 
-    def _fail(self, message: str) -> None:
+    def _fail(self, message: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._generation:
+            return
         self._set_state("offline")
         self.events.on_warn(self, message)

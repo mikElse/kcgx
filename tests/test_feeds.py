@@ -49,6 +49,17 @@ def test_parse_airport_page_finds_tower():
     assert all(f.label for f in feeds), "every feed needs a non-empty label"
 
 
+def test_parse_the_html5_player_page():
+    """LiveATC's page as of 2026-10-10: no /play/*.pls links, only the HTML5
+    player's myHTML5Popup('<ident>', ...). It parsed to nothing."""
+    feeds = parse_airport_page((FIXTURES / "kord_html5.html").read_text())
+    by_ident = {f.ident: f.label for f in feeds}
+    assert len(feeds) == 30
+    assert by_ident["kord1n2_app_133625"] == "Chicago Approach (10R/28C)"
+    assert by_ident["kord1n1_app_133625"] == "Chicago Approach (10R/28C) #2"
+    assert all(f.label for f in feeds)
+
+
 def test_fetch_feeds_uses_injected_fetcher():
     calls = []
 

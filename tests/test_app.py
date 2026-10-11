@@ -25,6 +25,18 @@ class FakeSession:
         self.ambient = False
         self.soloed = False
         self.activity = 0.0
+        # Connected unless a test says otherwise, so tests that predate the
+        # stream limit see the stack they were written against.
+        self.connected = True
+        self.starts = 0
+
+    def start(self):
+        self.connected = True
+        self.starts += 1
+
+    def park(self):
+        self.connected = False
+        self.state = "parked"
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -922,3 +934,137 @@ async def test_the_footer_fits_the_pane():
     async with app.run_test(size=SIZE) as pilot:
         await pilot.pause()
         assert overflowing(app) == []
+
+
+# -- stream limit (see slots.py) -------------------------------------------
+
+
+def limited_app(n, limit, audible=(0,)):
+    """n sessions, none started yet, under a stream limit of `limit`."""
+    stack = sessions(n)
+    for index, session in enumerate(stack):
+        session.connected = False
+        session.state = "starting"
+        session.muted = index not in audible
+    app = SquelchApp(
+        Config(icao="KPDX", feed="kpdx3_twr", max_streams=limit), stack
+    )
+    warned = []
+    app.warn = warned.append
+    return app, warned
+
+
+def by_ident(app, ident):
+    return next(s for s in app._sessions if s.feed.ident == ident)
+
+
+@pytest.mark.asyncio
+async def test_startup_connects_no_more_than_the_limit_and_parks_the_rest():
+    app, warned = limited_app(5, limit=3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        connected = [s for s in app._sessions if s.connected]
+        parked = [s for s in app._sessions if s.state == "parked"]
+        assert len(connected) == 3
+        assert len(parked) == 2
+        assert not any(s.starts for s in parked), "a parked feed was started"
+        assert by_ident(app, "kpdx3_twr").connected, "the audible feed must play"
+        assert any("2 parked" in m for m in warned), warned
+
+
+@pytest.mark.asyncio
+async def test_no_parking_notice_when_everything_fits():
+    app, warned = limited_app(3, limit=7)
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        assert all(s.connected for s in app._sessions)
+        assert not any("parked" in m for m in warned)
+
+
+@pytest.mark.asyncio
+async def test_a_parked_row_says_so():
+    app, _ = limited_app(5, limit=3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        text, _ = rendered(app)
+        assert any("‖" in line for line in text)
+
+
+@pytest.mark.asyncio
+async def test_unmuting_a_parked_feed_takes_the_quietest_muted_slot():
+    app, _ = limited_app(5, limit=3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        held = [s for s in app._sessions if s.connected and s.muted]
+        held[0].activity, held[1].activity = 0.5, 0.0
+        quietest = held[1]
+        target = next(s for s in app._sessions if not s.connected)
+        app._selected = app._sessions.index(target)
+        await pilot.press("space")
+        await pilot.pause()
+        assert target.muted is False
+        assert target.connected, "an unmuted feed must hold a stream"
+        assert not quietest.connected, "the quietest muted feed should yield"
+        assert sum(s.connected for s in app._sessions) == 3
+
+
+@pytest.mark.asyncio
+async def test_unmuting_past_the_limit_is_refused_and_explained():
+    app, warned = limited_app(4, limit=2, audible=(0, 1))
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        target = next(s for s in app._sessions if s.muted)
+        app._selected = app._sessions.index(target)
+        await pilot.press("space")
+        await pilot.pause()
+        assert target.muted is True
+        assert sum(not s.muted for s in app._sessions) == 2
+        assert any("Mute one" in m for m in warned), warned
+
+
+@pytest.mark.asyncio
+async def test_muting_is_never_refused_at_the_limit():
+    app, _ = limited_app(4, limit=2, audible=(0, 1))
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        target = next(s for s in app._sessions if not s.muted)
+        app._selected = app._sessions.index(target)
+        await pilot.press("space")
+        await pilot.pause()
+        assert target.muted is True
+
+
+@pytest.mark.asyncio
+async def test_soloing_a_parked_feed_connects_it():
+    app, _ = limited_app(5, limit=3)
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        target = next(s for s in app._sessions if not s.connected)
+        app._selected = app._sessions.index(target)
+        await pilot.press("S")
+        await pilot.pause()
+        assert target.connected
+        assert sum(s.connected for s in app._sessions) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_feed_opened_at_the_audible_limit_opens_muted():
+    app, warned = limited_app(2, limit=2, audible=(0, 1))
+    late = FakeSession("kpdx3_atis", "KPDX ATIS", muted=False)
+    late.connected = False
+    app._feed_opener = lambda feed: late
+    async with app.run_test(size=SIZE) as pilot:
+        app.start_streams()
+        await pilot.pause()
+        app.open_feed(late.feed)
+        await pilot.pause()
+        assert late.muted is True
+        assert sum(not s.muted for s in app._sessions) == 2
+        assert any("muted" in m for m in warned), warned

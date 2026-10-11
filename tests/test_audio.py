@@ -26,6 +26,17 @@ def test_ffmpeg_command_requests_16k_mono_s16le():
     assert "https://example.test/stream" in cmd
 
 
+def test_ffmpeg_command_does_not_send_ffmpegs_own_user_agent():
+    # LiveATC's stream servers 403 "Lavf/..." -- ffmpeg's default -- so the
+    # command must name itself, and must do it before -i or ffmpeg treats it
+    # as an output option and still sends Lavf.
+    cmd = ffmpeg_command("https://example.test/stream")
+    assert "-user_agent" in cmd
+    user_agent = cmd[cmd.index("-user_agent") + 1]
+    assert user_agent and not user_agent.startswith("Lavf")
+    assert cmd.index("-user_agent") < cmd.index("-i")
+
+
 def test_backoff_doubles_then_caps():
     assert list(itertools.islice(backoff_delays(cap=30.0), 8)) == [
         1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0

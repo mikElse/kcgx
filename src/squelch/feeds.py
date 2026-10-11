@@ -17,7 +17,15 @@ BASE = "https://www.liveatc.net"
 USER_AGENT = "squelch/0.1 (personal listener)"
 
 _PLS_FILE_RE = re.compile(r"^\s*File\d+\s*=\s*(\S+)\s*$", re.MULTILINE)
-_FEED_LINK_RE = re.compile(r"/play/([a-z0-9_\-]+)\.pls", re.IGNORECASE)
+# Feeds are found by their play links. LiveATC's page used to carry a
+# /play/<ident>.pls link per feed; by 2026-10-10 those were gone, leaving only
+# the HTML5 player's myHTML5Popup('<ident>','<icao>') -- and a page that
+# parsed to no feeds at all, while /play/<ident>.pls itself still served.
+# Both are matched, so the next swap back does not do the same.
+_FEED_LINK_RE = re.compile(
+    r"/play/([a-z0-9_\-]+)\.pls|myHTML5Popup\(\s*'([a-z0-9_\-]+)'",
+    re.IGNORECASE,
+)
 # Attribute-tolerant: matches <strong>, <strong class="x">, <STRONG>, etc.
 _STATUS_MARKER_RE = re.compile(r"^\s*feed\s+status", re.IGNORECASE)
 _STRONG_RE = re.compile(r"<strong[^>]*>([^<]{1,80})</strong>", re.IGNORECASE)
@@ -67,7 +75,7 @@ def parse_airport_page(html: str) -> list[Feed]:
     seen: set[str] = set()
     window_start = 0
     for match in _FEED_LINK_RE.finditer(html):
-        ident = match.group(1).lower()
+        ident = (match.group(1) or match.group(2)).lower()
         if ident in seen:
             continue
         seen.add(ident)

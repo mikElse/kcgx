@@ -203,8 +203,19 @@ def load_feeds(
         # budget for a warm airport, or the reverse.
         feeds = fetch(config.icao, cache_dir=cache_dir)
     except FeedError:
-        # The page loaded and had no feeds on it. Retrying will not
-        # conjure one, so do not suggest it.
+        # The page loaded and had no feeds on it. Usually that is the
+        # answer -- but it is also exactly what a change to LiveATC's markup
+        # looks like, and on 2026-10-10 one turned a cached thirty-feed KORD
+        # into "no feeds" on every launch the listing was let through. A
+        # list this airport had last time beats an empty pane.
+        stale = read_cached_feeds(config.icao, directory=cache_dir)
+        if stale:
+            warn(
+                f"LiveATC's listing for {config.icao} showed no feeds — "
+                f"using the cached list"
+            )
+            return stale
+        # Retrying will not conjure one, so do not suggest it.
         return _no_feeds(
             config, warn, "LiveATC has no feeds for this airport", retryable=False
         )
@@ -384,8 +395,9 @@ def main(
     def start_everything() -> None:
         for message in pending:
             app.warn(message)
-        for session in sessions:
-            session.start()
+        # Not every session: LiveATC streams a handful of feeds to one
+        # address, and the app decides which (see slots.py).
+        app.start_streams()
 
     # Started from on_mount, not here: a call_from_thread issued before
     # App.run() has the loop up raises "App is not running" and is lost.
