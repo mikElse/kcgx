@@ -493,6 +493,28 @@ def test_an_airport_liveatc_does_not_cover_does_not_suggest_retrying(tmp_path):
     assert "retry" not in warnings[0].lower()
 
 
+def test_a_page_with_no_feeds_falls_back_to_the_cache(tmp_path):
+    """No feeds on a page that loaded is also what a markup change looks
+    like -- LiveATC's 2026-10 one blanked a cached thirty-feed airport."""
+    from squelch.feeds import FeedError, write_cached_feeds
+
+    def empty(icao, **_):
+        raise FeedError("no feeds found on page")
+
+    write_cached_feeds("KORD", [Feed(ident="kord_twr", label="KORD Tower")],
+                       directory=tmp_path)
+    warnings = []
+    feeds = load_feeds(
+        Config(icao="KORD", feed="kord_twr"),
+        warn=warnings.append,
+        fetch=empty,
+        cache_dir=tmp_path,
+        ttl_seconds=0,  # stale, so the listing is asked for
+    )
+    assert [f.ident for f in feeds] == ["kord_twr"]
+    assert "cached" in warnings[0].lower()
+
+
 # -- which feed comes up audible ------------------------------------------
 
 
