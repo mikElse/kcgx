@@ -4,6 +4,15 @@ Each piece of work gets a **spec** (what and why, agreed before any code) and a
 **plan** (task-by-task TDD steps, agreed before implementation). Specs live in
 `superpowers/specs/`, plans in `superpowers/plans/`.
 
+## Web cockpit: spec drafted, phase A planned
+
+The cockpit as a local web app: audio stays on the server, the browser is the
+display and the controls, and our own vector radar in a WarGames style replaces `adsb-tui`. Five
+phases, A to E; A extracts the controller from `SquelchApp` and leaves the
+terminal cockpit working.
+
+[Spec](superpowers/specs/2026-10-18-web-cockpit-design.md) · [Phase A plan](superpowers/plans/2026-10-18-web-cockpit-a-controller.md) (7 tasks)
+
 ## Audio pane upgrades — planned, not started
 
 A batch of upgrades to `squelch`. Decomposed into four phases because the UI

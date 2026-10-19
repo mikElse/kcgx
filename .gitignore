@@ -12,3 +12,6 @@ __pycache__/
 # recoverable. Restore them with:
 #     uv run --project . python tools/fetch_ambience.py
 src/squelch/assets/audio/*.mp3
+
+# Reference stills for the web cockpit spec; not ours to publish.
+war_games_examples/
