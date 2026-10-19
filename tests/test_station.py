@@ -1,0 +1,313 @@
+"""The station: loading an airport, changing it, and acting for pages.
+
+Fake sessions and a fake feed listing; a real Mixer that is never started,
+so its channel list is the real one; the real airport dataset.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+
+import pytest
+
+from kcgx.hub import Client, Hub
+from kcgx.station import Station, UnknownAirport
+from squelch.config import Config
+from squelch.mixer import Mixer
+from squelch.runtime import AUDIO_FAILED
+from station_fakes import AIRPORTS, LISTINGS, Builder, listing, picker
+
+def make(loader=listing, *, mixer=None):
+    loop = asyncio.get_running_loop()
+    hub = Hub()
+    builder = Builder()
+    remembered = []
+    station = Station(
+        Config(icao="KPDX", feed="kpdx3_twr"),
+        hub,
+        post=lambda fn, *args: loop.call_soon_threadsafe(fn, *args),
+        airports=AIRPORTS,
+        mixer=mixer or Mixer(),
+        feeds_loader=loader,
+        sessions_builder=builder,
+        picker_loader=picker,
+        remember=remembered.append,
+    )
+    return station, hub, builder, remembered
+
+
+def watch(hub):
+    async def send(text):
+        pass
+
+    client = Client(send, size=1000)
+    hub.add(client)
+    return client
+
+
+def frames(client, kind=None):
+    out = []
+    while not client.queue.empty():
+        frame = json.loads(client.queue.get_nowait())
+        if kind is None or frame["t"] == kind:
+            out.append(frame)
+    return out
+
+
+def idents(station):
+    return [s.feed.ident for s in station.cockpit.sessions]
+
+
+# -- opening and changing airport ------------------------------------------
+
+
+async def test_opening_loads_the_airport_and_starts_its_feeds():
+    station, _, _, remembered = make()
+    await station.open("KPDX")
+    assert idents(station) == ["kpdx3_twr", "kpdx3_gnd", "kpdx3_atis"]
+    assert all(s.connected for s in station.cockpit.sessions)
+    assert station.loading is False
+    assert remembered == [], "the first airport came from the state file"
+
+
+async def test_pages_see_loading_then_the_feeds():
+    station, hub, _, _ = make()
+    page = watch(hub)
+    await station.open("KPDX")
+    snapshots = frames(page, "snapshot")
+    assert [s["loading"] for s in snapshots] == [True, False]
+    assert snapshots[0]["feeds"] == []
+    assert [f["ident"] for f in snapshots[1]["feeds"]] == idents(station)
+    assert snapshots[1]["airport"]["icao"] == "KPDX"
+
+
+async def test_a_missing_audio_device_is_said_once_on_opening():
+    mixer = Mixer()
+    mixer.failed = True
+    station, hub, _, _ = make(mixer=mixer)
+    await station.open("KPDX")
+    assert [e["text"] for e in hub.log].count(AUDIO_FAILED) == 1
+    assert station.snapshot()["audio_ok"] is False
+
+
+async def test_listing_warnings_reach_the_log_after_the_feeds():
+    def warning_listing(config, *, warn):
+        warn("could not refresh the feed list — using the cached list")
+        return list(LISTINGS["KPDX"])
+
+    station, hub, _, _ = make(warning_listing)
+    page = watch(hub)
+    await station.open("KPDX")
+    kinds = [f["t"] for f in frames(page)]
+    assert kinds.index("message") > max(i for i, k in enumerate(kinds) if k == "snapshot")
+    assert "cached list" in hub.log[-1]["text"]
+
+
+async def test_a_listing_that_raises_leaves_an_empty_stack_and_says_so():
+    def broken(config, *, warn):
+        raise OSError("network down")
+
+    station, hub, _, _ = make(broken)
+    await station.open("KPDX")
+    assert idents(station) == []
+    assert station.loading is False
+    assert "network down" in hub.log[-1]["text"]
+
+
+async def test_an_unknown_airport_is_refused_and_nothing_changes():
+    station, _, _, remembered = make()
+    await station.open("KPDX")
+    before = station.cockpit
+    with pytest.raises(UnknownAirport):
+        await station.change_airport("ZZZZ")
+    assert station.cockpit is before
+    assert remembered == []
+
+
+async def test_changing_airport_stops_the_old_feeds_and_remembers_the_new_one():
+    mixer = Mixer()
+    station, _, builder, remembered = make(mixer=mixer)
+    await station.open("KPDX")
+    old = station.cockpit.sessions
+    await station.change_airport("ksea")
+    assert all(s.stopped for s in old)
+    assert idents(station) == ["ksea_twr", "ksea_gnd"]
+    assert station.icao == "KSEA"
+    assert remembered == ["KSEA"]
+    assert len(mixer._channels) == 2, "the old airport's channels must go"
+
+
+async def test_the_configured_feed_is_audible_only_at_its_own_airport():
+    station, _, _, _ = make()
+    await station.change_airport("KSEA")
+    audible = [s.feed.ident for s in station.cockpit.sessions if not s.muted]
+    assert audible == ["ksea_twr"], "falls back to the first feed, never kpdx3_twr"
+
+
+async def test_a_second_change_while_the_first_is_loading_wins():
+    gate = threading.Event()
+
+    def slow_seattle(config, *, warn):
+        if config.icao == "KSEA":
+            gate.wait(5)
+        return list(LISTINGS.get(config.icao, []))
+
+    station, _, builder, _ = make(slow_seattle)
+    await station.open("KPDX")
+    seattle = asyncio.create_task(station.change_airport("KSEA"))
+    await asyncio.sleep(0.05)
+    await station.change_airport("KORD")
+    gate.set()
+    await seattle
+    assert station.icao == "KORD"
+    assert idents(station) == ["kord_twr"]
+    assert not any(s.feed.ident.startswith("ksea") for s in builder.built)
+
+
+# -- session events --------------------------------------------------------
+
+
+async def test_a_session_event_from_its_own_thread_reaches_pages():
+    station, hub, builder, _ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    session = station.cockpit.sessions[1]
+    session.state = "reconnecting"
+    thread = threading.Thread(target=builder.events.on_state, args=(session, "reconnecting"))
+    thread.start()
+    thread.join()
+    await asyncio.sleep(0.05)
+    feeds = frames(page, "feed")
+    assert feeds and feeds[-1]["feed"]["state"] == "reconnecting"
+
+
+async def test_a_session_warning_is_logged_with_its_name():
+    station, hub, builder, _ = make()
+    await station.open("KPDX")
+    session = station.cockpit.sessions[0]
+    builder.events.on_warn(session, "could not resolve feed")
+    await asyncio.sleep(0.05)
+    assert hub.log[-1]["text"] == "Tower (Both): could not resolve feed"
+
+
+async def test_events_from_the_previous_airport_are_ignored():
+    station, hub, builder, _ = make()
+    await station.open("KPDX")
+    stale = station.cockpit.sessions[0]
+    await station.change_airport("KSEA")
+    page = watch(hub)
+    builder.events.on_state(stale, "offline")
+    builder.events.on_warn(stale, "gone")
+    await asyncio.sleep(0.05)
+    assert frames(page) == []
+
+
+# -- acting for pages ------------------------------------------------------
+
+
+async def test_mute_from_a_page_moves_the_stack_for_every_page():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.handle({"t": "mute", "ident": "kpdx3_atis"})
+    sent = frames(page)
+    assert [f["t"] for f in sent][-1] == "order"
+    # Tower was already audible; ATIS joins it above the muted Ground.
+    assert sent[-1]["idents"] == ["kpdx3_twr", "kpdx3_atis", "kpdx3_gnd"]
+    assert any(f["t"] == "feed" and f["feed"]["ident"] == "kpdx3_atis" for f in sent)
+
+
+async def test_solo_and_ambient_from_a_page():
+    station, _, _, _ = make()
+    await station.open("KPDX")
+    station.handle({"t": "solo", "ident": "kpdx3_gnd"})
+    assert [s.feed.ident for s in station.cockpit.sessions if not s.muted] == ["kpdx3_gnd"]
+    station.handle({"t": "ambient", "ident": "kpdx3_gnd"})
+    assert station.cockpit.session("kpdx3_gnd").ambient is True
+
+
+async def test_volume_reaches_the_mixer_and_every_page():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.handle({"t": "volume", "value": 0.35})
+    assert station.mixer.volume == pytest.approx(0.35)
+    assert frames(page, "volume") == [{"t": "volume", "value": 0.35}]
+
+
+async def test_input_from_a_page_holds_the_resort():
+    station, _, _, _ = make()
+    await station.open("KPDX")
+    station.handle({"t": "input"})
+    assert station.cockpit.resorter._last_input is not None
+
+
+async def test_opening_a_feed_needs_the_picker_list_first():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    station.handle({"t": "open_feed", "ident": "kpdx_del"})
+    assert "not in the feed list" in hub.log[-1]["text"]
+    assert station.cockpit.session("kpdx_del") is None
+
+
+async def test_a_feed_from_the_picker_opens_and_every_page_sees_it():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    listed = await station.available_feeds()
+    assert {"ident": "kpdx_del", "label": "Delivery", "open": False} in listed
+    assert {"ident": "kpdx3_twr", "label": "KPDX Tower (Both)", "open": True} in listed
+    page = watch(hub)
+    station.handle({"t": "open_feed", "ident": "kpdx_del"})
+    assert station.cockpit.session("kpdx_del") is not None
+    assert [f["feed"]["ident"] for f in frames(page, "added")] == ["kpdx_del"]
+
+
+async def test_opening_a_feed_that_is_already_open_does_nothing():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    await station.available_feeds()
+    before = len(hub.log)
+    station.handle({"t": "open_feed", "ident": "kpdx3_twr"})
+    assert len(station.cockpit.sessions) == 3
+    assert len(hub.log) == before
+
+
+# -- ticking ---------------------------------------------------------------
+
+
+async def test_levels_go_out_only_when_someone_is_watching():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    station.tick_levels()
+    page = watch(hub)
+    station.cockpit.sessions[0].level = -12.34
+    station.tick_levels()
+    levels = frames(page, "levels")
+    assert len(levels) == 1
+    assert levels[0]["v"]["kpdx3_twr"] == -12.3
+
+
+async def test_the_resort_tick_reorders_and_sends_chatter():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.cockpit.sessions[2].activity = 0.9
+    for _ in range(3):
+        station.tick_resort()
+    assert idents(station)[1] == "kpdx3_atis"
+    assert frames(page, "chatter")[-1]["v"]["kpdx3_atis"] == 0.9
+
+
+# -- stopping --------------------------------------------------------------
+
+
+async def test_stop_stops_every_feed_and_releases_the_mixer_channels():
+    mixer = Mixer()
+    station, _, _, _ = make(mixer=mixer)
+    await station.open("KPDX")
+    sessions = station.cockpit.sessions
+    station.stop()
+    assert all(s.stopped for s in sessions)
+    assert mixer._channels == []

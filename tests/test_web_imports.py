@@ -12,6 +12,7 @@ WEB_MODULES = [
     "squelch.cockpit",
     "kcgx.protocol",
     "kcgx.hub",
+    "kcgx.station",
 ]
 
 
