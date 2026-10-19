@@ -10,7 +10,10 @@ requires-python = ">=3.14"
 dependencies = [
     "numpy>=2.5.1",
     "sounddevice>=0.5.5",
+    "starlette>=1.9.0,<2",
     "textual>=8.2.8,<9",
+    "uvicorn>=0.54.0,<0.55",
+    "websockets>=17.2,<18",
 ]
 
 [project.scripts]
@@ -27,6 +30,7 @@ module-name = ["squelch", "kcgx"]
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.14.0,<3",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
