@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en" data-palette="WOPR" data-glow="LOW" data-display="CRT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KCGX</title>
+<link rel="stylesheet" href="/static/cockpit.css">
+<script type="module" src="/static/js/main.js"></script>
+</head>
+<body>
+<div class="page">
+
+  <header class="bar">
+    <div class="brand">
+      <span class="brand-name">KCGX</span>
+      <span class="brand-sub" id="where-served">LOCAL COCKPIT</span>
+    </div>
+    <nav class="bar-buttons" aria-label="Cockpit controls">
+      <button type="button" class="btn" id="open-feeds">FEEDS</button>
+      <button type="button" class="btn" id="open-config">CONFIG</button>
+      <button type="button" class="btn" id="next-palette" aria-label="Next palette">PALETTE <span id="palette-name">WOPR</span></button>
+      <button type="button" class="btn btn-alarm" id="open-shutdown">SHUT DOWN</button>
+    </nav>
+  </header>
+
+  <div class="banner" id="banner" role="status" hidden></div>
+
+  <div class="toprow">
+    <section class="screen screen-radar" aria-label="Radar">
+      <div class="ovl" aria-hidden="true"></div>
+      <div class="radar-wrap">
+        <canvas id="radar" class="radar jit" role="img" aria-label="Radar: range rings around the airport; aircraft arrive in phase D"></canvas>
+        <div class="hud hud-left" aria-hidden="true"><span>RNG 40 NM</span><span id="radar-poll">RADAR NOT YET RUNNING</span></div>
+        <div class="hud hud-right" aria-hidden="true"><span id="radar-tracks">0 TRACKS</span></div>
+      </div>
+      <div class="screen-title">
+        <span class="title-text">TRAFFIC</span>
+        <div class="title-tools">
+          <span class="muted small" id="radar-position"></span>
+          <button type="button" class="btn btn-small" id="recentre">RECENTRE</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="column">
+      <section class="screen screen-status" aria-label="Status">
+        <div class="ovl" aria-hidden="true"></div>
+        <div class="status-body">
+          <div class="status-top">
+            <div class="status-airport">
+              <span class="icao" id="icao">····</span>
+              <span class="airport-name" id="airport-name"></span>
+              <span class="muted small" id="airport-where"></span>
+            </div>
+            <div class="clocks">
+              <span class="zulu" id="zulu">0000Z</span>
+              <span class="local" id="local">00:00</span>
+            </div>
+          </div>
+          <button type="button" class="btn btn-pink" id="open-airport">CHANGE AIRPORT</button>
+        </div>
+        <div class="screen-title"><span class="title-text">STATUS</span></div>
+      </section>
+
+      <section class="screen screen-freq" aria-label="Frequencies">
+        <div class="ovl" aria-hidden="true"></div>
+        <div class="freq-counts muted small" id="freq-counts"></div>
+        <div class="stack" id="stack"></div>
+        <div class="screen-title"><span class="title-text">FREQUENCIES</span></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="lamps" id="lamps" role="group" aria-label="Status lamps"></div>
+
+  <div class="bottomrow">
+    <section class="screen screen-tracks" aria-label="Tracks">
+      <div class="ovl" aria-hidden="true"></div>
+      <div class="tracks-body">
+        <table class="tracks">
+          <thead>
+            <tr><th>CALLSIGN</th><th>TYPE</th><th class="num">ALT FT</th><th class="num">GS KT</th><th class="num">TRK</th><th class="num">DIST NM</th><th class="num">SQWK</th></tr>
+          </thead>
+          <tbody id="tracks-body"></tbody>
+        </table>
+        <p class="muted small empty" id="tracks-empty">NO TRACKS. THE RADAR ARRIVES IN PHASE D.</p>
+      </div>
+      <div class="screen-title"><span class="title-text">TRACKS</span></div>
+    </section>
+
+    <section class="screen screen-log" aria-label="Teletype">
+      <div class="ovl" aria-hidden="true"></div>
+      <div class="log" id="log" role="log" aria-live="polite"></div>
+      <div class="screen-title"><span class="title-text">TELETYPE</span></div>
+    </section>
+  </div>
+</div>
+
+<dialog class="sheet" id="airport-sheet" aria-labelledby="airport-title">
+  <form method="dialog" class="sheet-head">
+    <h2 id="airport-title">CHANGE AIRPORT</h2>
+    <button class="btn btn-small" value="close" aria-label="Close">CLOSE</button>
+  </form>
+  <label class="field"><span class="muted small">SEARCH CODE, NAME OR CITY</span>
+    <input id="airport-query" type="search" autocomplete="off" spellcheck="false">
+  </label>
+  <div class="choices" id="airport-results"></div>
+</dialog>
+
+<dialog class="sheet" id="feeds-sheet" aria-labelledby="feeds-title">
+  <form method="dialog" class="sheet-head">
+    <h2 id="feeds-title">FEEDS</h2>
+    <button class="btn btn-small" value="close" aria-label="Close">CLOSE</button>
+  </form>
+  <label class="field"><span class="muted small">FILTER</span>
+    <input id="feeds-query" type="search" autocomplete="off" spellcheck="false">
+  </label>
+  <p class="muted small" id="feeds-status"></p>
+  <div class="choices" id="feeds-results"></div>
+</dialog>
+
+<dialog class="sheet" id="config-sheet" aria-labelledby="config-title">
+  <form method="dialog" class="sheet-head">
+    <h2 id="config-title">CONFIG</h2>
+    <button class="btn btn-small" value="close" aria-label="Close">CLOSE</button>
+  </form>
+  <h3 class="muted small">OUTPUT</h3>
+  <label class="field field-row"><span>MASTER VOLUME</span>
+    <input id="volume" type="range" min="0" max="100" step="5">
+    <span class="num" id="volume-value">100%</span>
+  </label>
+  <h3 class="muted small">LOOK</h3>
+  <div class="field-row" role="group" aria-label="Palette"><span>PALETTE</span><div class="segments" data-pref="palette"></div></div>
+  <div class="field-row" role="group" aria-label="Glow"><span>GLOW</span><div class="segments" data-pref="glow"></div></div>
+  <div class="field-row" role="group" aria-label="Display"><span>DISPLAY</span><div class="segments" data-pref="display"></div></div>
+  <h3 class="muted small">LIMITS</h3>
+  <div class="field-row"><span>STREAMS AT ONCE</span><span class="num" id="max-streams">7</span><span class="muted small">LIVEATC'S LIMIT; FIXED</span></div>
+</dialog>
+
+<dialog class="sheet sheet-small" id="shutdown-sheet" aria-labelledby="shutdown-title">
+  <h2 id="shutdown-title">SHUT DOWN THE COCKPIT?</h2>
+  <p class="muted small">EVERY FEED STOPS AND THE SERVER EXITS. RUN KCGX AGAIN TO START IT.</p>
+  <form method="dialog" class="sheet-actions">
+    <button class="btn" value="cancel">CANCEL</button>
+    <button class="btn btn-alarm" value="confirm" id="confirm-shutdown">SHUT DOWN</button>
+  </form>
+</dialog>
+
+<div class="ended" id="ended" hidden><span>COCKPIT SHUT DOWN</span></div>
+</body>
+</html>
