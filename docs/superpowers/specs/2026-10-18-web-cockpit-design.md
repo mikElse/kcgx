@@ -87,14 +87,14 @@ Every row must hold before the terminal cockpit is retired.
 | Message log, capped at 200 | Same cap, same text |
 | Feed list cache, retry budgets, one feed fallback, never another airport's audio | Unchanged: `load_feeds`, `picker_feeds`, `_no_feeds` move as they are |
 | `squelch --refresh-feeds` | Unchanged CLI |
-| Status pane: big ICAO, airport name, Zulu and local clocks | Airport name in large stroked capitals beside its ring on the radar; ICAO and both clocks on the status screen |
+| Status pane: big ICAO, airport name, Zulu and local clocks | Airport name in large stroked capitals beside its ring on the radar; ICAO and both clocks on the status screen. Local is the viewer's own clock and zone, since the airport dataset has no time zones |
 | `Ctrl-b a` / click `▾ airport` opens airport search | CHANGE AIRPORT button, or click the airport name; same `search()` over the same CSV |
 | `kcgx go [query]`, exact ICAO skips the picker | Same CLI; it talks to the running server |
 | Remembered airport in `~/.local/state/kcgx/airport` | Same file, same `current_icao()` resolution order |
 | Airports LiveATC does not cover still get a radar | Same: empty stack with a message, radar works |
 | Radar: aircraft around the airport from adsb.lol, 15 s polling | Our own radar on a map. Same endpoint, same interval, same polite User-Agent |
 | adsb-tui traffic table, row selection | Traffic table under the map; selecting a row or a blip highlights both |
-| adsb-tui `t` theme cycling, six themes | PALETTE button cycles the WOPR palette and the six names as variants of it |
+| adsb-tui `t` theme cycling, six themes | PALETTE button cycles four palettes: WOPR, AMBER, MATRIX, MONO (see Themes) |
 | squelch follows the radar's theme | **Dropped.** One app, one theme setting |
 | Header shows `ERR 429` / `ERR 403` on a refused refresh | Radar shows the last good picture with a "refresh refused" badge |
 | Dead pane stays visible; `Ctrl-b r` respawns it | A failed feed or radar shows its error in place, with a retry control |
@@ -253,7 +253,9 @@ action.
 
 | Route | Does |
 |---|---|
-| `GET /` | the page, served `no-cache` so an edit shows on a plain reload |
+| `GET /` | the cockpit page, served `no-cache` so an edit shows on a plain reload |
+| `GET /static/…` | the page's stylesheet, ES modules and fonts, also `no-cache` (phase C) |
+| `GET /debug` | phase B's bare page, kept because it shows the raw protocol (phase C) |
 | `GET /api/health` | `200` with version, protocol, airport and `loading`; used by the launcher |
 | `GET /api/airports?q=` | `search()` results |
 | `POST /api/airport` | `{"icao": "KSEA"}`; answers `202` at once, `404` for an unknown airport, `400` for anything malformed. The change itself reaches pages over the socket |
@@ -265,7 +267,7 @@ object with a `t`. Server to page:
 
 | `t` | Carries | When |
 |---|---|---|
-| `snapshot` | `protocol`, `airport`, `loading`, `feeds` (stack order), `volume`, `max_streams`, `audio_ok`, `log` | the first frame on every connect, always; after an airport change, once with `loading: true` and again with the feeds |
+| `snapshot` | `protocol`, `airport`, `loading`, `feeds` (stack order), `volume`, `max_streams`, `audio_ok`, `log`, `prefs` | the first frame on every connect, always; after an airport change, once with `loading: true` and again with the feeds |
 | `feed` | one feed view | its state, mute, solo, ambient or connection changed |
 | `added` | one feed view | a feed opened from the picker |
 | `order` | `idents`, the new stack order | any reorder |
@@ -273,12 +275,15 @@ object with a `t`. Server to page:
 | `chatter` | `v`: ident to five-minute fraction | every resort tick; droppable |
 | `volume` | `value` | the volume changed |
 | `message` | `z` (Zulu, `1955Z`), `text` | a line added to the log |
+| `prefs` | `palette`, `glow`, `display` | any page changed one; every tab follows (phase C) |
 | `error` | `text` | this page sent something the protocol does not have |
 | `aircraft` | the radar's picture | each radar poll, success or refusal (phase D) |
 
 Page to server: `mute`, `solo`, `ambient` and `open_feed`, each with an
-`ident`; `volume` with a `value`, clamped to 0..1; and `input`, the "you
-have touched the stack" signal that keeps reordering away from the pointer.
+`ident`; `volume` with a `value`, clamped to 0..1; `input`, the "you
+have touched the stack" signal that keeps reordering away from the pointer;
+and `prefs` with one or more of `palette`, `glow` and `display`, each
+exactly one of its known names (phase C).
 The parser is strict: a wrong type, an ident that is not lower case letters,
 digits and underscores, a non-finite volume, or an unknown `t` gets an
 `error` frame back, so a page bug shows up rather than a control that
@@ -331,8 +336,10 @@ uvicorn runs with `ws="websockets-sansio"`: 0.54 deprecates its plain
 ### Front end
 
 No build step and no Node. The page is plain HTML, CSS and ES modules served
-from `src/kcgx/web/`. Nothing is vendored but the Hershey glyph data and
-one font file. This keeps the install's promise that `uv` is the only
+from `src/kcgx/web/`. Nothing is vendored but the Hershey glyph data (phase
+D) and two fonts, Share Tech Mono for display text and B612 Mono for small
+dense text, both SIL OFL, as Latin woff2 files taken from Fontsource 5.3.0
+with their licences beside them in `web/static/fonts/` (phase C). This keeps the install's promise that `uv` is the only
 toolchain, and it keeps the front end readable in the same repo by the same
 person who reads the Python.
 
@@ -411,8 +418,8 @@ with a title set in caps along its bottom edge (`TRAFFIC`, `FREQUENCIES`,
 like `MISSILE WARNING` in the still). Between the screens runs a **lamp
 bar**: one small lamp per feed, lit in that feed's state colour (cyan live,
 amber reconnecting, red offline, dark parked), then a gap and lamps for the
-radar poll, the WebSocket and the audio device, then a gap and an
-**emergency lamp**, dark until an aircraft in range squawks `7500`, `7600`
+radar poll (`RADAR`), the connection to the server (`SERVER`) and the
+audio device (`AUDIO`), then an **emergency lamp** (`EMERG`), dark until an aircraft in range squawks `7500`, `7600`
 or `7700`, then lit red orange and labelled with the code. It is the whole field's health at a glance, the way
 `●◐○` was on each row, and it stays visible when the stack is scrolled.
 
@@ -453,17 +460,21 @@ black for every palette colour at the sizes it is used.
 
 The six adsb-tui names (`default`, `color`, `amber`, `ocean`, `matrix`,
 `mono`) existed to match a radar that is going away. In their place the
-vector style has one default palette, **WOPR** (the table above), plus the
-six kept as palette variants of the same style, which the header's PALETTE
-button cycles through: `amber`
-and `matrix` become single phosphor monochromes, which suit the look well,
-and `mono` becomes white on black. Palettes are CSS custom properties read
-by both the DOM and the canvas renderer.
+vector style has **four palettes**, which the header's PALETTE button cycles
+through: **WOPR** (the table above, the default), **AMBER** and **MATRIX**,
+single phosphor monochromes that suit the look well, and **MONO**, white on
+black. `default`, `color` and `ocean` were dropped in phase C: next to WOPR
+they were the same idea in a weaker colour. Palettes are CSS custom
+properties set by `data-palette` on `<html>`, read by both the DOM and the
+canvases.
 
 The Textual specific half of `themes.py` and all of `radar_theme.py` go with
-the terminal UI. The chosen palette is a setting the server remembers (in
-the state directory, beside the airport), so every tab and every launch
-agrees.
+the terminal UI. The chosen palette, glow and display are **prefs** the
+server remembers in `prefs.json` beside the airport file (so
+`KCGX_STATE_PATH` moves both), in `kcgx.prefs`. A page changes one with a
+`prefs` message; the server checks it against the known names, saves it,
+and sends a `prefs` frame so every tab changes together. An unreadable
+file or an unknown name falls back to the default.
 
 ### Rendering
 
@@ -548,8 +559,8 @@ npm (and this front end has no build step), its flicker and noise are not
 adjustable, and at the time of writing it is two commits old. The pass we
 need is about two hundred lines.
 
-**Settings, not states.** `display` and `glow` are remembered beside the
-palette, so every tab and every launch agrees.
+**Settings, not states.** `display` and `glow` are remembered with the
+palette, in the same `prefs.json`, so every tab and every launch agrees.
 
 ### Map data
 
@@ -657,15 +668,17 @@ src/kcgx/protocol.py          new: the wire format
 src/kcgx/hub.py               new: open pages and the message log
 src/kcgx/station.py           new: the mixer, the cockpit, the airport
 src/kcgx/server.py            new: Starlette app, routes, /ws, kcgx-web
-src/kcgx/web/debug.html       new in B, replaced in C: a bare page driving every control
+src/kcgx/web/debug.html       new in B: a bare page driving every control; at /debug from C
+src/kcgx/web/index.html       new in C: the cockpit page
+src/kcgx/web/static/          new in C: cockpit.css, js/ modules, fonts/
+src/kcgx/prefs.py             new in C: palette, glow, display, beside the airport
+src/kcgx/demo.py              new in C: synthetic feeds for kcgx-web --demo
 src/kcgx/radar.py             new: adsb.lol poller and backoff
 src/kcgx/launcher.py          new: start/stop/go, server.json, health check
-src/kcgx/web/                 new: index.html, css, js modules, vendor/
 src/kcgx/web/vector/          new: projection, glow pipeline, Hershey text
 src/kcgx/geodata.py           new: loads and clips map layers per airport
 src/kcgx/data/geo/            new: committed map layers
 tools/build_geodata.py        new: builds them from the sources above
-src/kcgx/state.py             gains theme read/write beside the airport
 ```
 
 Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
@@ -704,10 +717,22 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
   darkens, the emergency lamp.
 * **Launcher.** Start, second start reuses, stale `server.json`, `stop` when
   not running is not an error, port collision.
-* **Browser.** One Playwright smoke test against Chromium (already in the
-  dev environment) with fake sessions: the page loads, rows render, `space`
-  mutes, the levels stream moves a meter, airport search retargets. Kept
-  deliberately small; the logic lives in Python where it is cheap to test.
+* **Browser.** Built in phase C as `tests/test_page.py`: Playwright 1.56.0
+  drives Chromium against a real `kcgx-web --demo` subprocess whose state
+  lives in a temporary folder. It checks that no two screens overlap and
+  nothing scrolls sideways at five window sizes from 1440 by 900 down to a
+  phone, that the radar canvas fills its pane, that no label carries a key
+  hint, that clicking a compact row unmutes it and M mutes it again, that S
+  solos, that a trace draws, the feed picker, an airport change, prefs
+  reaching a second tab, and the volume slider. Playwright is its own
+  dependency group (`uv sync --group browser`, then `uv run playwright
+  install chromium`); without it these tests skip. The logic still lives in
+  Python where it is cheap to test.
+* **Demo mode.** `kcgx-web --demo` (phase C) runs `kcgx.demo`: synthetic
+  feeds for any airport that meter, chatter, reconnect and park like real
+  ones, with no network, ffmpeg or audio device, and nothing remembered.
+  It is what the browser tests and any look at the page without LiveATC
+  use.
 * **Manual.** One run against real hardware and a live airport, as the
   mixer work required: audio continuous, meters in step with what is heard,
   radar populated, tab closed and reopened without a gap in the audio.
@@ -718,7 +743,7 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
 |---|---|---|
 | **A** | Extract `Cockpit`; terminal squelch runs on it | all existing squelch tests pass, moved where they belong |
 | **B** | Server, routes, WebSocket, levels loop | server tests pass; a fake cockpit is drivable from a script |
-| **C** | Page: status header, feed stack, meters, config sheet, feed picker, messages | Playwright smoke test |
+| **C** | Page: status header, feed stack, meters, config sheet, feed picker, messages | Playwright tests against `--demo` |
 | **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata and screenshot tests; manual check at a busy airport |
 | **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | parity table holds end to end; manual hardware run |
 
@@ -730,8 +755,8 @@ the switch, and the only phase that deletes anything.
 ## Error handling
 
 * **No audio device.** As today: one warning, every feed still connects and
-  meters. The page shows it in the log and as a persistent badge on the
-  volume control.
+  meters. The page shows it in the log, as a banner under the header, and
+  as the AUDIO lamp lit red orange.
 * **ffmpeg missing.** The server refuses to start, with the same message
   squelch prints today; `kcgx` prints it in the terminal it was run from.
 * **WebSocket drops** (laptop sleep, server restart). The page shows a
@@ -740,8 +765,9 @@ the switch, and the only phase that deletes anything.
   state.
 * **Server dies.** The page says so and stops pretending to be live. `kcgx`
   starts a new one.
-* **Feed listing refused.** Unchanged behaviour and messages, including "press
-  f to retry".
+* **Feed listing refused.** Unchanged behaviour and messages, except that
+  the station rewrites squelch's "press f to retry" as "open FEEDS to
+  retry": the feed picker fetches the listing afresh every time it opens.
 * **adsb.lol refused.** Last good picture, age badge, backoff, as above.
 
 ## Open questions
