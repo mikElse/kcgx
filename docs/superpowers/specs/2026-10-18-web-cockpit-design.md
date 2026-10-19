@@ -33,7 +33,7 @@ The same cockpit, rendered as a web page served from your own machine.
 │      INTERNATIONAL   (ring)          │ ├──────────────────┤
 │   coastline, rivers, borders         │ │ TOWER (BOTH)   ● │
 │   ⋯ dashed class B ⋯   ◇ navaids     │ │ ╱╲__╱╲╱╲_____╱╲_ │  frequencies
-│        ASA412 6172  ╲                │ │ [S] [ON] [A]  34 │
+│        ASA412 6172  ╲                │ │ [M] [S]       34 │
 │                 ⟵────  trail         │ │ GROUND   ♪ 07  ◐ │
 │                                      │ │ CLEARANCE ♪ 00 ● │
 │               TRAFFIC                │ │                  │
@@ -79,7 +79,7 @@ Every row must hold before the terminal cockpit is retired.
 | Audible first, then by five minute chatter | Same `rank()` |
 | Reorder only after 15 s stable and 2 s untouched | Same `Resorter`. "Touched" now includes pointer hover over the stack |
 | Mute/unmute moves the row at once; selection follows the feed | Same |
-| `space` mute, `S` solo, `a` ambient, `↑` `↓` select | Same keys, plus click targets |
+| `space` mute, `S` solo, `a` ambient, `↑` `↓` select | `space`, `S` and the arrows unchanged, plus `[M]` and `[S]` click targets. **Ambient is dropped from the page**: no `[A]`, no `a` key (decided 2026-10-19). The server and protocol keep it, so it can return without a protocol change |
 | Click anywhere on a row toggles mute | Same |
 | Seven stream limit, parking, refusing an eighth audible feed | Same `slots.plan()` and the same refusal message |
 | `c` config overlay, master volume live in 5% steps | Side sheet. Volume is a slider; other rows keep live/inert/fixed/off labels |
@@ -340,8 +340,13 @@ or `7700`, then lit red orange and labelled with the code. It is the whole field
 
 **The feed stack in this language.** An expanded row's meter becomes a
 scrolling vector trace, an oscilloscope line of the last few seconds' level,
-rather than a bar strip. Its controls are small framed capitals: `[S]`
-`[ON]` `[A]`. The chatter figure is a two digit stroked number, the way the
+rather than a bar strip. Its controls are two small framed capitals, `[M]`
+then `[S]`, in that order. `[M]` replaces the terminal's `[ON]`/`[OFF]`
+toggle and lights when the feed is muted, as a mute button does on a mixing
+desk; `[S]` lights when the feed is soloed. Each carries an `aria-label`
+naming its feed ("Mute Tower (Both)"), because a bare letter says nothing
+to a screen reader. There is no ambient control (see Feature parity). The
+chatter figure is a two digit stroked number, the way the
 wall numbers its sectors (`27`). Compact rows are a name, a figure and a
 state glyph on one line.
 
@@ -478,13 +483,14 @@ close zoom, which is the stills' base outlines put to honest use.
 | `↑` `↓` | select |
 | `space` | mute or unmute selected |
 | `S` | solo selected |
-| `a` | ambient for selected |
 | `f` | feed picker |
 | `c` | config sheet |
 | `/` | airport search |
 | `t` | next theme |
 | `q` | shut down (asks first) |
 | `esc` | close whatever is open |
+
+There is no `a`: ambient is not on the page (see Feature parity).
 
 Keys are ignored while focus is in a text field, which is the browser's
 version of the picker's "typing always filters" rule. `^q` is not needed:
