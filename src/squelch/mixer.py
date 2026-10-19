@@ -118,6 +118,17 @@ class Mixer:
         self._channels.append(channel)
         return channel
 
+    def clear_channels(self) -> None:
+        """Drop every channel, as when the cockpit changes airport.
+
+        Rebinds rather than clearing in place: the callback may be partway
+        through the list on PortAudio's thread. render() reads the list once
+        per block, so it finishes that block with the old channels and
+        starts the next with none. The mixer itself, and its open output
+        stream, carry on: changing airport never reopens the device.
+        """
+        self._channels = []
+
     def set_ambient_enabled(self, enabled: bool) -> None:
         """Bypass the ambient bus: no panning, no reverb, no second sum."""
         self._ambient_enabled = bool(enabled)
@@ -141,11 +152,14 @@ class Mixer:
         dry[:] = 0.0
         amb_l[:] = 0.0
         amb_r[:] = 0.0
+        # Read once: clear_channels() rebinds the list from another thread,
+        # and both loops below must see the same one.
+        channels = self._channels
 
         # Rebuilt in place, never as a new list: the callback allocates
         # nothing. Positions are recomputed only when the count changes.
         self._ambient.clear()
-        for channel in self._channels:
+        for channel in channels:
             if channel.ambient:
                 self._ambient.append(channel)
         if len(self._ambient) != self._ambient_count:
@@ -154,7 +168,7 @@ class Mixer:
 
         index = 0
         scratch = self._scratch[:block]
-        for channel in self._channels:
+        for channel in channels:
             raw = channel._raw
             channel.buffer.read_into(raw)
             channel.level_dbfs = block_dbfs(raw)

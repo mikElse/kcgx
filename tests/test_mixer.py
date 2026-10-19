@@ -663,3 +663,60 @@ def test_a_capacity_below_one_block_is_floored():
     """Otherwise every read starves and the feed is silence, not audio."""
     channel = Mixer(buffer_seconds=0.0).add_channel()
     assert channel.buffer.capacity >= BLOCK
+
+
+# -- changing airport ------------------------------------------------------
+
+
+def test_cleared_channels_no_longer_reach_the_output():
+    mixer = Mixer(ambient_enabled=False)
+    channel = mixer.add_channel()
+    channel.muted = False
+    channel.buffer.write(frame(0.5))
+    mixer.clear_channels()
+    assert not render(mixer).any()
+
+
+def test_a_channel_added_after_clearing_plays():
+    mixer = Mixer(ambient_enabled=False)
+    mixer.add_channel()
+    mixer.clear_channels()
+    channel = mixer.add_channel()
+    channel.muted = False
+    channel.buffer.write(frame(0.5))
+    assert render(mixer).any()
+
+
+def test_clearing_rebinds_the_list_rather_than_emptying_it():
+    """The callback may hold the old list on another thread. Emptying it in
+    place would change it under that iteration; rebinding leaves it whole."""
+    mixer = Mixer()
+    mixer.add_channel()
+    before = mixer._channels
+    mixer.clear_channels()
+    assert len(before) == 1
+    assert mixer._channels is not before
+
+
+def test_render_reads_the_channel_list_once_per_block():
+    """Both loops in render() must see the same list, or a clear between
+    them would mismatch the ambient positions for a block."""
+
+    class Probe(Mixer):
+        reads = 0
+
+        @property
+        def _channels(self):
+            Probe.reads += 1
+            return self.__dict__["channels"]
+
+        @_channels.setter
+        def _channels(self, value):
+            self.__dict__["channels"] = value
+
+    mixer = Probe()
+    mixer.add_channel()
+    Probe.reads = 0
+    render(mixer)
+    assert Probe.reads == 1
+
