@@ -12,12 +12,12 @@ import json
 import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from station_fakes import AIRPORTS, Builder, listing, picker
 
 from kcgx.server import HOST, LocalOnly, create_app, main, parse_args
 from kcgx.station import Station
 from squelch.config import Config
 from squelch.mixer import Mixer
-from station_fakes import AIRPORTS, Builder, listing, picker
 
 BASE = "http://127.0.0.1:8473"
 # A full URL: the test client sends Host: testserver for a bare path.
@@ -38,6 +38,7 @@ def app(**kwargs):
             sessions_builder=Builder(),
             picker_loader=picker,
             remember=lambda icao: None,
+            remember_prefs=lambda prefs: None,
         )
 
     options = dict(level_hz=0, resort_seconds=0)
@@ -176,14 +177,81 @@ def test_levels_stream_while_a_page_is_open():
 # -- HTTP ----------------------------------------------------------------------
 
 
-def test_the_debug_page_is_served():
+def test_the_cockpit_page_is_served():
     asgi, _ = app()
     with client(asgi) as http:
         response = http.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
+    assert "/static/js/main.js" in response.text
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_the_debug_page_is_served():
+    asgi, _ = app()
+    with client(asgi) as http:
+        response = http.get("/debug")
+    assert response.status_code == 200
     assert "/ws" in response.text
     assert response.headers["cache-control"] == "no-cache"
+
+
+@pytest.mark.parametrize(
+    "path, kind",
+    [
+        ("/static/cockpit.css", "text/css"),
+        ("/static/js/main.js", "javascript"),
+        ("/static/fonts/share-tech-mono-latin-400-normal.woff2", "font/woff2"),
+    ],
+)
+def test_static_files_are_served_uncached(path, kind):
+    asgi, _ = app()
+    with client(asgi) as http:
+        response = http.get(path)
+    assert response.status_code == 200
+    assert kind in response.headers["content-type"]
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_static_files_stay_inside_their_folder():
+    asgi, _ = app()
+    with client(asgi) as http:
+        assert http.get("/static/../server.py").status_code == 404
+        assert http.get("/static/%2e%2e/server.py").status_code == 404
+
+
+def test_every_module_the_page_imports_is_served():
+    """A missing or misnamed module is a blank page with no error on the
+    server: catch it here."""
+    import re
+
+    from kcgx.server import WEB_DIR
+
+    js = WEB_DIR / "static" / "js"
+    asgi, _ = app()
+    with client(asgi) as http:
+        for module in js.glob("*.js"):
+            for name in re.findall(r'from "\./([\w.]+)"', module.read_text()):
+                assert (js / name).is_file(), f"{module.name} imports a missing {name}"
+                assert http.get(f"/static/js/{name}").status_code == 200
+
+
+def test_prefs_from_one_page_reach_another():
+    asgi, _ = app()
+    with client(asgi) as http, http.websocket_connect(WS) as one, http.websocket_connect(WS) as two:
+        assert ready(one)["prefs"]["palette"] == "WOPR"
+        ready(two)
+        one.send_text(json.dumps({"t": "prefs", "palette": "AMBER"}))
+        frame = until(two, lambda f: f["t"] == "prefs")
+        assert frame == {"t": "prefs", "palette": "AMBER", "glow": "LOW", "display": "CRT"}
+
+
+def test_a_bad_prefs_message_gets_an_error():
+    asgi, _ = app()
+    with client(asgi) as http, http.websocket_connect(WS) as ws:
+        ready(ws)
+        ws.send_text(json.dumps({"t": "prefs", "palette": "PLAID"}))
+        assert until(ws, lambda f: f["t"] == "error")["text"].startswith("palette")
 
 
 def test_airport_search_uses_the_dataset():
@@ -294,3 +362,38 @@ def test_the_command_serves_and_closes_the_mixer_afterwards(monkeypatch, tmp_pat
     assert served["port"] == 9100
     assert isinstance(served["app"], LocalOnly)
     assert mixers[0].started and mixers[0].stopped
+
+
+def test_demo_needs_no_ffmpeg_and_remembers_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr("squelch.config.DEFAULT_PATH", tmp_path / "missing.toml")
+    served = {}
+
+    def serve(asgi, port, on_server):
+        served["app"] = asgi
+
+    lines = []
+    code = main(["--demo", "--icao", "KSEA"], which=lambda n: None, serve=serve, out=lines.append)
+    assert code == 0
+    assert lines[-1].endswith("(KSEA, demo)")
+    with TestClient(served["app"], base_url=BASE) as http, http.websocket_connect(WS) as ws:
+        assert ready(ws)["feeds"][0]["ident"] == "ksea_twr"
+        ws.send_text(json.dumps({"t": "prefs", "palette": "MONO"}))
+        until(ws, lambda f: f["t"] == "prefs")
+    from kcgx.prefs import prefs_path
+    from kcgx.state import default_path
+
+    assert not prefs_path().exists()
+    assert not default_path().exists()
+
+
+def test_prefs_are_read_at_startup(monkeypatch, tmp_path):
+    monkeypatch.setattr("squelch.config.DEFAULT_PATH", tmp_path / "missing.toml")
+    from kcgx.prefs import prefs_path, write_prefs
+
+    write_prefs({"palette": "MATRIX", "glow": "OFF", "display": "VECTOR"})
+    assert prefs_path().exists()
+    served = {}
+    main(["--demo", "--icao", "KPDX"], which=lambda n: None,
+         serve=lambda asgi, port, on_server: served.setdefault("app", asgi), out=lambda line: None)
+    with TestClient(served["app"], base_url=BASE) as http, http.websocket_connect(WS) as ws:
+        assert ready(ws)["prefs"] == {"palette": "MATRIX", "glow": "OFF", "display": "VECTOR"}

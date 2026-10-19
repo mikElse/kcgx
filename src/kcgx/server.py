@@ -5,10 +5,11 @@ Binds to 127.0.0.1 and nowhere else, and answers only pages served from
 itself (see LocalOnly). Audio plays on this machine through the mixer;
 pages only ever receive state and levels.
 
-    kcgx-web [--port 8473] [--icao KPDX]
+    kcgx-web [--port 8473] [--icao KPDX] [--demo]
 
-Until phase C ships the real page, / serves a bare debug page that can
-drive every control.
+/ is the cockpit page; /debug is the bare page phase B used to drive the
+server, kept because it shows the raw protocol. --demo runs synthetic feeds
+with no network, ffmpeg or audio (see kcgx.demo).
 """
 
 from __future__ import annotations
@@ -27,12 +28,14 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from kcgx import protocol
 from kcgx.airports import find, load_airports, search
 from kcgx.hub import Client, Hub
+from kcgx.prefs import read_prefs
 from kcgx.state import current_icao
 from kcgx.station import Station, UnknownAirport
 
@@ -43,6 +46,19 @@ RESORT_SECONDS = 5.0
 WEB_DIR = Path(__file__).parent / "web"
 
 StationFactory = Callable[[Hub, Callable[..., None]], Station]
+
+# Revalidate on every load, so an edited page or script shows on a plain
+# reload instead of after the browser's heuristic cache expires.
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
+class _Static(StaticFiles):
+    """The page's scripts, styles and fonts, served no-cache."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.update(NO_CACHE)
+        return response
 
 
 # -- answering local pages only ----------------------------------------------
@@ -128,13 +144,10 @@ def create_app(
             station.stop()
 
     async def page(request: Request):
-        # no-cache: revalidate on every load, so an edited page shows on a
-        # plain reload instead of after the browser's heuristic cache expires.
-        return FileResponse(
-            WEB_DIR / "debug.html",
-            media_type="text/html",
-            headers={"Cache-Control": "no-cache"},
-        )
+        return FileResponse(WEB_DIR / "index.html", media_type="text/html", headers=NO_CACHE)
+
+    async def debug(request: Request):
+        return FileResponse(WEB_DIR / "debug.html", media_type="text/html", headers=NO_CACHE)
 
     async def health(request: Request):
         station = request.app.state.station
@@ -211,6 +224,8 @@ def create_app(
     app = Starlette(
         routes=[
             Route("/", page),
+            Route("/debug", debug),
+            Mount("/static", app=_Static(directory=WEB_DIR / "static"), name="static"),
             Route("/api/health", health),
             Route("/api/airports", airports),
             Route("/api/airport", set_airport, methods=["POST"]),
@@ -269,6 +284,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"port on {HOST} (default {DEFAULT_PORT}, or $KCGX_PORT)",
     )
     parser.add_argument("--icao", help="start at this airport instead of the remembered one")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="synthetic feeds: no network, no ffmpeg, no audio, nothing remembered",
+    )
     return parser.parse_args(argv)
 
 
@@ -294,7 +314,7 @@ def main(
     from squelch.runtime import FFMPEG_MISSING
 
     args = parse_args(argv)
-    if which("ffmpeg") is None:
+    if not args.demo and which("ffmpeg") is None:
         print(f"kcgx-web: {FFMPEG_MISSING}", file=sys.stderr)
         return 2
     try:
@@ -309,6 +329,19 @@ def main(
         print(f"kcgx-web: no airport {icao!r} in the dataset", file=sys.stderr)
         return 2
 
+    if args.demo:
+        from kcgx import demo
+
+        mixer_factory = demo.DemoMixer
+        options = {
+            "feeds_loader": demo.listing,
+            "sessions_builder": demo.build,
+            "picker_loader": demo.picker,
+            "remember": lambda icao: None,
+            "remember_prefs": lambda prefs: None,
+        }
+    else:
+        options = {}
     if mixer_factory is None:
         from squelch.mixer import Mixer as mixer_factory
     mixer = mixer_factory(
@@ -318,15 +351,16 @@ def main(
     )
     mixer.start()
 
+    prefs = read_prefs()
     holder: dict[str, Any] = {}
     app = create_app(
         station_factory=lambda hub, post: Station(
-            config, hub, post=post, airports=known, mixer=mixer
+            config, hub, post=post, airports=known, mixer=mixer, prefs=prefs, **options
         ),
         initial_icao=icao,
         on_exit=lambda: setattr(holder["server"], "should_exit", True),
     )
-    out(f"kcgx: http://{HOST}:{args.port}/  ({icao})")
+    out(f"kcgx: http://{HOST}:{args.port}/  ({icao}{', demo' if args.demo else ''})")
     try:
         serve(app, args.port, lambda server: holder.__setitem__("server", server))
     finally:
