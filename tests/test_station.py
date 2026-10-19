@@ -19,11 +19,12 @@ from squelch.mixer import Mixer
 from squelch.runtime import AUDIO_FAILED
 from station_fakes import AIRPORTS, LISTINGS, Builder, listing, picker
 
-def make(loader=listing, *, mixer=None):
+def make(loader=listing, *, mixer=None, prefs=None, remembered_prefs=None):
     loop = asyncio.get_running_loop()
     hub = Hub()
     builder = Builder()
     remembered = []
+    remembered_prefs = [] if remembered_prefs is None else remembered_prefs
     station = Station(
         Config(icao="KPDX", feed="kpdx3_twr"),
         hub,
@@ -34,6 +35,8 @@ def make(loader=listing, *, mixer=None):
         sessions_builder=builder,
         picker_loader=picker,
         remember=remembered.append,
+        prefs=prefs,
+        remember_prefs=lambda p: remembered_prefs.append(dict(p)),
     )
     return station, hub, builder, remembered
 
@@ -103,6 +106,16 @@ async def test_listing_warnings_reach_the_log_after_the_feeds():
     kinds = [f["t"] for f in frames(page)]
     assert kinds.index("message") > max(i for i, k in enumerate(kinds) if k == "snapshot")
     assert "cached list" in hub.log[-1]["text"]
+
+
+async def test_a_retry_hint_names_the_pages_button_not_a_key():
+    def refused(config, *, warn):
+        warn("KPDX — LiveATC refused the feed list; press f to retry")
+        return []
+
+    station, hub, _, _ = make(refused)
+    await station.open("KPDX")
+    assert hub.log[-1]["text"].endswith("refused the feed list; open FEEDS to retry")
 
 
 async def test_a_listing_that_raises_leaves_an_empty_stack_and_says_so():
@@ -311,3 +324,27 @@ async def test_stop_stops_every_feed_and_releases_the_mixer_channels():
     station.stop()
     assert all(s.stopped for s in sessions)
     assert mixer._channels == []
+
+
+# -- how the page looks ------------------------------------------------------
+
+
+async def test_the_snapshot_carries_the_prefs_the_station_was_given():
+    station, *_ = make(prefs={"palette": "AMBER", "glow": "FULL", "display": "OFF"})
+    assert station.snapshot()["prefs"] == {"palette": "AMBER", "glow": "FULL", "display": "OFF"}
+
+
+async def test_without_prefs_the_station_uses_the_defaults():
+    station, *_ = make()
+    assert station.snapshot()["prefs"] == {"palette": "WOPR", "glow": "LOW", "display": "CRT"}
+
+
+async def test_a_prefs_change_is_remembered_and_reaches_every_page():
+    saved = []
+    station, hub, *_ = make(remembered_prefs=saved)
+    page = watch(hub)
+    station.handle({"t": "prefs", "palette": "MATRIX"})
+    assert saved == [{"palette": "MATRIX", "glow": "LOW", "display": "CRT"}]
+    assert frames(page, "prefs") == [{"t": "prefs", "palette": "MATRIX", "glow": "LOW", "display": "CRT"}]
+    station.handle({"t": "prefs", "glow": "OFF"})
+    assert station.prefs == {"palette": "MATRIX", "glow": "OFF", "display": "CRT"}

@@ -22,6 +22,7 @@ from typing import Any
 from kcgx import protocol
 from kcgx.airports import Airport, find
 from kcgx.hub import Hub
+from kcgx.prefs import DEFAULTS, write_prefs
 from kcgx.state import write_airport
 from squelch.cockpit import ADDED, FEED, MESSAGE, ORDER, Cockpit
 from squelch.config import Config
@@ -49,6 +50,8 @@ class Station:
         sessions_builder: Callable[..., list] = build_sessions,
         picker_loader: Callable[..., list[Feed]] = picker_feeds,
         remember: Callable[[str], None] = write_airport,
+        prefs: dict | None = None,
+        remember_prefs: Callable[[dict], None] = write_prefs,
     ) -> None:
         self.config = config
         self.hub = hub
@@ -59,6 +62,8 @@ class Station:
         self._sessions_builder = sessions_builder
         self._picker_loader = picker_loader
         self._remember = remember
+        self._remember_prefs = remember_prefs
+        self.prefs = dict(prefs or DEFAULTS)
         self._events = SessionEvents(
             on_state=lambda session, state: self._post(self._session_changed, session),
             on_warn=lambda session, message: self._post(
@@ -123,7 +128,7 @@ class Station:
         self.loading = False
         self.hub.broadcast(self.snapshot())
         for message in warnings:
-            self.hub.note(message)
+            self.hub.note(_for_the_page(message))
         self.cockpit.start()
 
     async def available_feeds(self) -> list[dict]:
@@ -165,10 +170,19 @@ class Station:
             self.open_feed(message["ident"])
         elif kind == "input":
             cockpit.note_input()
+        elif kind == "prefs":
+            self.set_prefs({k: v for k, v in message.items() if k != "t"})
 
     def set_volume(self, value: float) -> None:
         self.mixer.volume = float(value)
         self.hub.broadcast(protocol.volume_frame(self.mixer.volume))
+
+    def set_prefs(self, changes: dict) -> None:
+        """Palette, glow or display, already validated by the protocol.
+        Remembered, and sent to every page so all tabs look the same."""
+        self.prefs = {**self.prefs, **changes}
+        self._remember_prefs(self.prefs)
+        self.hub.broadcast(protocol.prefs_frame(self.prefs))
 
     def open_feed(self, ident: str) -> None:
         if self.cockpit.session(ident) is not None:
@@ -202,6 +216,7 @@ class Station:
             max_streams=self.cockpit.max_streams,
             audio_ok=not getattr(self.mixer, "failed", False),
             log=self.hub.log,
+            prefs=self.prefs,
         )
 
     # -- shutting down -----------------------------------------------------
@@ -255,3 +270,9 @@ class Station:
     async def _in_thread(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
+
+
+def _for_the_page(message: str) -> str:
+    """squelch's listing warnings name the terminal's key; the page's retry
+    is the FEEDS button, whose list is fetched afresh on every open."""
+    return message.replace("press f to retry", "open FEEDS to retry")
