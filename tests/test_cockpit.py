@@ -164,3 +164,76 @@ def test_every_session_starts_unsoloed():
     sessions[0].soloed = True
     Cockpit(Config(), sessions)
     assert not any(s.soloed for s in sessions)
+
+
+# -- stream slots ----------------------------------------------------------
+
+
+def test_start_connects_no_more_than_the_limit_and_parks_the_rest():
+    cockpit, rec, _ = make(5, limit=3, connected=False)
+    cockpit.start()
+    connected = [s for s in cockpit.sessions if s.connected]
+    parked = [s for s in cockpit.sessions if s.state == "parked"]
+    assert len(connected) == 3
+    assert len(parked) == 2
+    assert not any(s.starts for s in parked), "a parked feed was started"
+    assert cockpit.session("kpdx3_twr").connected, "the audible feed must play"
+    assert any("2 parked" in m for m in rec.messages), rec.messages
+
+
+def test_no_parking_notice_when_everything_fits():
+    cockpit, rec, _ = make(3, limit=7, connected=False)
+    cockpit.start()
+    assert all(s.connected for s in cockpit.sessions)
+    assert not any("parked" in m for m in rec.messages)
+
+
+def test_parking_and_starting_are_announced_per_feed():
+    """The owner has no other way to learn a row changed: park() runs on
+    the caller's thread, where the session's own event cannot be
+    delivered."""
+    cockpit, rec, _ = make(5, limit=3, connected=False)
+    cockpit.start()
+    announced = rec.of(FEED)
+    assert set(map(id, announced)) == set(map(id, cockpit.sessions))
+
+
+def test_unmuting_a_parked_feed_takes_the_quietest_muted_slot():
+    cockpit, _, _ = make(5, limit=3, connected=False)
+    cockpit.start()
+    held = [s for s in cockpit.sessions if s.connected and s.muted]
+    held[0].activity, held[1].activity = 0.5, 0.0
+    quietest = held[1]
+    target = next(s for s in cockpit.sessions if not s.connected)
+    assert cockpit.toggle_mute(target.feed.ident) is True
+    assert target.muted is False
+    assert target.connected, "an unmuted feed must hold a stream"
+    assert not quietest.connected, "the quietest muted feed should yield"
+    assert sum(s.connected for s in cockpit.sessions) == 3
+
+
+def test_unmuting_past_the_limit_is_refused_and_explained():
+    cockpit, rec, _ = make(4, limit=2, audible=(0, 1), connected=False)
+    cockpit.start()
+    target = next(s for s in cockpit.sessions if s.muted)
+    assert cockpit.toggle_mute(target.feed.ident) is False
+    assert target.muted is True
+    assert cockpit.audible_count() == 2
+    assert any(
+        "2 feeds already audible" in m and target.name in m
+        for m in rec.messages
+    ), rec.messages
+
+
+def test_muting_is_never_refused_at_the_limit():
+    cockpit, _, _ = make(4, limit=2, audible=(0, 1), connected=False)
+    cockpit.start()
+    target = next(s for s in cockpit.sessions if not s.muted)
+    assert cockpit.toggle_mute(target.feed.ident) is True
+    assert target.muted is True
+
+
+def test_an_unknown_ident_changes_nothing_and_says_nothing():
+    cockpit, rec, _ = make(3)
+    assert cockpit.toggle_mute("nope") is False
+    assert rec.events == []

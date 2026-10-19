@@ -88,3 +88,89 @@ class Cockpit:
 
     def warn(self, message: str) -> None:
         self._emit(MESSAGE, message)
+
+    # -- stream slots --------------------------------------------------
+
+    def audible_count(self) -> int:
+        return sum(1 for s in self._sessions if not s.muted)
+
+    def start(self) -> None:
+        """Connect the feeds that get a slot, and say why the rest wait.
+
+        An airport can publish four times as many feeds as LiveATC will
+        stream to one address.
+        """
+        self.reconcile_streams()
+        parked = sum(1 for s in self._sessions if not s.connected)
+        if parked:
+            self.warn(
+                f"LiveATC streams {self.max_streams} feeds at once — "
+                f"{parked} parked (‖). Unmute one to bring it in; "
+                f"the quietest muted feed gives up its place."
+            )
+
+    def reconcile_streams(self) -> None:
+        """Park and connect feeds until the slots match slots.plan().
+
+        Parking first, so the stream count never goes over the limit even
+        for the moment between the two: that moment is a connection LiveATC
+        resets.
+        """
+        wanted = {
+            id(s)
+            for s in slots.plan(
+                self._sessions,
+                self.max_streams,
+                audible_of=lambda s: not s.muted,
+                connected_of=lambda s: s.connected,
+                activity_of=lambda s: s.activity,
+            )
+        }
+        for session in self._sessions:
+            # Also parks a feed never started, so it says "parked" rather
+            # than sitting on "starting" for a start that is not coming.
+            if id(session) not in wanted and (
+                session.connected or session.state != "parked"
+            ):
+                session.park()
+                self._emit(FEED, session)
+        for session in self._sessions:
+            if not session.connected and id(session) in wanted:
+                session.start()
+                self._emit(FEED, session)
+
+    def _refuse_over_limit(self, session) -> bool:
+        """Warn and return True if unmuting `session` would need a slot
+        that only another audible feed could give up."""
+        if not session.muted or self.audible_count() < self.max_streams:
+            return False
+        self.warn(
+            f"{self.max_streams} feeds already audible — LiveATC's limit. "
+            f"Mute one to hear {session.name}."
+        )
+        return True
+
+    # -- the mix -------------------------------------------------------
+
+    def toggle_mute(self, ident: str) -> bool:
+        session = self.session(ident)
+        if session is None:
+            return False
+        if self.solo.active:
+            # A mute by hand is a new intent, so the mix solo recorded is no
+            # longer the one to come back to.
+            self.solo.cancel()
+            self._mark_solo()
+        if self._refuse_over_limit(session):
+            return False
+        session.toggle_mute()
+        self.reconcile_streams()
+        self._emit(FEED, session)
+        self._reorder_now()
+        return True
+
+    def _mark_solo(self) -> None:          # Task 3
+        pass
+
+    def _reorder_now(self) -> None:        # Task 3
+        pass
