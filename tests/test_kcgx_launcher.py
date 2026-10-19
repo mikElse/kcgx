@@ -117,6 +117,12 @@ def cockpit(tmp_path, socket_dir):
         }
         if size is None:  # exercise the real size-detection path
             del env["KCGX_SIZE"]
+            # ...and with no terminal behind it, even when pytest itself runs
+            # in one: a new session has no controlling tty, so the launcher's
+            # `stty size </dev/tty` fails as it would under a scheduler, and
+            # an inherited COLUMNS cannot stand in for a measurement.
+            env.pop("COLUMNS", None)
+            env.pop("LINES", None)
         if not detached:  # let it reach the exec/attach branch
             del env["KCGX_DETACHED"]
         env.pop("TMUX", None)
@@ -127,6 +133,7 @@ def cockpit(tmp_path, socket_dir):
             capture_output=True,
             text=True,
             timeout=30,
+            start_new_session=size is None,
         )
 
     def tmux(*args):
