@@ -14,6 +14,7 @@ WEB_MODULES = [
     "kcgx.hub",
     "kcgx.station",
     "kcgx.server",
+    "kcgx.prefs",
 ]
 
 
