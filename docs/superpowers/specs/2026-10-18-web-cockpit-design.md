@@ -483,7 +483,14 @@ outer range ring fits the shorter side; the longer side shows more
 geography rather than black bars. The frequency stack never stretches the
 row: past what fits, it scrolls inside its own screen, with the selected
 feed kept in view. Below 1100 px wide the wall stacks into one column and
-each screen takes its natural height.
+each screen takes its natural height, the radar a fixed 440 px.
+
+The top row is a CSS grid (radar, then a 340 to 400 px frequencies column),
+not a wrapping flex row, so **no two screens can ever overlap** at any
+window size; each screen clips its own content (`overflow: hidden` and
+`contain: paint`), so nothing the radar draws, glow included, can paint
+over a neighbour. Decided 2026-10-19 after the panels overlapped in the
+mockup.
 
 The radar pans and zooms with the pointer and wheel; a RECENTRE button in
 its title strip snaps back to the airport. Range rings label themselves in nautical miles.
