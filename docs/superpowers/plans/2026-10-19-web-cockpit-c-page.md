@@ -2961,7 +2961,11 @@ modifies matched the dry run's base byte for byte. On the branch, without
 the browser group: 914 passed, `test_page.py` skipped. The browser tests
 passed (16) against the same files in the cloud sandbox; the Mac's sandbox
 could not download Chromium, so their first run on the branch is Task 9.
-Task 9, by hand on the Mac, is pending.
+On the Mac the full suite passed after one fix outside this phase: the
+launcher's no-terminal test assumed pytest had no terminal, and failed
+when run from one (409f8f4 makes it run the launcher with none). Task 9,
+2026-10-19: the owner ran the page with `--demo` and for real, and
+confirmed every check passes.
 
 ## Self-Review Notes
 

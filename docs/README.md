@@ -16,7 +16,7 @@ Start with the [spec](superpowers/specs/2026-10-18-web-cockpit-design.md).
 |---|---|---|---|
 | **A** | extract `Cockpit` from `SquelchApp`; terminal squelch runs on it | [plan](superpowers/plans/2026-10-18-web-cockpit-a-controller.md) | built |
 | **B** | server, routes, WebSocket, levels loop | [plan](superpowers/plans/2026-10-18-web-cockpit-b-server.md) | built; audio confirmed on the Mac |
-| **C** | page: status, feed stack, meters, config, feed picker, log | [plan](superpowers/plans/2026-10-19-web-cockpit-c-page.md) | built; check by hand on the Mac pending |
+| **C** | page: status, feed stack, meters, config, feed picker, log | [plan](superpowers/plans/2026-10-19-web-cockpit-c-page.md) | built; checked by hand on the Mac |
 | **D** | radar: geodata, vector renderer, poller, palettes, display effects | | not started |
 | **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | | not started |
 
