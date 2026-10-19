@@ -2644,8 +2644,8 @@ Mac, 2026-10-19: `kcgx-web` came up at KORD (the remembered airport), 30
 feeds from the cached list, 7 streaming and 23 parked, and **the owner
 confirmed the audio plays correctly through the server**. During the check
 the debug page's controls became `[M]` `[S]` with ambient removed, and the
-page is now served `no-cache` (commit b876b41). Task 10's spec write-back
-is still to do.
+page is now served `no-cache` (commit b876b41). Task 10 wrote all nine
+decisions back into the spec on 2026-10-19.
 
 ## Self-Review Notes
 

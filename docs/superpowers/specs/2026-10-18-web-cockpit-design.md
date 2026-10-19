@@ -113,13 +113,21 @@ Every row must hold before the terminal cockpit is retired.
    └──────────────┬────────────────┘
         HTTP + one WebSocket, 127.0.0.1 only
    ┌──────────────┴────────────────┐
-   │  kcgx server (Starlette)      │
+   │  kcgx.server  (Starlette)     │  routes, /ws, LocalOnly guard, ticks
+   │  kcgx.hub                     │  open pages, one queue each; the log
+   │  kcgx.station                 │  mixer, airport, actions for pages
    │   Cockpit controller          │  extracted from SquelchApp
-   │   RadarPoller                 │  adsb.lol, every 15 s
+   │   RadarPoller                 │  adsb.lol, every 15 s (phase D)
    │   FeedSessions + Mixer        │  unchanged
    └──────────────┬────────────────┘
               sounddevice → speakers
 ```
+
+`kcgx.protocol` holds every JSON shape that crosses the socket, in both
+directions, as pure functions; nothing else builds a frame. `squelch.runtime`
+holds feed loading and session building (`load_feeds`, `build_sessions`,
+`picker_feeds`), moved out of `squelch.__main__` because that module imports
+Textual and the server must not. `squelch.__main__` re-exports every name.
 
 ### The controller: the one real refactor
 
@@ -139,17 +147,23 @@ So the first phase moves them into `src/squelch/cockpit.py`:
 class Cockpit:
     """Feeds, mix and ordering for one airport. No UI, no event loop."""
 
-    def snapshot(self) -> dict          # everything a client needs to draw
-    def levels(self) -> list[float]     # one dBFS per feed, stack order
-    def toggle_mute(self, ident) -> None
-    def toggle_solo(self, ident) -> None
-    def toggle_ambient(self, ident) -> None
-    def set_volume(self, value) -> None
-    def open_feed(self, feed) -> None
-    def tick_resort(self) -> None       # called every RESORT_INTERVAL
+    sessions -> list                    # stack order; a copy
+    def session(self, ident)            # by ident, or None
+    def start(self) -> None             # take stream slots; say what parked
+    def toggle_mute(self, ident) -> bool
+    def toggle_solo(self, ident) -> bool
+    def toggle_ambient(self, ident) -> bool
+    def open_feed(self, feed)           # the new session, or None
+    def tick_resort(self) -> None       # its owner calls it every 5 s
     def note_input(self) -> None        # feeds Resorter's quiet period
-    def stop(self) -> None
+    def stop(self) -> None              # stop every session, say nothing
 ```
+
+**No wire format and no volume on `Cockpit`.** Snapshots and level frames
+are the server's business and live in `kcgx.protocol`; volume belongs to the
+mixer, which belongs to the server, not to an airport. That keeps `Cockpit`
+free of anything a page needs, so the terminal app drives exactly the same
+object.
 
 It emits changes through a single callback (`on_change(kind, payload)`) in
 place of `call_from_thread`. Feeds are addressed by `ident`, not by
@@ -173,15 +187,28 @@ Today `kcgx go` writes the state file and respawns two tmux panes, so a new
 airport is a new squelch process. In the server it is in process:
 
 1. `write_airport(icao)`.
-2. `cockpit.stop()`: every session stopped, the mixer's channels released.
-3. A new `Cockpit` built with `load_feeds` for the new ICAO, on a worker
-   thread, because the listing fetch can take several seconds of retries.
-4. The radar poller moves to the new coordinates.
-5. One `airport` message to every client, then a full snapshot.
+2. `cockpit.stop()`, then `Mixer.clear_channels()`. Clearing rebinds the
+   channel list rather than emptying it in place, and the audio callback
+   reads the list once per block, so a clear from the event loop never
+   disturbs a block PortAudio is in the middle of.
+3. An empty `Cockpit` for the new airport, and a snapshot with
+   `loading: true` to every page, so the change shows at once.
+4. `load_feeds` for the new ICAO on a worker thread, because the listing
+   fetch can take several seconds of retries; then, back on the loop, the
+   new sessions, a new `Cockpit`, its `start()`, and a second snapshot with
+   the feeds.
+5. The radar poller moves to the new coordinates (phase D).
+
+A second change while the first is still fetching wins: every change bumps
+a generation number, and a fetch that finishes under an older one is thrown
+away before any of its sessions are built. Session events from the airport
+before, still arriving as their threads wind down, are dropped for the same
+reason: the station only reports sessions that belong to the cockpit on
+show.
 
 The mixer itself survives the switch, so the output device is opened once
 per server and an airport change never produces a click or a device
-renegotiation.
+renegotiation. The owner confirmed this on the Mac on 2026-10-19.
 
 ### Radar
 
@@ -225,47 +252,80 @@ action.
 
 | Route | Does |
 |---|---|
-| `GET /` | the page |
+| `GET /` | the page, served `no-cache` so an edit shows on a plain reload |
+| `GET /api/health` | `200` with version, protocol, airport and `loading`; used by the launcher |
 | `GET /api/airports?q=` | `search()` results |
-| `POST /api/airport` | change airport (body: `icao`) |
-| `GET /api/feeds/available` | `picker_feeds()` for the feed picker |
-| `POST /api/shutdown` | stop the server, asks nothing (the page asks first) |
-| `GET /api/health` | `200` with version and airport; used by the launcher |
+| `POST /api/airport` | `{"icao": "KSEA"}`; answers `202` at once, `404` for an unknown airport, `400` for anything malformed. The change itself reaches pages over the socket |
+| `GET /api/feeds/available` | `picker_feeds()` for the feed picker, each marked `open` or not |
+| `POST /api/shutdown` | stop the server; asks nothing (the page asks first) |
 
-**One WebSocket** at `/ws` for everything live. Server to client:
+**One WebSocket** at `/ws` for everything live. Every frame is a JSON
+object with a `t`. Server to page:
 
-| Message | When |
-|---|---|
-| `snapshot` | on connect, and after an airport change |
-| `feed` | one feed's state, mute, solo, ambient or chatter changed |
-| `order` | the stack order changed (a list of idents) |
-| `levels` | 25 times a second: one dBFS per feed in stack order |
-| `aircraft` | each radar poll, success or refusal |
-| `message` | a warning for the log |
-| `airport` | the airport is changing (so the page can show it at once) |
+| `t` | Carries | When |
+|---|---|---|
+| `snapshot` | `protocol`, `airport`, `loading`, `feeds` (stack order), `volume`, `max_streams`, `audio_ok`, `log` | the first frame on every connect, always; after an airport change, once with `loading: true` and again with the feeds |
+| `feed` | one feed view | its state, mute, solo, ambient or connection changed |
+| `added` | one feed view | a feed opened from the picker |
+| `order` | `idents`, the new stack order | any reorder |
+| `levels` | `v`: ident to dBFS, one decimal | 25 Hz, only while a page is open; droppable |
+| `chatter` | `v`: ident to five-minute fraction | every resort tick; droppable |
+| `volume` | `value` | the volume changed |
+| `message` | `z` (Zulu, `1955Z`), `text` | a line added to the log |
+| `error` | `text` | this page sent something the protocol does not have |
+| `aircraft` | the radar's picture | each radar poll, success or refusal (phase D) |
 
-Client to server: `mute`, `solo`, `ambient`, `volume`, `open_feed`, `input`
-(the "you have touched the stack" signal that keeps reordering away from the
-pointer), each carrying an ident where relevant.
+Page to server: `mute`, `solo`, `ambient` and `open_feed`, each with an
+`ident`; `volume` with a `value`, clamped to 0..1; and `input`, the "you
+have touched the stack" signal that keeps reordering away from the pointer.
+The parser is strict: a wrong type, an ident that is not lower case letters,
+digits and underscores, a non-finite volume, or an unknown `t` gets an
+`error` frame back, so a page bug shows up rather than a control that
+silently does nothing. **`open_feed` names an ident only, and only from the
+picker's last list;** the server never takes a feed's label from a page.
+
+**Feeds are addressed by ident everywhere, including in `levels` and
+`chatter`.** Those two are keyed by ident rather than given in stack order,
+because the order can change between two frames, and a positional list
+would hand one frame's levels to the wrong rows for 40 ms. Thirty feeds
+keyed by ident at 25 Hz is about 15 KB/s on localhost, which needs no
+binary framing.
 
 **Levels are the only high rate stream.** 25 Hz matches `LEVEL_INTERVAL`
-today. Thirty feeds at 25 Hz is 750 floats a second: small enough for JSON,
-so there is no binary framing. Every feed's level is sent, muted or not,
-because every feed meters today and a row that expands should already have
-its history. The browser keeps that history; the server keeps none.
+today. Every feed's level is sent, muted or not, because every feed meters
+today and a row that expands should already have its history. The browser
+keeps that history; the server keeps none. The levels loop reads
+`session.level` exactly as `_tick_levels` does: polled from the event loop,
+never pushed from the audio callback, which stays a real time context that
+touches nothing else.
 
-The levels loop reads `session.level` exactly as `_tick_levels` does: polled
-from the asyncio loop, never pushed from the audio callback, which stays a
-real time context that touches nothing else.
+**The server ticks the resort**, every 5 s as `SquelchApp`'s timer does, and
+sends a `chatter` frame with each tick so pages can show the five-minute
+figures moving. Pages only ever see the order the server applied.
+
+**One slow tab never holds up the others.** The hub gives each open page its
+own bounded queue (64 frames) and its own sender task. When a page's queue
+is full, a `levels` or `chatter` frame is skipped, because the next one
+replaces it anyway; anything else that does not fit means the page has
+fallen hopelessly behind, and it is disconnected with code 1013. It
+reconnects and gets a fresh snapshot, which is cheaper and more honest than
+a page quietly out of step with the server.
 
 ### Threads
 
 Sessions keep their own threads; the mixer keeps PortAudio's. The server
-adds one asyncio event loop (uvicorn's), and the `Cockpit`'s `on_change`
-callback hands events onto it with `loop.call_soon_threadsafe`. That is the
-direct replacement for `call_from_thread`, with the same rule: a callback
-that fires after shutdown is dropped silently, not raised into a session
-thread.
+adds one asyncio event loop, uvicorn's, and **everything else runs on it**:
+the hub, the station, every `Cockpit` call. Session threads reach it only
+through `Station`'s `post`, which is `loop.call_soon_threadsafe`; that is the
+direct replacement for `call_from_thread`, with the same rule: a call that
+arrives after shutdown is dropped silently, not raised into a session
+thread. The two slow fetches, an airport's feed list and the picker's list,
+run in the loop's default executor and come back to the loop before they
+touch anything. So the `Cockpit`'s single-threaded contract from phase A
+holds without a lock anywhere.
+
+uvicorn runs with `ws="websockets-sansio"`: 0.54 deprecates its plain
+`websockets` implementation.
 
 ### Front end
 
@@ -525,6 +585,10 @@ not that the file exists; a stale file from a crash is replaced. The default
 port is `8473` (`KCGX_PORT` overrides it); if it is taken by something that
 is not kcgx, the server picks a free one and records it.
 
+Until then, phase B's `kcgx-web` runs the same server in the foreground
+(`kcgx-web [--port 8473] [--icao KPDX]`), refusing to start without ffmpeg
+or at an airport the dataset does not have. The launcher wraps it.
+
 `kcgx go` without a query keeps the existing Textual picker for now, since
 it is a terminal command; with `--open` it opens the page with the search
 already showing instead.
@@ -548,7 +612,7 @@ No authentication beyond that: it is one person's machine.
 | Step | Becomes |
 |---|---|
 | 2 System packages | `ffmpeg` and PortAudio; **tmux dropped** |
-| 4 Python dependencies | adds `starlette` and `uvicorn` |
+| 4 Python dependencies | adds `starlette`, `uvicorn` and `websockets` (and `httpx2` for the tests) |
 | 5 Launcher on `PATH` | unchanged, and no longer critical: no popup depends on it |
 | 6 `adsb-tui` | **removed**, with its licence prompt |
 | 7 Where the radar gets aircraft | **removed**; there is no adsb-tui config to write |
@@ -563,7 +627,13 @@ no longer a stopping point.
 ```
 src/squelch/cockpit.py        new: the controller extracted from app.py
 src/squelch/app.py            drives Cockpit (until retired)
-src/kcgx/server.py            new: Starlette app, WebSocket hub, routes
+src/squelch/runtime.py        new: feed loading and session building, from __main__
+src/squelch/mixer.py          gains clear_channels()
+src/kcgx/protocol.py          new: the wire format
+src/kcgx/hub.py               new: open pages and the message log
+src/kcgx/station.py           new: the mixer, the cockpit, the airport
+src/kcgx/server.py            new: Starlette app, routes, /ws, kcgx-web
+src/kcgx/web/debug.html       new in B, replaced in C: a bare page driving every control
 src/kcgx/radar.py             new: adsb.lol poller and backoff
 src/kcgx/launcher.py          new: start/stop/go, server.json, health check
 src/kcgx/web/                 new: index.html, css, js modules, vendor/
@@ -586,8 +656,14 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
   restore, open feed. Fake sessions, a fake clock, no Textual. Built in
   phase A.
 * **Server.** Starlette's `TestClient` drives routes and the WebSocket
-  against a `Cockpit` with fake sessions: a mute message produces a `feed`
-  and an `order` message; Host and Origin checks reject what they should.
+  against a real `Station` with fake sessions and a never-started `Mixer`:
+  a mute from one page reaches another as `feed` and `order` frames; Host
+  and Origin checks reject what they should. The client needs `httpx2`
+  (Starlette 1.9 deprecates `httpx` for it), and its WebSocket sends
+  `Host: testserver` for a bare path, so tests connect with a full
+  `ws://127.0.0.1:8473/ws` URL. Built in phase B, with `test_protocol.py`,
+  `test_hub.py`, `test_station.py` and a guard that no web module imports
+  Textual.
 * **Radar.** The poller against a fake fetch: success, `429`, `403`, backoff
   and reset, stale aging, coordinates moving on an airport change.
 * **Geodata.** The build is deterministic; clipping keeps exactly what
