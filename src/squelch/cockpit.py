@@ -81,6 +81,17 @@ class Cockpit:
                 return session
         return None
 
+    def stop(self) -> None:
+        """Stop every session: the airport is changing, or the server is
+        shutting down. Nothing is announced, because the owner is about to
+        discard this cockpit; one session that fails to stop does not keep
+        the others running."""
+        for session in self._sessions:
+            try:
+                session.stop()
+            except Exception:
+                pass
+
     # -- telling the owner ---------------------------------------------
 
     def _emit(self, kind: str, payload: Any) -> None:

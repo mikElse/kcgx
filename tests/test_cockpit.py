@@ -49,6 +49,10 @@ class FakeSession:
         self.ambient = not self.ambient
         return self.ambient
 
+    def stop(self):
+        self.connected = False
+        self.stopped = True
+
 
 NAMES = [
     ("kpdx3_twr", "KPDX Tower (Both)"),
@@ -445,3 +449,26 @@ def test_an_opened_feed_is_findable_by_ident():
     cockpit, _, _ = make(2, opener=lambda feed: late)
     cockpit.open_feed(ATIS)
     assert cockpit.session("kpdx3_atis") is late
+
+
+# -- stopping --------------------------------------------------------------
+
+
+def test_stop_stops_every_session_and_says_nothing():
+    cockpit, rec, _ = make(3)
+    cockpit.stop()
+    assert all(getattr(s, "stopped", False) for s in cockpit.sessions)
+    assert rec.events == []
+
+
+def test_one_session_that_will_not_stop_does_not_keep_the_others_running():
+    cockpit, _, _ = make(3)
+    stubborn = cockpit.sessions[0]
+
+    def refuse():
+        raise RuntimeError("will not stop")
+
+    stubborn.stop = refuse
+    cockpit.stop()
+    assert all(getattr(s, "stopped", False) for s in cockpit.sessions[1:])
+
