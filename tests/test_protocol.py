@@ -7,6 +7,7 @@ import json
 import pytest
 
 from kcgx.airports import find, load_airports
+from kcgx.prefs import DEFAULTS
 from kcgx.protocol import (
     PROTOCOL,
     BadMessage,
@@ -17,6 +18,7 @@ from kcgx.protocol import (
     levels_frame,
     order_frame,
     parse_client,
+    prefs_frame,
     snapshot,
 )
 from squelch.feeds import Feed
@@ -90,6 +92,22 @@ def test_a_snapshot_has_the_feeds_in_stack_order_and_the_protocol_version():
     assert [f["ident"] for f in frame["feeds"]] == ["kpdx3_twr", "kpdx3_gnd"]
     assert frame["volume"] == 0.8
     assert frame["log"] == [{"z": "1955Z", "text": "hello"}]
+    assert frame["prefs"] == DEFAULTS
+
+
+def test_a_snapshot_carries_the_prefs_it_is_given():
+    prefs = {"palette": "MONO", "glow": "OFF", "display": "VECTOR"}
+    frame = snapshot(
+        airport=None, icao="KPDX", loading=False, sessions=[], volume=1,
+        max_streams=7, audio_ok=True, log=[], prefs=prefs,
+    )
+    assert frame["prefs"] == prefs
+
+
+def test_a_prefs_frame_is_flat():
+    assert prefs_frame({"palette": "AMBER", "glow": "LOW", "display": "CRT"}) == {
+        "t": "prefs", "palette": "AMBER", "glow": "LOW", "display": "CRT",
+    }
 
 
 def test_levels_are_keyed_by_ident_and_rounded():
@@ -132,9 +150,22 @@ def test_volume_is_clamped_to_the_unit_range(value, expected):
     }
 
 
+def test_prefs_parse_one_or_more_known_names():
+    assert parse_client('{"t":"prefs","palette":"MATRIX"}') == {"t": "prefs", "palette": "MATRIX"}
+    assert parse_client('{"t":"prefs","glow":"OFF","display":"CRT"}') == {
+        "t": "prefs", "glow": "OFF", "display": "CRT",
+    }
+
+
 @pytest.mark.parametrize(
     "text",
     [
+        '{"t": "prefs"}',
+        '{"t": "prefs", "palette": "PLAID"}',
+        '{"t": "prefs", "palette": "amber"}',
+        '{"t": "prefs", "glow": 1}',
+        '{"t": "prefs", "display": "CRT", "palette": null}',
+        '{"t": "prefs", "theme": "WOPR"}',
         "not json",
         "[1, 2]",
         '{"t": "explode"}',

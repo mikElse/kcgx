@@ -19,6 +19,8 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from kcgx.prefs import CHOICES, DEFAULTS
+
 PROTOCOL = 1
 
 # LiveATC idents as parse_airport_page leaves them: lower case, digits and
@@ -75,6 +77,7 @@ def snapshot(
     max_streams: int,
     audio_ok: bool,
     log: Iterable[dict],
+    prefs: dict | None = None,
 ) -> dict:
     """Everything a page needs to draw from nothing: sent on connect and
     after every airport change."""
@@ -88,6 +91,7 @@ def snapshot(
         "max_streams": int(max_streams),
         "audio_ok": bool(audio_ok),
         "log": list(log),
+        "prefs": dict(prefs or DEFAULTS),
     }
 
 
@@ -113,6 +117,10 @@ def chatter_frame(sessions: Iterable) -> dict:
 
 def volume_frame(value: float) -> dict:
     return {"t": "volume", "value": round(float(value), 2)}
+
+
+def prefs_frame(prefs: dict) -> dict:
+    return {"t": "prefs", **prefs}
 
 
 def message_frame(entry: dict) -> dict:
@@ -158,7 +166,25 @@ def parse_client(text: str) -> dict:
         return {"t": "volume", "value": min(1.0, max(0.0, float(value)))}
     if kind == "input":
         return {"t": "input"}
+    if kind == "prefs":
+        return {"t": "prefs", **_prefs(data)}
     raise BadMessage(f"unknown message type: {kind!r}")
+
+
+def _prefs(data: dict) -> dict:
+    """At least one of palette, glow, display, each one of its known names.
+    Names are exact: the page sends what the server sent it."""
+    changes = {}
+    for key, allowed in CHOICES.items():
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, str) or value not in allowed:
+            raise BadMessage(f"{key} must be one of {', '.join(allowed)}")
+        changes[key] = value
+    if not changes:
+        raise BadMessage("prefs needs palette, glow or display")
+    return changes
 
 
 def _ident(data: dict) -> str:
