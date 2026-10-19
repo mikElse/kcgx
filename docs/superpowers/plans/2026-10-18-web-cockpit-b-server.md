@@ -2636,6 +2636,17 @@ Anything that fails here is a bug in this phase, not in phase C.
 
 ---
 
+## Execution record
+
+Built 2026-10-18 and 2026-10-19 on `feat/web-cockpit`, one commit per task,
+from the dry-run files; full suite 871 passed on the branch. Task 9 on the
+Mac, 2026-10-19: `kcgx-web` came up at KORD (the remembered airport), 30
+feeds from the cached list, 7 streaming and 23 parked, and **the owner
+confirmed the audio plays correctly through the server**. During the check
+the debug page's controls became `[M]` `[S]` with ambient removed, and the
+page is now served `no-cache` (commit b876b41). Task 10's spec write-back
+is still to do.
+
 ## Self-Review Notes
 
 - **Dry run, 2026-10-18.** Every file and snippet above was built in a
