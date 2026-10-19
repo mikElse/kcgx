@@ -57,11 +57,12 @@ function send(message) {
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
-function button(label, pressed, onClick) {
+function button(label, pressed, onClick, name) {
   const b = document.createElement("button");
   b.type = "button";
   b.textContent = label;
-  b.setAttribute("aria-pressed", String(pressed));
+  if (name) b.setAttribute("aria-label", name);
+  if (pressed !== null) b.setAttribute("aria-pressed", String(pressed));
   b.addEventListener("click", onClick);
   return b;
 }
@@ -83,10 +84,10 @@ function render() {
       row.append(td);
     });
     const controls = document.createElement("td");
+    // M lights when the feed is muted, as on a mixer; S when it is soloed.
     controls.append(
-      button(f.muted ? "unmute" : "mute", !f.muted, () => send({t: "mute", ident})), " ",
-      button("solo", f.soloed, () => send({t: "solo", ident})), " ",
-      button("ambient", f.ambient, () => send({t: "ambient", ident})),
+      button("M", f.muted, () => send({t: "mute", ident}), "Mute " + f.name), " ",
+      button("S", f.soloed, () => send({t: "solo", ident}), "Solo " + f.name),
     );
     row.append(controls);
     body.append(row);
@@ -169,7 +170,7 @@ document.getElementById("picker").addEventListener("click", async () => {
   const holder = document.getElementById("available");
   holder.replaceChildren();
   list.filter((f) => !f.open).forEach((f) => {
-    holder.append(button("open " + f.label, false, () => send({t: "open_feed", ident: f.ident})), " ");
+    holder.append(button("open " + f.label, null, () => send({t: "open_feed", ident: f.ident})), " ");
   });
   if (!holder.childElementCount) holder.textContent = "every listed feed is open";
 });

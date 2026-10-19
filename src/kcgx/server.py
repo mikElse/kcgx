@@ -128,7 +128,13 @@ def create_app(
             station.stop()
 
     async def page(request: Request):
-        return FileResponse(WEB_DIR / "debug.html", media_type="text/html")
+        # no-cache: revalidate on every load, so an edited page shows on a
+        # plain reload instead of after the browser's heuristic cache expires.
+        return FileResponse(
+            WEB_DIR / "debug.html",
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     async def health(request: Request):
         station = request.app.state.station

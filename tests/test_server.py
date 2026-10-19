@@ -183,6 +183,7 @@ def test_the_debug_page_is_served():
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "/ws" in response.text
+    assert response.headers["cache-control"] == "no-cache"
 
 
 def test_airport_search_uses_the_dataset():
