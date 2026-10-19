@@ -2953,6 +2953,16 @@ Anything that fails here is a bug in this phase.
 
 ---
 
+## Execution record
+
+Built 2026-10-19 on `feat/web-cockpit`, one commit per task (9090681 to
+ec3f173), from the dry-run files; before any change, every file the plan
+modifies matched the dry run's base byte for byte. On the branch, without
+the browser group: 914 passed, `test_page.py` skipped. The browser tests
+passed (16) against the same files in the cloud sandbox; the Mac's sandbox
+could not download Chromium, so their first run on the branch is Task 9.
+Task 9, by hand on the Mac, is pending.
+
 ## Self-Review Notes
 
 - **Dry run, 2026-10-19.** Every file and diff above was built in a scratch
