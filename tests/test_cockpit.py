@@ -350,3 +350,39 @@ def test_ambient_toggles_only_its_feed_and_leaves_mute_alone():
     assert [s.ambient for s in cockpit.sessions] == [False, True, False]
     assert mutes(cockpit) == before
     assert rec.of(FEED) == [cockpit.session("kpdx3_gnd")]
+
+
+# -- resorting ---------------------------------------------------------------
+
+
+def test_the_stack_reorders_busiest_first_once_settled():
+    cockpit, rec, _ = make(3, audible=())
+    s0, s1, s2 = cockpit.sessions
+    s0.activity, s1.activity, s2.activity = 0.1, 0.9, 0.5
+    for _ in range(SETTLE_ROUNDS):
+        cockpit.tick_resort()
+    assert cockpit.sessions == [s1, s2, s0]
+    assert rec.of(ORDER)[-1] == [s1, s2, s0]
+
+
+def test_one_tick_is_not_enough_to_reorder():
+    cockpit, rec, _ = make(3, audible=())
+    original = cockpit.sessions
+    cockpit.sessions[1].activity = 0.9
+    cockpit.tick_resort()
+    assert cockpit.sessions == original
+    assert rec.of(ORDER) == []
+
+
+def test_input_holds_a_settled_resort_until_the_hand_comes_off():
+    cockpit, rec, clock = make(3, audible=())
+    original = cockpit.sessions
+    original[1].activity = 0.9
+    for _ in range(SETTLE_ROUNDS - 1):
+        cockpit.tick_resort()
+    cockpit.note_input()
+    cockpit.tick_resort()
+    assert cockpit.sessions == original, "the stack must not move under a hand"
+    clock.now += QUIET_SECONDS + 0.1
+    cockpit.tick_resort()
+    assert ident(cockpit, 0) == original[1].feed.ident

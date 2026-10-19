@@ -235,5 +235,15 @@ class Cockpit:
         self._apply_order(order)
         self.resorter.adopt(order)
 
-    def tick_resort(self) -> None:         # Task 4
-        pass
+
+    def tick_resort(self) -> None:
+        """Called every few seconds by the owner. Applies a new order only
+        once it has held for SETTLE_ROUNDS and nobody has touched the stack
+        for QUIET_SECONDS."""
+        order = self.resorter.propose(self.ranked())
+        if order is not None:
+            self._apply_order(order)
+
+    def note_input(self) -> None:
+        """The viewer touched the stack: a key, a click, a hover."""
+        self.resorter.note_input()
