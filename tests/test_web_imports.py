@@ -10,6 +10,7 @@ import pytest
 WEB_MODULES = [
     "squelch.runtime",
     "squelch.cockpit",
+    "kcgx.protocol",
 ]
 
 
