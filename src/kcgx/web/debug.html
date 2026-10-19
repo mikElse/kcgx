@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kcgx debug</title>
+<style>
+  /* Deliberately plain: this page exists to drive the server until the
+     real cockpit page (phase C) replaces it. */
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #000; color: #c4f0ff; font: 14px/1.4 ui-monospace, Menlo, monospace; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  section { margin: 0 0 16px; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  td, th { padding: 4px 8px; border-bottom: 1px solid #1a2229; text-align: left; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  button { font: inherit; background: none; color: inherit; border: 1px solid #2f86ab; min-height: 32px; padding: 0 10px; cursor: pointer; }
+  button[aria-pressed="true"] { border-color: #ff8fdc; color: #ff8fdc; }
+  input { font: inherit; background: #000; color: inherit; border: 1px solid #2f86ab; padding: 4px; }
+  #log { max-height: 200px; overflow: auto; white-space: pre-wrap; }
+  #status { color: #7fa9be; }
+</style>
+</head>
+<body>
+<h1>kcgx debug <span id="status">connecting</span></h1>
+
+<section aria-label="Airport">
+  <div id="airport"></div>
+  <form id="airport-form">
+    <label>ICAO <input id="icao" size="6" autocomplete="off"></label>
+    <button type="submit">Go</button>
+  </form>
+</section>
+
+<section aria-label="Volume">
+  <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05"></label>
+  <span id="volume-value"></span>
+</section>
+
+<section aria-label="Feeds">
+  <table>
+    <thead><tr><th>Feed</th><th>State</th><th class="num">Level dBFS</th><th class="num">Chatter</th><th>Controls</th></tr></thead>
+    <tbody id="feeds"></tbody>
+  </table>
+  <p><button type="button" id="picker">Load feed list</button> <span id="available"></span></p>
+</section>
+
+<section aria-label="Log"><div id="log"></div></section>
+
+<script>
+"use strict";
+const feeds = new Map();   // ident -> feed view
+let order = [];
+let socket = null;
+
+function send(message) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+}
+
+function button(label, pressed, onClick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  b.setAttribute("aria-pressed", String(pressed));
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function render() {
+  const body = document.getElementById("feeds");
+  body.replaceChildren();
+  for (const ident of order) {
+    const f = feeds.get(ident);
+    if (!f) continue;
+    const row = document.createElement("tr");
+    row.id = "feed-" + ident;
+    const cells = [f.name + "  (" + ident + ")", f.state, "", Math.round(f.chatter * 100) + "%"];
+    cells.forEach((text, i) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (i >= 2) td.className = "num";
+      if (i === 2) td.dataset.level = ident;
+      row.append(td);
+    });
+    const controls = document.createElement("td");
+    controls.append(
+      button(f.muted ? "unmute" : "mute", !f.muted, () => send({t: "mute", ident})), " ",
+      button("solo", f.soloed, () => send({t: "solo", ident})), " ",
+      button("ambient", f.ambient, () => send({t: "ambient", ident})),
+    );
+    row.append(controls);
+    body.append(row);
+  }
+}
+
+function log(entry) {
+  const el = document.getElementById("log");
+  el.textContent += entry.z + "  " + entry.text + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+function receive(frame) {
+  switch (frame.t) {
+    case "snapshot": {
+      feeds.clear();
+      order = frame.feeds.map((f) => f.ident);
+      frame.feeds.forEach((f) => feeds.set(f.ident, f));
+      const a = frame.airport;
+      document.getElementById("airport").textContent =
+        a.icao + "  " + a.name + (frame.loading ? "  (loading feeds...)" : "") +
+        (frame.audio_ok ? "" : "  NO AUDIO DEVICE");
+      document.getElementById("volume").value = frame.volume;
+      document.getElementById("volume-value").textContent = Math.round(frame.volume * 100) + "%";
+      document.getElementById("log").textContent = "";
+      frame.log.forEach(log);
+      render();
+      break;
+    }
+    case "feed": feeds.set(frame.feed.ident, frame.feed); render(); break;
+    case "added": feeds.set(frame.feed.ident, frame.feed); order.push(frame.feed.ident); render(); break;
+    case "order": order = frame.idents; render(); break;
+    case "levels":
+      for (const [ident, db] of Object.entries(frame.v)) {
+        const td = document.querySelector('[data-level="' + ident + '"]');
+        if (td) td.textContent = db.toFixed(1);
+      }
+      break;
+    case "chatter":
+      for (const [ident, value] of Object.entries(frame.v)) {
+        const f = feeds.get(ident);
+        if (f) f.chatter = value;
+      }
+      render();
+      break;
+    case "volume":
+      document.getElementById("volume").value = frame.value;
+      document.getElementById("volume-value").textContent = Math.round(frame.value * 100) + "%";
+      break;
+    case "message": log(frame); break;
+    case "error": log({z: "PAGE", text: "error: " + frame.text}); break;
+  }
+}
+
+function connect() {
+  socket = new WebSocket("ws://" + location.host + "/ws");
+  socket.addEventListener("open", () => { document.getElementById("status").textContent = "live"; });
+  socket.addEventListener("message", (event) => receive(JSON.parse(event.data)));
+  socket.addEventListener("close", () => {
+    document.getElementById("status").textContent = "reconnecting";
+    setTimeout(connect, 1000);
+  });
+}
+
+document.getElementById("volume").addEventListener("input", (event) => {
+  send({t: "volume", value: Number(event.target.value)});
+});
+
+document.getElementById("airport-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const icao = document.getElementById("icao").value.trim();
+  const response = await fetch("/api/airport", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({icao}),
+  });
+  if (!response.ok) log({z: "PAGE", text: (await response.json()).error});
+});
+
+document.getElementById("picker").addEventListener("click", async () => {
+  const list = await (await fetch("/api/feeds/available")).json();
+  const holder = document.getElementById("available");
+  holder.replaceChildren();
+  list.filter((f) => !f.open).forEach((f) => {
+    holder.append(button("open " + f.label, false, () => send({t: "open_feed", ident: f.ident})), " ");
+  });
+  if (!holder.childElementCount) holder.textContent = "every listed feed is open";
+});
+
+document.getElementById("feeds").addEventListener("pointerdown", () => send({t: "input"}));
+connect();
+</script>
+</body>
+</html>

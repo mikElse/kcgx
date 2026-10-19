@@ -13,6 +13,7 @@ WEB_MODULES = [
     "kcgx.protocol",
     "kcgx.hub",
     "kcgx.station",
+    "kcgx.server",
 ]
 
 
