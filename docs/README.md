@@ -4,14 +4,21 @@ Each piece of work gets a **spec** (what and why, agreed before any code) and a
 **plan** (task-by-task TDD steps, agreed before implementation). Specs live in
 `superpowers/specs/`, plans in `superpowers/plans/`.
 
-## Web cockpit: spec drafted, phase A planned
+## Web cockpit: phase A built, B to E not started
 
-The cockpit as a local web app: audio stays on the server, the browser is the
-display and the controls, and our own vector radar in a WarGames style replaces `adsb-tui`. Five
-phases, A to E; A extracts the controller from `SquelchApp` and leaves the
-terminal cockpit working.
+The cockpit as a local web app: audio stays on the server, the browser is
+the display and the controls, and our own vector radar in a WarGames style
+replaces `adsb-tui`. Built on `feat/web-cockpit`.
 
-[Spec](superpowers/specs/2026-10-18-web-cockpit-design.md) · [Phase A plan](superpowers/plans/2026-10-18-web-cockpit-a-controller.md) (7 tasks)
+Start with the [spec](superpowers/specs/2026-10-18-web-cockpit-design.md).
+
+| Phase | What | Plan | State |
+|---|---|---|---|
+| **A** | extract `Cockpit` from `SquelchApp`; terminal squelch runs on it | [plan](superpowers/plans/2026-10-18-web-cockpit-a-controller.md) | built |
+| **B** | server, routes, WebSocket, levels loop | | not started |
+| **C** | page: status, feed stack, meters, config, feed picker, log | | not started |
+| **D** | radar: geodata, vector renderer, poller, palettes, display effects | | not started |
+| **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | | not started |
 
 ## Audio pane upgrades — planned, not started
 

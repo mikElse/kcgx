@@ -158,9 +158,10 @@ and an index is exactly the thing reordering changes.
 
 `SquelchApp` is then rewritten to drive a `Cockpit`. **That is the gate for
 everything after it:** the terminal squelch keeps working on the new
-controller, and the behavioural tests in `test_app.py` are moved to
-`test_cockpit.py` and pass against it with no Textual involved. If the
-browser work stopped there, the codebase would still be better for it.
+controller, every existing test passes without being edited, and
+`test_cockpit.py` covers the same rules with no Textual involved. The
+app's tests retire with the terminal UI in phase E; the cockpit's stay. If
+the browser work stopped there, the codebase would still be better for it.
 
 Selection is the one thing that does not move. It is per viewer: two tabs
 can have different rows selected, and `space` acts on the selected feed by
@@ -564,9 +565,10 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
 
 ## Testing
 
-* **Controller.** `test_cockpit.py` takes over the behaviour tests from
-  `test_app.py`: ordering, resort timing, slots, refusal, solo restore, open
-  feed. Fake sessions, a fake clock, no Textual.
+* **Controller.** `test_cockpit.py` covers the rules `test_app.py` covers
+  through the terminal: ordering, resort timing, slots, refusal, solo
+  restore, open feed. Fake sessions, a fake clock, no Textual. Built in
+  phase A.
 * **Server.** Starlette's `TestClient` drives routes and the WebSocket
   against a `Cockpit` with fake sessions: a mute message produces a `feed`
   and an `order` message; Host and Origin checks reject what they should.

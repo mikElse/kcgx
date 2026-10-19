@@ -1293,6 +1293,16 @@ marked built, and B to E marked not started.
 
 ---
 
+## Execution record
+
+Built 2026-10-18 on `feat/web-cockpit`, one commit per task. Every
+revert-check in Tasks 1 to 6 was run as written and failed the named test.
+Run in a Linux sandbox without PortAudio, so the five `test_main.py` tests
+that build a real `Mixer` were run against a stand-in `sounddevice` whose
+output stream never opens (squelch's "no audio device" path); with it, the
+full suite was **766 passed**. Task 6 Step 8, the by-hand check with real
+audio, is still to do on the Mac.
+
 ## Self-Review Notes
 
 - **Dry run, 2026-10-18.** Every code block in Tasks 1 to 6 was assembled
