@@ -23,11 +23,9 @@ from textual.worker import NoActiveWorker, get_current_worker
 from squelch.config import Config
 from squelch.config_view import ConfigScreen
 from squelch.feeds import Feed
-from squelch.activity import Resorter, rank
 from squelch.radar_theme import POLL_SECONDS, RadarTheme
 from squelch.themes import METER_PALETTES, TEXTUAL_THEME_PREFIX, textual_theme
-from squelch.solo import Solo
-from squelch import slots
+from squelch.cockpit import ADDED, FEED, MESSAGE, ORDER, Cockpit
 from squelch.rows import (
     BLOCKS,
     FLOOR_DBFS,
@@ -132,18 +130,8 @@ class SquelchApp(App):
     ) -> None:
         super().__init__()
         self._config = config
-        self._sessions = list(sessions)
         self._feed_loader = feed_loader
-        # Builds and returns an unstarted session for a feed the stack does
-        # not have. None outside a real run, where opening one has nowhere
-        # to get a mixer channel from.
-        self._feed_opener = feed_opener
         self._selected = 0
-        # At least one: a limit of zero would park everything, including the
-        # feed you are listening to, and look exactly like a dead network.
-        self._max_streams = max(1, config.max_streams)
-        self._solo = Solo()
-        self._resorter = Resorter()
         self._resort_timer = None
         self._level_timer = None
         self._radar_theme = radar_theme
@@ -151,8 +139,18 @@ class SquelchApp(App):
         # The config overlay adjusts the audio path through this. None
         # outside a real run, where the overlay is read-only.
         self._mixer = mixer
-        for session in self._sessions:
-            session.soloed = False
+        # The rules: stream slots, mute, solo, ambient, ordering. The app
+        # draws what the cockpit decides and forwards what the viewer does.
+        self._cockpit = Cockpit(
+            config,
+            sessions,
+            feed_opener=feed_opener,
+            on_change=self._on_cockpit_change,
+        )
+        # The stack as the widgets show it. Kept in step with the cockpit by
+        # _on_cockpit_change; selection is an index into this, because
+        # selection belongs to a viewer and the cockpit has no viewers.
+        self._shown: list = self._cockpit.sessions
         self._clock_text = datetime.now().strftime("%H:%M:%S")
         self._header: Static | None = None
         self._footer: Static | None = None
@@ -221,6 +219,138 @@ class SquelchApp(App):
         self._feed_list = None
         self._rows = {}
         self._entries.clear()
+
+    # -- the cockpit ---------------------------------------------------
+
+    # tests/test_app.py, tests/test_feed_picker.py and squelch.__main__ read
+    # these. They are views of the cockpit now, not state of their own.
+    @property
+    def _sessions(self) -> list:
+        return self._shown
+
+    @property
+    def _solo(self):
+        return self._cockpit.solo
+
+    @property
+    def _feed_opener(self):
+        return self._cockpit.feed_opener
+
+    @_feed_opener.setter
+    def _feed_opener(self, opener) -> None:
+        self._cockpit.feed_opener = opener
+
+    def _on_cockpit_change(self, kind: str, payload) -> None:
+        """Turn what the cockpit did into what the widgets show."""
+        if kind == FEED:
+            self._refresh_row(payload)
+            self._refresh_header()
+        elif kind == ORDER:
+            self._show_order(payload)
+        elif kind == ADDED:
+            self._shown.append(payload)
+            row = FeedRow(payload, classes="feed")
+            self._rows[id(payload)] = row
+            if self._feed_list is not None:
+                self._feed_list.mount(row)
+        elif kind == MESSAGE:
+            # Looked up at call time: tests replace app.warn with a list's
+            # append, and must keep catching these.
+            self.warn(payload)
+
+    def _show_order(self, order: list) -> None:
+        """Move rows to match the cockpit's order, keeping the selection on
+        its feed.
+
+        Moves rather than remounts: remounting would drop every row's meter
+        history and its scroll position. `move_child` keeps the same widget
+        instances, which is also why `_rows` can stay keyed by
+        `id(session)`.
+        """
+        selected = self.selected_session
+        self._shown = list(order)
+        feed_list = self._feed_list
+        if feed_list is not None:
+            for index, session in enumerate(self._shown):
+                row = self._rows.get(id(session))
+                if row is not None:
+                    feed_list.move_child(row, before=index)
+        if selected is not None and selected in self._shown:
+            # Selection belongs to a feed, not to a position.
+            self._selected = self._shown.index(selected)
+        self._apply_selection()
+
+    def on_key(self, event) -> None:
+        # A row that moves between the decision to press a key and the press
+        # itself acts on the wrong feed.
+        self._cockpit.note_input()
+
+    def _tick_resort(self) -> None:
+        self._cockpit.tick_resort()
+
+    def start_streams(self) -> None:
+        """Connect the feeds that get a slot; the cockpit says why the rest
+        wait. Called once the app is running, in place of starting every
+        session."""
+        self._cockpit.start()
+        self._refresh_header()
+
+    def reconcile_streams(self) -> None:
+        self._cockpit.reconcile_streams()
+        self._refresh_header()
+
+    def action_toggle_mute(self) -> None:
+        session = self.selected_session
+        if session is not None:
+            self._cockpit.toggle_mute(session.feed.ident)
+
+    def action_toggle_solo(self) -> None:
+        session = self.selected_session
+        if session is not None:
+            self._cockpit.toggle_solo(session.feed.ident)
+
+    def action_toggle_ambient(self) -> None:
+        session = self.selected_session
+        if session is not None:
+            self._cockpit.toggle_ambient(session.feed.ident)
+
+    def jump_to_feed(self, feed) -> None:
+        """Move the selection to `feed`'s row, opening it if it is not open.
+
+        The picker used to exist to report an ident, which stopped making
+        sense when the row stopped showing one. What it is good for now is
+        finding a frequency quickly -- which matters more once activity
+        sorting is moving rows around.
+
+        Opening is the other half, and it is what makes `f` a real recovery
+        from a failed startup rather than a suggestion. When LiveATC's
+        listing is refused at launch, squelch opens the configured feed
+        alone (or nothing) and says "press f to retry". Pressing `f`
+        refetches the listing and usually succeeds -- but every feed it
+        turned up then answered "is not open", which is true, unhelpful,
+        and the end of the road short of restarting the app.
+        """
+        for index, session in enumerate(self._shown):
+            if session.feed.ident == feed.ident:
+                self._selected = index
+                self._apply_selection()
+                return
+        self.open_feed(feed)
+
+    def open_feed(self, feed) -> None:
+        """Add a feed to the running stack, metering and audible.
+
+        Audible rather than muted: this is only reached by picking a feed
+        that is not open, which is an explicit request to hear it -- and
+        arriving at a new muted row among a dozen others is indistinguishable
+        from nothing having happened.
+        """
+        session = self._cockpit.open_feed(feed)
+        if session is None:
+            return
+        self._selected = self._shown.index(session)
+        self._apply_selection()
+        self._refresh_header()
 
     # -- rendering -----------------------------------------------------
 
@@ -295,188 +425,7 @@ class SquelchApp(App):
             # The app quit while the capture was in flight.
             pass
 
-    def on_key(self, event) -> None:
-        # A row that moves between the decision to press a key and the press
-        # itself acts on the wrong feed.
-        self._resorter.note_input()
-
-    def _ranked(self) -> list:
-        """Audible feeds on top, each group ordered by activity."""
-        return rank(
-            self._sessions,
-            lambda session: session.activity,
-            audible_of=lambda session: not session.muted,
-        )
-
-    def _tick_resort(self) -> None:
-        order = self._resorter.propose(self._ranked())
-        if order is not None:
-            self.apply_order(order)
-
-    def _reorder_now(self) -> None:
-        """Apply the ranking immediately, skipping the settle delay.
-
-        The debounce exists so that activity drifting underneath you cannot
-        move a row between the moment you decide to click it and the moment
-        you do. A mute change is not that: the row moving is the direct,
-        expected result of the key you just pressed, and waiting fifteen
-        seconds to honour it would read as the feature being broken.
-
-        The Resorter is told what was applied so it does not then spend
-        three rounds proposing the order already on screen.
-        """
-        order = self._ranked()
-        self.apply_order(order)
-        self._resorter.adopt(order)
-
-    def apply_order(self, order: list) -> None:
-        """Reorder the stack, moving rows rather than remounting them.
-
-        Remounting would drop every row's meter history and its scroll
-        position. `move_child` keeps the same widget instances, which is
-        also why `_rows` can stay keyed by `id(session)` -- the mapping does
-        not change, only the order of the children.
-        """
-        feed_list = self._feed_list
-        if feed_list is None:
-            return
-        selected = self.selected_session
-        self._sessions = list(order)
-        for index, session in enumerate(self._sessions):
-            row = self._rows.get(id(session))
-            if row is not None:
-                feed_list.move_child(row, before=index)
-        if selected is not None:
-            # Selection belongs to a feed, not to a position.
-            self._selected = self._sessions.index(selected)
-        self._apply_selection()
-
-    def jump_to_feed(self, feed) -> None:
-        """Move the selection to `feed`'s row, opening it if it is not open.
-
-        The picker used to exist to report an ident, which stopped making
-        sense when the row stopped showing one. What it is good for now is
-        finding a frequency quickly -- which matters more once activity
-        sorting is moving rows around.
-
-        Opening is the other half, and it is what makes `f` a real recovery
-        from a failed startup rather than a suggestion. When LiveATC's
-        listing is refused at launch, squelch opens the configured feed
-        alone (or nothing) and says "press f to retry". Pressing `f`
-        refetches the listing and usually succeeds -- but every feed it
-        turned up then answered "is not open", which is true, unhelpful,
-        and the end of the road short of restarting the app.
-        """
-        for index, session in enumerate(self._sessions):
-            if session.feed.ident == feed.ident:
-                self._selected = index
-                self._apply_selection()
-                return
-        self.open_feed(feed)
-
-    def open_feed(self, feed) -> None:
-        """Add a feed to the running stack, metering and audible.
-
-        Audible rather than muted: this is only reached by picking a feed
-        that is not open, which is an explicit request to hear it -- and
-        arriving at a new muted row among a dozen others is indistinguishable
-        from nothing having happened.
-        """
-        if self._feed_opener is None:
-            self.warn(f"{feed.ident} is not open")
-            return
-        try:
-            session = self._feed_opener(feed)
-        except Exception as exc:  # a dead feed must not take the app with it
-            self.warn(f"could not open {feed.ident}: {exc}")
-            return
-
-        if not session.muted and self._audible_count() >= self._max_streams:
-            # Open it muted rather than not at all: the row is still what
-            # was asked for, and unmuting it later is one key.
-            session.muted = True
-            self.warn(
-                f"{self._max_streams} feeds already audible — LiveATC's "
-                f"limit. Opened {session.name} muted."
-            )
-        self._sessions.append(session)
-        row = FeedRow(session, classes="feed")
-        self._rows[id(session)] = row
-        if self._feed_list is not None:
-            self._feed_list.mount(row)
-        # Connected after mounting, so its first state change has a row to
-        # land on -- the session's opening act can be a warning.
-        self.reconcile_streams()
-        self._selected = len(self._sessions) - 1
-        self._apply_selection()
-        self._refresh_header()
-        self.warn(f"opened {feed.ident}")
-
-    # -- stream slots --------------------------------------------------
-
-    def start_streams(self) -> None:
-        """Connect the feeds that get a slot, and say why the rest wait.
-
-        Called once the app is running, in place of starting every session:
-        an airport can publish four times as many feeds as LiveATC will
-        stream to one address.
-        """
-        self.reconcile_streams()
-        parked = sum(1 for s in self._sessions if not s.connected)
-        if parked:
-            self.warn(
-                f"LiveATC streams {self._max_streams} feeds at once — "
-                f"{parked} parked (‖). Unmute one to bring it in; "
-                f"the quietest muted feed gives up its place."
-            )
-
-    def reconcile_streams(self) -> None:
-        """Park and connect feeds until the slots match slots.plan().
-
-        Parking first, so the stream count never goes over the limit even
-        for the moment between the two -- that moment is a connection
-        LiveATC resets.
-        """
-        wanted = {
-            id(s)
-            for s in slots.plan(
-                self._sessions,
-                self._max_streams,
-                audible_of=lambda s: not s.muted,
-                connected_of=lambda s: s.connected,
-                activity_of=lambda s: s.activity,
-            )
-        }
-        for session in self._sessions:
-            # Also parks a feed never started, so it says "parked" rather
-            # than sitting on "starting" for a start that is not coming.
-            if id(session) not in wanted and (
-                session.connected or session.state != "parked"
-            ):
-                session.park()
-                # park() announces itself through the session's events, but
-                # those marshal with call_from_thread -- which refuses to run
-                # on the UI thread, where we are, and the refusal is
-                # swallowed. Redraw the row from here instead.
-                self.set_state(session, session.state)
-        for session in self._sessions:
-            if not session.connected and id(session) in wanted:
-                session.start()
-        self._refresh_header()
-
-    def _audible_count(self) -> int:
-        return sum(1 for s in self._sessions if not s.muted)
-
-    def _refuse_over_limit(self, session) -> bool:
-        """Warn and return True if unmuting `session` would need a slot
-        that only another audible feed could give up."""
-        if not session.muted or self._audible_count() < self._max_streams:
-            return False
-        self.warn(
-            f"{self._max_streams} feeds already audible — LiveATC's limit. "
-            f"Mute one to hear {session.name}."
-        )
-        return True
+    # -- actions -------------------------------------------------------
 
     def action_cursor_down(self) -> None:
         if not self._sessions:
@@ -489,57 +438,6 @@ class SquelchApp(App):
             return
         self._selected = max(self._selected - 1, 0)
         self._apply_selection()
-
-    def action_toggle_mute(self) -> None:
-        session = self.selected_session
-        if session is None:
-            return
-        if self._solo.active:
-            # The user has muted something by hand, so the mix solo recorded
-            # is no longer the one they want back.
-            self._solo.cancel()
-            self._clear_solo_marks()
-        if self._refuse_over_limit(session):
-            return
-        session.toggle_mute()
-        self.reconcile_streams()
-        self._refresh_row(session)
-        self._reorder_now()
-
-    def action_toggle_solo(self) -> None:
-        session = self.selected_session
-        if session is None:
-            return
-        if self._solo.is_soloed(id(session)):
-            restored = self._solo.disengage()
-            if restored is not None:
-                self._apply_mix(restored)
-        else:
-            states = {id(s): s.muted for s in self._sessions}
-            self._apply_mix(self._solo.engage(id(session), states))
-        # Solo can move audibility to a parked feed, and returning from it
-        # can move it back to several. The restored mix fit the limit when
-        # it was recorded, because every unmute along the way was checked.
-        self.reconcile_streams()
-        self._clear_solo_marks()
-        self._refresh_rows()
-        self._reorder_now()
-
-    def action_toggle_ambient(self) -> None:
-        session = self.selected_session
-        if session is None:
-            return
-        session.toggle_ambient()
-        self._refresh_row(session)
-
-    def _apply_mix(self, states: dict) -> None:
-        for session in self._sessions:
-            if id(session) in states:
-                session.muted = states[id(session)]
-
-    def _clear_solo_marks(self) -> None:
-        for session in self._sessions:
-            session.soloed = self._solo.is_soloed(id(session))
 
     def _refresh_row(self, session) -> None:
         # refresh_all rather than refresh_name: a mute change flips the row
@@ -554,7 +452,7 @@ class SquelchApp(App):
             self._refresh_row(session)
 
     def on_row_clicked(self, message: RowClicked) -> None:
-        self._resorter.note_input()
+        self._cockpit.note_input()
         session = message.row.session
         self._selected = self._sessions.index(session)
         self._apply_selection()
