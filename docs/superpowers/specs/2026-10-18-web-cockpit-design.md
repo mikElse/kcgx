@@ -365,17 +365,34 @@ every screen:
 | Green | elsewhere | foreign coastlines and borders |
 | Red orange, dashed | restricted or alarm | class B and C airspace, emergency squawks, errors |
 | Pink | focus | the ring round the airport, its name, the selected aircraft |
-| White | motion | aircraft trails |
+| White | structure on the ground | screen titles, the home airport's runways |
 | Amber | places | cities and other airports as small open circles |
 
 **Shapes from the film, given jobs here.** Waypoints and navaids are
 diamonds; other airports are triangles; aircraft are chevrons pointing along
-track, trailing a white line of their last positions (the film's missile
+track, trailing a line of their last positions (the film's missile
 tracks); the home airport sits in a pink ring with its name set large
 beside it, exactly as the stills label each base. Labels are callsign and
 altitude, `ASA412 6172`. An aircraft with no callsign is labelled `UNK1`,
 `UNK2` in order of first sighting, and an emergency squawk (`7500`, `7600`,
 `7700`) turns that aircraft red orange.
+
+Decided 2026-10-19 from the mockup review:
+
+* **A trail is part of its aircraft:** the same colour and stroke width as
+  the arrow (cyan, red orange for an emergency, pink when focused), and it
+  fades smoothly from full strength at the arrow to nothing at its oldest
+  point, so the line reads as time passing rather than as a second object.
+* **Place names sit back.** Town, city, peak, navaid and airport labels,
+  the state names, and the home airport's large name are drawn at about 40%
+  opacity, and come up to full while the pointer is over them. Aircraft
+  labels are never dimmed this way: they are the point of the screen.
+* **Click an aircraft to focus it.** Clicking its arrow, trail or label
+  turns it pink with a ring and dims every other aircraft to about 15%;
+  clicking it again restores them all. At most one aircraft is focused. The
+  callsign in the TRACKS table is a button that does the same thing, and
+  the table follows: the focused row is pink and outlined, the rest dim.
+  Focus belongs to the page, not the server; each tab has its own.
 
 **Text.** Two faces, both public domain or OFL, both vendored:
 
