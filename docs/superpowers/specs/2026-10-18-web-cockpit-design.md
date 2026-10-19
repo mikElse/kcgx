@@ -33,7 +33,7 @@ The same cockpit, rendered as a web page served from your own machine.
 │      INTERNATIONAL   (ring)          │ ├──────────────────┤
 │   coastline, rivers, borders         │ │ TOWER (BOTH)   ● │
 │   ⋯ dashed class B ⋯   ◇ navaids     │ │ ╱╲__╱╲╱╲_____╱╲_ │  frequencies
-│        ASA412 6172  ╲                │ │ [M] [S]       34 │
+│        ASA412 6172  ╲                │ │  M   S        34 │
 │                 ⟵────  trail         │ │ GROUND   ♪ 07  ◐ │
 │                                      │ │ CLEARANCE ♪ 00 ● │
 │               TRAFFIC                │ │                  │
@@ -79,29 +79,29 @@ Every row must hold before the terminal cockpit is retired.
 | Audible first, then by five minute chatter | Same `rank()` |
 | Reorder only after 15 s stable and 2 s untouched | Same `Resorter`. "Touched" now includes pointer hover over the stack |
 | Mute/unmute moves the row at once; selection follows the feed | Same |
-| `space` mute, `S` solo, `a` ambient, `↑` `↓` select | `space`, `S` and the arrows unchanged, plus `[M]` and `[S]` click targets. **Ambient is dropped from the page**: no `[A]`, no `a` key (decided 2026-10-19). The server and protocol keep it, so it can return without a protocol change |
+| `space` mute, `S` solo, `a` ambient, `↑` `↓` select | **M** and **S** buttons on each row; no keys (see Every action is a click). **Ambient is dropped from the page**: no button for it (decided 2026-10-19). The server and protocol keep it, so it can return without a protocol change |
 | Click anywhere on a row toggles mute | Same |
 | Seven stream limit, parking, refusing an eighth audible feed | Same `slots.plan()` and the same refusal message |
-| `c` config overlay, master volume live in 5% steps | Side sheet. Volume is a slider; other rows keep live/inert/fixed/off labels |
-| `f` feed picker, opens a feed that is not open | Same, as a searchable list |
+| `c` config overlay, master volume live in 5% steps | CONFIG button opens a side sheet. Volume is a slider; other rows keep live/inert/fixed/off labels |
+| `f` feed picker, opens a feed that is not open | FEEDS button opens the same, as a searchable list |
 | Message log, capped at 200 | Same cap, same text |
 | Feed list cache, retry budgets, one feed fallback, never another airport's audio | Unchanged: `load_feeds`, `picker_feeds`, `_no_feeds` move as they are |
 | `squelch --refresh-feeds` | Unchanged CLI |
 | Status pane: big ICAO, airport name, Zulu and local clocks | Airport name in large stroked capitals beside its ring on the radar; ICAO and both clocks on the status screen |
-| `Ctrl-b a` / click `▾ airport` opens airport search | `/` or click the airport name; same `search()` over the same CSV |
+| `Ctrl-b a` / click `▾ airport` opens airport search | CHANGE AIRPORT button, or click the airport name; same `search()` over the same CSV |
 | `kcgx go [query]`, exact ICAO skips the picker | Same CLI; it talks to the running server |
 | Remembered airport in `~/.local/state/kcgx/airport` | Same file, same `current_icao()` resolution order |
 | Airports LiveATC does not cover still get a radar | Same: empty stack with a message, radar works |
 | Radar: aircraft around the airport from adsb.lol, 15 s polling | Our own radar on a map. Same endpoint, same interval, same polite User-Agent |
 | adsb-tui traffic table, row selection | Traffic table under the map; selecting a row or a blip highlights both |
-| adsb-tui `t` theme cycling, six themes | `t` cycles the WOPR palette and the six names as variants of it |
+| adsb-tui `t` theme cycling, six themes | PALETTE button cycles the WOPR palette and the six names as variants of it |
 | squelch follows the radar's theme | **Dropped.** One app, one theme setting |
 | Header shows `ERR 429` / `ERR 403` on a refused refresh | Radar shows the last good picture with a "refresh refused" badge |
 | Dead pane stays visible; `Ctrl-b r` respawns it | A failed feed or radar shows its error in place, with a retry control |
 | Running `kcgx` again reattaches | Running `kcgx` again opens a tab on the running server |
 | Closing the terminal detaches, audio continues | Closing the tab, same |
 | `kcgx stop`, `Ctrl-b q` (asks first), picker `^q` stops every cockpit | `kcgx stop`; a Shut down control in the page (asks first) |
-| `q` in squelch quits | `q` opens the same Shut down confirmation |
+| `q` in squelch quits | SHUT DOWN button, which asks first |
 | Refuses below 100 columns | Responsive: below about 900 px the radar and stack stack vertically |
 
 ## Architecture
@@ -177,9 +177,10 @@ controller, every existing test passes without being edited, and
 app's tests retire with the terminal UI in phase E; the cockpit's stay. If
 the browser work stopped there, the codebase would still be better for it.
 
-Selection is the one thing that does not move. It is per viewer: two tabs
-can have different rows selected, and `space` acts on the selected feed by
-sending its ident.
+Selection is the one thing that does not move. It belongs to a viewer, not
+to the airport, so it stays in the terminal app, which needs it for its
+keys. The web page has no selection at all (see Every action is a click):
+each control sends its own row's ident.
 
 ### Changing airport
 
@@ -400,10 +401,11 @@ or `7700`, then lit red orange and labelled with the code. It is the whole field
 
 **The feed stack in this language.** An expanded row's meter becomes a
 scrolling vector trace, an oscilloscope line of the last few seconds' level,
-rather than a bar strip. Its controls are two small framed capitals, `[M]`
-then `[S]`, in that order. `[M]` replaces the terminal's `[ON]`/`[OFF]`
-toggle and lights when the feed is muted, as a mute button does on a mixing
-desk; `[S]` lights when the feed is soloed. Each carries an `aria-label`
+rather than a bar strip. Its controls are two small framed buttons labelled
+**M** and **S**, bare letters with no brackets, in that order (decided
+2026-10-19). M replaces the terminal's `[ON]`/`[OFF]` toggle and lights
+when the feed is muted, as a mute button does on a mixing desk; S lights
+when the feed is soloed. Each carries an `aria-label`
 naming its feed ("Mute Tower (Both)"), because a bare letter says nothing
 to a screen reader. There is no ambient control (see Feature parity). The
 chatter figure is a two digit stroked number, the way the
@@ -435,7 +437,8 @@ black for every palette colour at the sizes it is used.
 The six adsb-tui names (`default`, `color`, `amber`, `ocean`, `matrix`,
 `mono`) existed to match a radar that is going away. In their place the
 vector style has one default palette, **WOPR** (the table above), plus the
-six kept as palette variants of the same style, so `t` still cycles: `amber`
+six kept as palette variants of the same style, which the header's PALETTE
+button cycles through: `amber`
 and `matrix` become single phosphor monochromes, which suit the look well,
 and `mono` becomes white on black. Palettes are CSS custom properties read
 by both the DOM and the canvas renderer.
@@ -465,8 +468,8 @@ row: past what fits, it scrolls inside its own screen, with the selected
 feed kept in view. Below 1100 px wide the wall stacks into one column and
 each screen takes its natural height.
 
-The radar pans and zooms with the pointer and wheel, snapping back to the
-airport on `home`. Range rings label themselves in nautical miles.
+The radar pans and zooms with the pointer and wheel; a RECENTRE button in
+its title strip snaps back to the airport. Range rings label themselves in nautical miles.
 
 ### Display effects
 
@@ -546,25 +549,22 @@ global.
 The home airport's runways are drawn as white lines inside its ring at
 close zoom, which is the stills' base outlines put to honest use.
 
-### Keyboard
+### Every action is a click
 
-| Key | Action |
-|---|---|
-| `↑` `↓` | select |
-| `space` | mute or unmute selected |
-| `S` | solo selected |
-| `f` | feed picker |
-| `c` | config sheet |
-| `/` | airport search |
-| `t` | next theme |
-| `q` | shut down (asks first) |
-| `esc` | close whatever is open |
+Decided 2026-10-19: **the page never needs a keyboard, and never asks for
+one.** Every action has a visible control: M and S on each feed row, a click
+anywhere else on a compact row to unmute it, and in the header FEEDS,
+CONFIG, PALETTE and SHUT DOWN, plus CHANGE AIRPORT on the status screen and
+RECENTRE on the radar. No label shows a key: no `[F]`-style prefixes, no
+footer of shortcuts.
 
-There is no `a`: ambient is not on the page (see Feature parity).
-
-Keys are ignored while focus is in a text field, which is the browser's
-version of the picker's "typing always filters" rule. `^q` is not needed:
-the airport search no longer has to compete with a bare `q`.
+**There are no keyboard shortcuts**, which also removes the feed selection
+the terminal needed for them: every control acts on its own row, so there
+is nothing to select first. Ordinary browser keyboard use still works,
+because the controls are real buttons and inputs: Tab moves between them,
+Enter and Space press them, Escape closes the open sheet or picker, and
+typing goes into the airport and feed searches. That is accessibility, not
+shortcuts, and it costs the page nothing.
 
 ## The launcher
 
