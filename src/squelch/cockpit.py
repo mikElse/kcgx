@@ -247,3 +247,37 @@ class Cockpit:
     def note_input(self) -> None:
         """The viewer touched the stack: a key, a click, a hover."""
         self.resorter.note_input()
+
+    # -- opening a feed ------------------------------------------------
+
+    def open_feed(self, feed: Feed):
+        """Add a feed to the running stack, metering and audible.
+
+        Audible rather than muted: this is only reached by picking a feed
+        that is not open, which is an explicit request to hear it. Returns
+        the new session, or None if there is nothing to add.
+        """
+        if self.feed_opener is None:
+            self.warn(f"{feed.ident} is not open")
+            return None
+        try:
+            session = self.feed_opener(feed)
+        except Exception as exc:  # a dead feed must not take the cockpit with it
+            self.warn(f"could not open {feed.ident}: {exc}")
+            return None
+        if not session.muted and self.audible_count() >= self.max_streams:
+            # Open it muted rather than not at all: the row is still what
+            # was asked for, and unmuting it later is one key.
+            session.muted = True
+            self.warn(
+                f"{self.max_streams} feeds already audible — LiveATC's "
+                f"limit. Opened {session.name} muted."
+            )
+        session.soloed = False
+        self._sessions.append(session)
+        # Announced before it is connected, so its first state change has
+        # a row to land on.
+        self._emit(ADDED, session)
+        self.reconcile_streams()
+        self.warn(f"opened {feed.ident}")
+        return session

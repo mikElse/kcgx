@@ -386,3 +386,62 @@ def test_input_holds_a_settled_resort_until_the_hand_comes_off():
     clock.now += QUIET_SECONDS + 0.1
     cockpit.tick_resort()
     assert ident(cockpit, 0) == original[1].feed.ident
+
+
+# -- opening a feed ----------------------------------------------------------
+
+
+ATIS = Feed(ident="kpdx3_atis", label="KPDX ATIS")
+
+
+def late_session(muted=False):
+    session = FakeSession("kpdx3_atis", "KPDX ATIS", muted=muted)
+    session.connected = False
+    session.state = "starting"
+    return session
+
+
+def test_without_an_opener_it_says_so_rather_than_pretending():
+    cockpit, rec, _ = make(2)
+    assert cockpit.open_feed(ATIS) is None
+    assert rec.messages == ["kpdx3_atis is not open"]
+    assert rec.of(ADDED) == []
+
+
+def test_a_feed_that_will_not_open_warns_instead_of_raising():
+    def boom(feed):
+        raise RuntimeError("boom")
+
+    cockpit, rec, _ = make(2, opener=boom)
+    assert cockpit.open_feed(ATIS) is None
+    assert rec.messages == ["could not open kpdx3_atis: boom"]
+
+
+def test_an_opened_feed_is_added_before_it_is_started():
+    """The owner needs somewhere to put the feed's first state change, and
+    a session's opening act can be a warning."""
+    late = late_session()
+    cockpit, rec, _ = make(2, opener=lambda feed: late)
+    assert cockpit.open_feed(ATIS) is late
+    assert cockpit.sessions[-1] is late
+    assert late.connected
+    added = rec.events.index((ADDED, late))
+    started = rec.events.index((FEED, late))
+    assert added < started
+    assert "opened kpdx3_atis" in rec.messages
+
+
+def test_a_feed_opened_at_the_audible_limit_opens_muted():
+    late = late_session()
+    cockpit, rec, _ = make(2, limit=2, audible=(0, 1), opener=lambda f: late)
+    cockpit.open_feed(ATIS)
+    assert late.muted is True
+    assert cockpit.audible_count() == 2
+    assert any("Opened ATIS muted" in m for m in rec.messages), rec.messages
+
+
+def test_an_opened_feed_is_findable_by_ident():
+    late = late_session()
+    cockpit, _, _ = make(2, opener=lambda feed: late)
+    cockpit.open_feed(ATIS)
+    assert cockpit.session("kpdx3_atis") is late
