@@ -395,6 +395,16 @@ display rate. At 40 nm that is a few thousand static segments and a few
 hundred dynamic ones, well inside Canvas 2D. WebGL is the escape hatch if
 it is ever not, and nothing in the data model would need to change.
 
+**The radar fills its screen** (decided 2026-10-19). The top row of the
+wall (radar, status, frequencies) has a set height: the window's, less the
+header, the lamp bar and the tracks row below. The radar canvas is sized to
+its screen, not to a fixed aspect ratio, and the projection scales so the
+outer range ring fits the shorter side; the longer side shows more
+geography rather than black bars. The frequency stack never stretches the
+row: past what fits, it scrolls inside its own screen, with the selected
+feed kept in view. Below 1100 px wide the wall stacks into one column and
+each screen takes its natural height.
+
 The radar pans and zooms with the pointer and wheel, snapping back to the
 airport on `home`. Range rings label themselves in nautical miles.
 
