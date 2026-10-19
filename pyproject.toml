@@ -35,6 +35,12 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+# The page's own tests drive a real browser: `uv sync --group browser` and
+# `uv run playwright install chromium`. Without them those tests skip.
+browser = [
+    "playwright==1.56.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["browser: drives the cockpit page in a real browser (skips without Playwright)"]
