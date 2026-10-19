@@ -237,3 +237,116 @@ def test_an_unknown_ident_changes_nothing_and_says_nothing():
     cockpit, rec, _ = make(3)
     assert cockpit.toggle_mute("nope") is False
     assert rec.events == []
+
+
+# -- the mix ---------------------------------------------------------------
+
+
+def mutes(cockpit):
+    return [s.muted for s in cockpit.sessions]
+
+
+def by(cockpit, idents):
+    return [cockpit.session(i) for i in idents]
+
+
+def test_unmuting_lifts_a_feed_to_the_top_at_once():
+    cockpit, rec, _ = make(3, audible=())
+    target = ident(cockpit, 2)
+    cockpit.toggle_mute(target)
+    assert rec.of(ORDER), "an unmute must reorder without waiting to settle"
+    assert rec.of(ORDER)[-1][0].feed.ident == target
+    assert ident(cockpit, 0) == target
+
+
+def test_muting_drops_it_back_in_on_activity():
+    cockpit, _, _ = make(3, audible=(0,))
+    s0, s1, s2 = cockpit.sessions
+    s0.activity, s1.activity, s2.activity = 0.5, 0.9, 0.1
+    cockpit.toggle_mute(s0.feed.ident)
+    assert cockpit.sessions == [s1, s0, s2]
+
+
+def test_the_feed_event_comes_before_the_order_event():
+    """The owner redraws the row, then moves it. The other way round, a
+    row would be moved to its new place still drawn in its old shape."""
+    cockpit, rec, _ = make(3, audible=())
+    cockpit.toggle_mute(ident(cockpit, 1))
+    kinds = [k for k, _ in rec.events]
+    assert kinds.index(FEED) < kinds.index(ORDER)
+
+
+def test_an_immediate_reorder_is_not_proposed_again():
+    cockpit, rec, _ = make(3, audible=(0,))
+    cockpit.sessions[1].activity = 0.9
+    cockpit.toggle_mute(ident(cockpit, 0))
+    after = cockpit.sessions
+    for _ in range(SETTLE_ROUNDS + 1):
+        cockpit.tick_resort()
+    assert len(rec.of(ORDER)) == 1, "the applied order was proposed again"
+    assert cockpit.sessions == after
+
+
+def test_solo_mutes_every_other_feed():
+    cockpit, _, _ = make(3, audible=(0,))
+    target = ident(cockpit, 1)
+    assert cockpit.toggle_solo(target) is True
+    assert [s.muted for s in cockpit.sessions if s.feed.ident != target] == [True, True]
+    assert cockpit.session(target).muted is False
+
+
+def test_solo_restores_the_prior_mix_including_other_unmuted_feeds():
+    cockpit, _, _ = make(3, audible=(0, 1))
+    before = {s.feed.ident: s.muted for s in cockpit.sessions}
+    target = "kpdx_app_124350"
+    cockpit.toggle_solo(target)
+    cockpit.toggle_solo(target)
+    assert {s.feed.ident: s.muted for s in cockpit.sessions} == before
+
+
+def test_moving_the_solo_then_disengaging_returns_to_the_pre_solo_mix():
+    cockpit, _, _ = make(4, audible=(0,))
+    before = {s.feed.ident: s.muted for s in cockpit.sessions}
+    cockpit.toggle_solo("kpdx3_gnd")
+    cockpit.toggle_solo("kpdx3_atis")
+    cockpit.toggle_solo("kpdx3_atis")
+    assert {s.feed.ident: s.muted for s in cockpit.sessions} == before
+
+
+def test_muting_by_hand_during_solo_cancels_it():
+    cockpit, _, _ = make(3, audible=(0,))
+    cockpit.toggle_solo("kpdx3_gnd")
+    assert cockpit.solo.active is True
+    cockpit.toggle_mute("kpdx3_twr")
+    assert cockpit.solo.active is False, "a manual mute is a new intent"
+    assert not any(s.soloed for s in cockpit.sessions)
+
+
+def test_only_the_soloed_feed_is_marked():
+    cockpit, _, _ = make(3, audible=(0,))
+    cockpit.toggle_solo("kpdx3_gnd")
+    assert [s.feed.ident for s in cockpit.sessions if s.soloed] == ["kpdx3_gnd"]
+
+
+def test_solo_puts_the_soloed_feed_on_top():
+    cockpit, _, _ = make(3, audible=(0,))
+    cockpit.toggle_solo("kpdx_app_124350")
+    assert ident(cockpit, 0) == "kpdx_app_124350"
+
+
+def test_soloing_a_parked_feed_connects_it():
+    cockpit, _, _ = make(5, limit=3, connected=False)
+    cockpit.start()
+    target = next(s for s in cockpit.sessions if not s.connected)
+    cockpit.toggle_solo(target.feed.ident)
+    assert target.connected
+    assert sum(s.connected for s in cockpit.sessions) == 3
+
+
+def test_ambient_toggles_only_its_feed_and_leaves_mute_alone():
+    cockpit, rec, _ = make(3, audible=(0,))
+    before = mutes(cockpit)
+    assert cockpit.toggle_ambient("kpdx3_gnd") is True
+    assert [s.ambient for s in cockpit.sessions] == [False, True, False]
+    assert mutes(cockpit) == before
+    assert rec.of(FEED) == [cockpit.session("kpdx3_gnd")]

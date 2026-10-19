@@ -169,8 +169,71 @@ class Cockpit:
         self._reorder_now()
         return True
 
-    def _mark_solo(self) -> None:          # Task 3
-        pass
 
-    def _reorder_now(self) -> None:        # Task 3
+    def toggle_solo(self, ident: str) -> bool:
+        session = self.session(ident)
+        if session is None:
+            return False
+        if self.solo.is_soloed(ident):
+            restored = self.solo.disengage()
+            if restored is not None:
+                self._apply_mix(restored)
+        else:
+            states = {s.feed.ident: s.muted for s in self._sessions}
+            self._apply_mix(self.solo.engage(ident, states))
+        # Solo can move audibility to a parked feed, and returning from it
+        # can move it back to several. The restored mix fit the limit when
+        # it was recorded, because every unmute along the way was checked.
+        self.reconcile_streams()
+        self._mark_solo()
+        for s in self._sessions:
+            self._emit(FEED, s)
+        self._reorder_now()
+        return True
+
+    def toggle_ambient(self, ident: str) -> bool:
+        session = self.session(ident)
+        if session is None:
+            return False
+        session.toggle_ambient()
+        self._emit(FEED, session)
+        return True
+
+    def _apply_mix(self, states: dict) -> None:
+        for s in self._sessions:
+            if s.feed.ident in states:
+                s.muted = states[s.feed.ident]
+
+    def _mark_solo(self) -> None:
+        for s in self._sessions:
+            s.soloed = self.solo.is_soloed(s.feed.ident)
+
+    # -- ordering ------------------------------------------------------
+
+    def ranked(self) -> list:
+        """Audible feeds on top, each group ordered by activity."""
+        return rank(
+            self._sessions,
+            lambda s: s.activity,
+            audible_of=lambda s: not s.muted,
+        )
+
+    def _apply_order(self, order: Sequence) -> None:
+        self._sessions = list(order)
+        self._emit(ORDER, self.sessions)
+
+    def _reorder_now(self) -> None:
+        """Apply the ranking at once, skipping the settle delay.
+
+        The debounce exists so activity drifting underneath you cannot move a
+        row between deciding to click it and clicking it. A mute change is
+        not that: the move is the direct result of the key you just pressed.
+        The Resorter is told, so it does not spend three rounds proposing
+        the order already applied.
+        """
+        order = self.ranked()
+        self._apply_order(order)
+        self.resorter.adopt(order)
+
+    def tick_resort(self) -> None:         # Task 4
         pass
