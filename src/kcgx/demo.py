@@ -177,3 +177,67 @@ class DemoMixer:
 
     def clear_channels(self) -> None:
         pass
+
+
+# -- demo traffic ------------------------------------------------------------
+#
+# A dozen aircraft on fixed paths around whatever airport is open, shaped
+# like adsb.lol's reply so the real poller handles them. Each flies a
+# straight leg (start bearing and distance from the field, heading, length)
+# at constant speed, climbing or descending linearly, and starts again when
+# the leg ends. N52RT squawks 7600 for the middle minute of every five, so
+# the emergency lamp and the log can be seen working.
+
+NM_PER_DEG_LAT = 60.0
+
+# callsign, type, start bearing, start nm, heading, leg nm, kt, alt from, alt to, squawk
+LEGS = [
+    ("ASA412", "B39M", 90, 38, 270, 36, 230, 9000, 1200, "4512"),
+    ("DAL1388", "A321", 30, 6, 30, 40, 310, 3000, 17000, "2251"),
+    ("UAL1650", "B738", 350, 10, 350, 34, 330, 8000, 26000, "6011"),
+    ("SWA2183", "B737", 300, 36, 125, 32, 250, 12000, 2500, "3305"),
+    ("QXE2041", "DH8D", 260, 30, 80, 28, 200, 6000, 1500, "4471"),
+    ("N7243K", "C172", 200, 8, 160, 18, 105, 2500, 2500, "1200"),
+    ("", "PA28", 120, 18, 270, 20, 95, 1800, 1800, "1200"),
+    ("N52RT", "BE36", 320, 34, 120, 40, 150, 7500, 6500, "1200"),
+    ("FDX1207", "B763", 180, 40, 0, 36, 260, 11000, 2000, "5213"),
+    ("AAL2210", "A320", 60, 40, 245, 80, 450, 33000, 33000, "3466"),
+    ("N911PD", "AS50", 150, 12, 330, 16, 110, 1500, 1500, "1200"),
+]
+
+
+def _offset(lat: float, lon: float, bearing: float, nm: float) -> tuple[float, float]:
+    b = math.radians(bearing)
+    dlat = nm * math.cos(b) / NM_PER_DEG_LAT
+    dlon = nm * math.sin(b) / (NM_PER_DEG_LAT * max(0.01, math.cos(math.radians(lat))))
+    return lat + dlat, lon + dlon
+
+
+def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
+    """Stands in for kcgx.radar.fetch_adsb_lol."""
+    now = clock()
+    aircraft = []
+    for index, (callsign, kind, bearing, start, heading, leg, kt, alt0, alt1, squawk) in enumerate(LEGS):
+        period = leg / kt * 3600 + 20
+        phase = (now + index * 97) % period
+        flown = min(leg, phase / 3600 * kt)
+        if flown >= leg:
+            continue  # between legs: off the screen for a moment, as aircraft are
+        x_lat, x_lon = _offset(lat, lon, bearing, start)
+        a_lat, a_lon = _offset(x_lat, x_lon, heading, flown)
+        alt = round((alt0 + (alt1 - alt0) * flown / leg) / 100) * 100
+        if callsign == "N52RT" and 120 <= now % 300 < 180:
+            squawk = "7600"
+        aircraft.append({
+            "hex": f"de{index:04x}",
+            "flight": callsign.ljust(8) if callsign else None,
+            "t": kind,
+            "alt_baro": alt,
+            "gs": kt,
+            "track": heading,
+            "lat": round(a_lat, 5),
+            "lon": round(a_lon, 5),
+            "squawk": squawk,
+            "seen_pos": 0.4,
+        })
+    return {"ac": aircraft, "msg": "No error", "now": int(now * 1000)}

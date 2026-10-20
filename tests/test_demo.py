@@ -107,3 +107,42 @@ def test_the_demo_mixer_needs_no_device():
     mixer.clear_channels()
     mixer.stop()
     assert mixer.volume == 0.5 and not mixer.failed
+
+
+# -- demo traffic ------------------------------------------------------------
+
+
+def test_demo_traffic_is_shaped_like_adsb_lol_and_stays_near_the_field():
+    from kcgx.radar import Radar, distance_bearing
+
+    reply = demo.traffic(45.5887, -122.5975, 40, clock=lambda: 1_000_000.0)
+    assert reply["ac"] and len({ac["hex"] for ac in reply["ac"]}) == len(reply["ac"])
+    for ac in reply["ac"]:
+        distance, _ = distance_bearing(45.5887, -122.5975, ac["lat"], ac["lon"])
+        assert distance < 80
+    radar = Radar(on_frame=lambda f: None, on_note=lambda n: None, clock=lambda: 1_000_000.0)
+    radar.retarget(45.5887, -122.5975)
+    radar.merge(reply)
+    labels = {ac["label"] for ac in radar.frame()["ac"]}
+    assert "UNK1" in labels  # the one with no callsign
+
+
+def test_demo_traffic_moves():
+    a = demo.traffic(45.5887, -122.5975, 40, clock=lambda: 1_000_000.0)
+    b = demo.traffic(45.5887, -122.5975, 40, clock=lambda: 1_000_015.0)
+    moved = {x["hex"] for x in a["ac"]} & {x["hex"] for x in b["ac"]}
+    pos = lambda reply: {x["hex"]: (x["lat"], x["lon"]) for x in reply["ac"]}
+    assert any(pos(a)[h] != pos(b)[h] for h in moved)
+
+
+def test_one_demo_aircraft_squawks_7600_for_one_minute_in_five():
+    def squawk(t):
+        reply = demo.traffic(45.5887, -122.5975, 40, clock=lambda: t)
+        return {x["flight"].strip(): x["squawk"] for x in reply["ac"] if x["flight"]}.get("N52RT")
+
+    base = 1_000_200.0 - (1_000_200.0 % 300)
+    assert squawk(base + 60) in ("1200", None)
+    assert squawk(base + 150) in ("7600", None)
+    assert squawk(base + 200) in ("1200", None)
+    window = [squawk(base + 120 + s) for s in range(0, 60, 5)]
+    assert "7600" in window
