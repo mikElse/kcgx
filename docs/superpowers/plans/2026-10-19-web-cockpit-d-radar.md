@@ -3356,6 +3356,16 @@ adsb-tui polls adsb.lol from the same address.
 
 ---
 
+## Execution record
+
+Built 2026-10-19 on `feat/web-cockpit`, one commit per task (73e032f to
+6e332cd), from the dry-run files; before any change, every file the plan
+modifies matched the dry run's base. On the branch, in the Mac's sandbox
+without the browser tests: 984 passed, which is 1008 less the 24 in
+`test_page.py`. Those passed against the same files in the cloud sandbox;
+their first run on the branch is on the Mac. Task 10, by hand on the Mac,
+is pending.
+
 ## Self-Review Notes
 
 - **Dry run, 2026-10-19.** Every file and diff above was built in a scratch
