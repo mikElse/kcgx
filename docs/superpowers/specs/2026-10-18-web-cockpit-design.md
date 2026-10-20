@@ -224,10 +224,20 @@ browser, for three reasons:
   apply per address; the server is where that discipline can be kept.
 
 `KCGX_ADSB_UA` keeps its meaning. `refresh_secs` and the range move into
-`squelch.toml` as `radar_refresh_secs` (default `15`) and `radar_range_nm`
-(default `40`). A refused poll keeps the last good aircraft list, marks it
-with its age, and backs off: 15 s, 30 s, 60 s, capped at 120 s, reset on
-the first success.
+`squelch.toml` as `radar_refresh_secs` (default `15`), `radar_range_nm`
+(default `40`) and `radar_stale_secs` (default `60`), all whole numbers. A
+config file can lengthen the interval but never shorten it below adsb.lol's
+15 s. A refused poll keeps the last good aircraft list, marks it with its
+age, and backs off: 15 s, 30 s, 60 s, capped at 120 s, reset on the first
+success. The page names the refusal: `ERR 429`, `ERR 403`, `NO CONNECTION`.
+
+The picture is the server's (`kcgx.radar`, built in phase D): it merges
+each poll into the aircraft it already has, drops any not heard from for
+`radar_stale_secs`, numbers aircraft with no callsign `UNK1`, `UNK2` in
+order of first sighting, and announces emergency squawks, so every tab
+agrees on all of it. An airport change forgets the picture and polls the
+new field at once; a reply for the old field that arrives late is thrown
+away.
 
 In the browser the radar is **our own vector renderer, not a map
 library.** The look calls for line art and nothing else: no imagery, no
@@ -238,14 +248,16 @@ the map, and full control over every stroke.
 The projection is azimuthal equidistant centred on the airport, so range
 rings are true circles and distance reads straight off the screen. Positions
 are dead reckoned between polls from ground speed and track, as adsb-tui
-does, and an aircraft not seen for `radar_stale_secs` (default `60`) fades
-and then drops. The geography comes from vendored public domain data, built
+does, and an aircraft starts to fade 30 s after its last position and
+drops at `radar_stale_secs`. The geography comes from vendored public domain data, built
 the way `airports.csv` already is; see [Map data](#map-data).
 
 The traffic table under the map shows callsign, type, altitude, ground
-speed, track, distance and squawk, sortable by column, and collapses to a
-single summary line. Selecting a row and selecting a blip are the same
-action.
+speed, track, distance and squawk, sortable by column (nearest first by
+default), and scrolls within its screen. Selecting a row and selecting a
+blip are the same action. The "collapses to a single summary line" of
+earlier drafts was not built: the wall's fixed rows already give the table
+its own screen.
 
 ### Transport
 
@@ -256,6 +268,7 @@ action.
 | `GET /` | the cockpit page, served `no-cache` so an edit shows on a plain reload |
 | `GET /static/…` | the page's stylesheet, ES modules and fonts, also `no-cache` (phase C) |
 | `GET /debug` | phase B's bare page, kept because it shows the raw protocol (phase C) |
+| `GET /api/geo?icao=` | the radar's map for that airport: every line, place and runway within 200 nm, `404` for an unknown airport (phase D) |
 | `GET /api/health` | `200` with version, protocol, airport and `loading`; used by the launcher |
 | `GET /api/airports?q=` | `search()` results |
 | `POST /api/airport` | `{"icao": "KSEA"}`; answers `202` at once, `404` for an unknown airport, `400` for anything malformed. The change itself reaches pages over the socket |
@@ -277,7 +290,7 @@ object with a `t`. Server to page:
 | `message` | `z` (Zulu, `1955Z`), `text` | a line added to the log |
 | `prefs` | `palette`, `glow`, `display` | any page changed one; every tab follows (phase C) |
 | `error` | `text` | this page sent something the protocol does not have |
-| `aircraft` | the radar's picture | each radar poll, success or refusal (phase D) |
+| `aircraft` | `ok`, `error`, `age` (seconds since the last good poll), `refresh`, `range`, and `ac`: per aircraft `hex`, `label`, `type`, `lat`, `lon`, `alt` (feet or `GND`), `gs`, `trk`, `sq`, `age`, `dist`, `brg` | each poll, success or refusal, and on an airport change (empty); the snapshot carries the latest as `radar` (phase D) |
 
 Page to server: `mute`, `solo`, `ambient` and `open_feed`, each with an
 `ident`; `volume` with a `value`, clamped to 0..1; `input`, the "you
@@ -336,8 +349,7 @@ uvicorn runs with `ws="websockets-sansio"`: 0.54 deprecates its plain
 ### Front end
 
 No build step and no Node. The page is plain HTML, CSS and ES modules served
-from `src/kcgx/web/`. Nothing is vendored but the Hershey glyph data (phase
-D) and two fonts, Share Tech Mono for display text and B612 Mono for small
+from `src/kcgx/web/`. Nothing is vendored but two fonts, Share Tech Mono for display text and B612 Mono for small
 dense text, both SIL OFL, as Latin woff2 files taken from Fontsource 5.3.0
 with their licences beside them in `web/static/fonts/` (phase C). This keeps the install's promise that `uv` is the only
 toolchain, and it keeps the front end readable in the same repo by the same
@@ -401,15 +413,16 @@ Decided 2026-10-19 from the mockup review:
   the table follows: the focused row is pink and outlined, the rest dim.
   Focus belongs to the page, not the server; each tab has its own.
 
-**Text.** Two faces, both public domain or OFL, both vendored:
+**Text.** Two faces, both OFL, both vendored:
 
-* **Hershey Simplex**, drawn as strokes through the same glow pipeline as
-  the map, for anything large: the airport name, panel titles, clocks,
-  chatter figures, map labels. This is what makes the text belong to the
-  lines rather than sit on top of them.
-* A plain monospaced face for small, dense text (the traffic table, the
-  config sheet, the log), where stroked glyphs blur. Tabular figures
-  throughout, so nothing jitters as it updates.
+* **Share Tech Mono** for anything large or on a screen: the airport name,
+  panel titles, clocks, chatter figures, and every label on the radar,
+  drawn on the canvas with the same glow as the lines. Earlier drafts
+  called for Hershey Simplex stroked glyphs here; the approved mockup used
+  Share Tech Mono throughout and read right, so phase D kept it and
+  vendors no glyph data.
+* **B612 Mono** for small, dense text (the traffic table, the config sheet,
+  the log). Tabular figures throughout, so nothing jitters as it updates.
 
 All caps everywhere, as on the wall.
 
@@ -503,8 +516,17 @@ window size; each screen clips its own content (`overflow: hidden` and
 over a neighbour. Decided 2026-10-19 after the panels overlapped in the
 mockup.
 
-The radar pans and zooms with the pointer and wheel; a RECENTRE button in
-its title strip snaps back to the airport. Range rings label themselves in nautical miles.
+The radar pans by dragging and zooms with the wheel about the pointer,
+from a quarter (160 nm across the shorter side) to six times; a RECENTRE
+button in its title strip snaps back to the airport. While the pointer is
+over the radar the title strip reads its bearing and distance from the
+field (`275° 12.4 NM`). Range rings label themselves in nautical miles.
+
+**Labels never overlap.** Places are labelled in priority order (the home
+airport, then peaks, large airports, VORs, medium airports and cities by
+Natural Earth's rank, then state names) and a label that would overlap one
+already placed is left off, its symbol kept. Navaids on screen are the VOR
+family; small airports appear from 1.5 times zoom.
 
 ### Display effects
 
@@ -541,14 +563,18 @@ The values below are the mockup's, and are the starting point:
 * **Colour fringe** (`crt` only). The radar gets a one pixel red and cyan
   offset, at 35%.
 
-**Where each effect is done.** The radar is a canvas, so it gets one small
-WebGL pass after it is drawn: bloom, persistence (each frame fades the
-last instead of clearing it), beam flicker and the colour fringe. That is
-the right place for them, because persistence and bloom need the pixels.
-Everything else on the page is ordinary HTML, which a canvas shader cannot
-reach, so flicker, jitter, vignette, scanlines and corners there are CSS:
-an overlay element per screen, with `pointer-events: none` so it never
-takes a click.
+**Where each effect is done.** Phase D does them without WebGL. Glow is
+Canvas 2D's own shadow blur with additive blending, the same on the radar
+as on the traces. Persistence is a separate layer for the moving things
+that fades by 45% a frame instead of being cleared, in `vector` and `crt`
+only. Line draw on traces the coastlines, lakes, rivers and borders over
+two seconds when an airport's map arrives. Flicker, jitter, vignette,
+scanlines, corners and the colour fringe are CSS, as they already were for
+every other screen: an overlay element per screen, with `pointer-events:
+none` so it never takes a click. Reduced motion turns off draw on and
+persistence. A WebGL pass stays the escape hatch if bloom is ever wanted
+beyond what shadow blur gives; nothing in the renderer would need to
+change but its last step.
 
 **Our own code, not a library.** [RetroZone](https://github.com/TheMarco/retrozone)
 (MIT) is the closest existing match: a WebGL pass over any canvas with a
@@ -556,8 +582,8 @@ vector mode (bloom, persistence, beam flicker) and a CRT mode (scanlines,
 interlace flicker). It is a good reference for the shaders, credited where
 we borrow from it. It is not a dependency, because it ships only through
 npm (and this front end has no build step), its flicker and noise are not
-adjustable, and at the time of writing it is two commits old. The pass we
-need is about two hundred lines.
+adjustable, and at the time of writing it is two commits old. Phase D
+found it was not needed.
 
 **Settings, not states.** `display` and `glow` are remembered with the
 palette, in the same `prefs.json`, so every tab and every launch agrees.
@@ -569,17 +595,31 @@ Built offline by `tools/build_geodata.py`, the same pattern as
 
 | Layer | Source | Licence |
 |---|---|---|
-| Coastlines, lakes, rivers | Natural Earth 10 m | public domain |
-| Country and state borders | Natural Earth 10 m | public domain |
-| Navaids | OurAirports `navaids.csv` | public domain |
+| Coastlines, lakes, rivers | Natural Earth 10 m, release v5.1.2 | public domain |
+| Country and state borders, state names | Natural Earth 10 m | public domain |
+| Cities, peaks | Natural Earth populated places and elevation points | public domain |
+| Navaids, other airports | OurAirports `navaids.csv`, `airports.csv` | public domain |
 | Runways of every airport in the dataset | OurAirports `runways.csv` | public domain |
-| Class B, C and D airspace (US) | FAA aeronautical data | public domain |
+| Class B, C and D airspace (US) | FAA NASR 28 day subscription, `class_airspace_shape_files.zip` | public domain |
+| Victor airways (US) | FAA NASR CSV tables (AWY, FIX, NAV) | public domain |
 
-Simplified to the resolution a 40 nm screen can show, the whole set should
-land in single digit megabytes. The server clips it to the current airport
-on each change and sends only what is on screen, so the browser never loads
-the world. Outside the US there is no airspace layer; everything else is
-global.
+Built in phase D as one file, `src/kcgx/data/geo.json.gz` (4.7 MB). Natural
+Earth and OurAirports are fetched from their GitHub repositories, which
+every network in this project could reach; the two FAA archives are read
+from a folder they were downloaded to (`.geo-sources/`, gitignored), since
+the FAA's own servers were not reachable from everywhere. Lines are
+simplified to about 165 m, stored as integers in 1e-4 degree, and cut into
+pieces of at most 64 points, each with its bounding box, so the server
+clips the world to an airport with box tests alone (under 30 ms) and sends
+only the 200 nm around it (5 to 60 KB). The build is deterministic: the
+same sources give the same bytes. Outside the US there is no airspace or
+airway layer; everything else is global.
+
+Natural Earth's towns are sparser than the mockup's invented ones (Portland,
+Vancouver, Salem and Longview are there; Gresham is not). That is the price
+of public domain data, and accepted. Its coastlines carry no country, so
+every coastline is drawn cyan; country borders are green and dashed, the
+"elsewhere" colour, and state lines dim.
 
 The home airport's runways are drawn as white lines inside its ring at
 close zoom, which is the stills' base outlines put to honest use.
@@ -673,12 +713,12 @@ src/kcgx/web/index.html       new in C: the cockpit page
 src/kcgx/web/static/          new in C: cockpit.css, js/ modules, fonts/
 src/kcgx/prefs.py             new in C: palette, glow, display, beside the airport
 src/kcgx/demo.py              new in C: synthetic feeds for kcgx-web --demo
-src/kcgx/radar.py             new: adsb.lol poller and backoff
+src/kcgx/radar.py             new in D: adsb.lol poller, backoff, the picture, emergencies
+src/kcgx/geodata.py           new in D: loads the map once, clips it per airport
+src/kcgx/data/geo.json.gz     new in D: the committed map
+tools/build_geodata.py        new in D: builds it from the sources above
+src/kcgx/web/static/js/       radar.js, tracks.js, focus.js new in D
 src/kcgx/launcher.py          new: start/stop/go, server.json, health check
-src/kcgx/web/vector/          new: projection, glow pipeline, Hershey text
-src/kcgx/geodata.py           new: loads and clips map layers per airport
-src/kcgx/data/geo/            new: committed map layers
-tools/build_geodata.py        new: builds them from the sources above
 ```
 
 Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
@@ -701,20 +741,27 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
   `ws://127.0.0.1:8473/ws` URL. Built in phase B, with `test_protocol.py`,
   `test_hub.py`, `test_station.py` and a guard that no web module imports
   Textual.
-* **Radar.** The poller against a fake fetch: success, `429`, `403`, backoff
-  and reset, stale aging, coordinates moving on an airport change.
-* **Geodata.** The build is deterministic; clipping keeps exactly what
-  falls inside the range; the projection round trips; an airport near the
+* **Radar.** Built in phase D as `tests/test_radar.py`: the poller against
+  a fake fetch and clock: success, `429`, `403`, no connection, backoff and
+  its cap and reset, the 15 s floor, stale aging, UNK numbering, a late
+  reply for the previous airport thrown away, and the User-Agent sent (or
+  not, when `KCGX_ADSB_UA` is empty).
+* **Geodata.** Built in phase D as `tests/test_geodata.py` and
+  `tests/test_build_geodata.py`: the build is deterministic down to the
+  gzip header; simplification and pieces round trip; the FAA shapefile
+  (Polygon and PolygonZ) and airway tables are read from synthetic copies;
+  clipping keeps exactly what meets the box; an airport near the
   antimeridian or a pole does not tear the map.
-* **Look.** Playwright screenshots of the radar and the stack against fixed
-  fake data, one per palette, compared to committed references. A visual
-  change has to be accepted on purpose. Screenshots are taken with reduced
-  motion forced on, so flicker and jitter cannot make them flaky; one more
-  per `display` mode checks the static parts of each (scanlines, corners,
-  vignette).
+* **Look.** Screenshot comparisons against committed references are still
+  not built. Phase D's browser tests check behaviour instead (below), and
+  the look was checked by eye against the mockup at three sizes and two
+  palettes. Worth adding once the look stops moving.
 * **Emergency squawks.** A fake poll sequence where a squawk appears,
-  persists and clears produces exactly two log lines and lights, then
-  darkens, the emergency lamp.
+  persists and clears produces exactly two log lines; a new code on the
+  same aircraft is a new line; an aircraft that drops out with a squawk is
+  cleared. In the browser an emergency frame lights the EMERG lamp with its
+  code and turns the row red orange. The demo's N52RT squawks 7600 for one
+  minute in five so all of it can be seen.
 * **Launcher.** Start, second start reuses, stale `server.json`, `stop` when
   not running is not an error, port collision.
 * **Browser.** Built in phase C as `tests/test_page.py`: Playwright 1.56.0
@@ -728,6 +775,12 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
   dependency group (`uv sync --group browser`, then `uv run playwright
   install chromium`); without it these tests skip. The logic still lives in
   Python where it is cheap to test.
+  Phase D adds the radar: the map loads for the airport and places its
+  labels, every aircraft on the radar is a row in the table, clicking an
+  aircraft focuses it and the table follows (and the table's callsign does
+  the same), place names brighten under the pointer, the wheel zooms,
+  dragging pans and RECENTRE resets, headers sort, and emergency and
+  refused frames light the lamps.
 * **Demo mode.** `kcgx-web --demo` (phase C) runs `kcgx.demo`: synthetic
   feeds for any airport that meter, chatter, reconnect and park like real
   ones, with no network, ffmpeg or audio device, and nothing remembered.
@@ -744,7 +797,7 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
 | **A** | Extract `Cockpit`; terminal squelch runs on it | all existing squelch tests pass, moved where they belong |
 | **B** | Server, routes, WebSocket, levels loop | server tests pass; a fake cockpit is drivable from a script |
 | **C** | Page: status header, feed stack, meters, config sheet, feed picker, messages | Playwright tests against `--demo` |
-| **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata and screenshot tests; manual check at a busy airport |
+| **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata, radar and browser tests; manual check at a busy airport |
 | **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | parity table holds end to end; manual hardware run |
 
 A comes first because it is the only phase that touches working code, and it
@@ -768,7 +821,10 @@ the switch, and the only phase that deletes anything.
 * **Feed listing refused.** Unchanged behaviour and messages, except that
   the station rewrites squelch's "press f to retry" as "open FEEDS to
   retry": the feed picker fetches the listing afresh every time it opens.
-* **adsb.lol refused.** Last good picture, age badge, backoff, as above.
+* **adsb.lol refused.** Last good picture, backoff, as above. The radar's
+  corner reads `ERR 429, PICTURE 45S OLD`, the RADAR lamp turns amber (red
+  orange if there is no picture at all), and the tracks table says the
+  radar is not answering when it has nothing to show.
 
 ## Open questions
 
