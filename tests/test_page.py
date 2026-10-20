@@ -206,3 +206,129 @@ def test_the_volume_slider_reaches_the_server(page):
     page.fill("#volume", "100")
     page.dispatch_event("#volume", "input")
     page.wait_for_function("document.getElementById('freq-counts').textContent.includes('VOL 100%')")
+
+
+# -- the radar -----------------------------------------------------------------
+
+
+def radar_debug(page):
+    return page.evaluate("window.kcgx.radar.debug()")
+
+
+def on_screen(page, x, y):
+    """A canvas pixel position as a page position."""
+    box = page.eval_on_selector("#radar", "e => { const r = e.getBoundingClientRect(); return [r.left, r.top]; }")
+    ratio = page.evaluate("devicePixelRatio")
+    return box[0] + x / ratio, box[1] + y / ratio
+
+
+def wait_for_traffic(page):
+    """Until a frame has been drawn with the map and the aircraft on it: the
+    map arrives between two frames, and the labels are placed on the next."""
+    page.wait_for_function(
+        """() => { const d = window.kcgx.radar.debug();
+                   return d.loaded && d.hits.length > 0 && d.placed.some(p => p.key.startsWith('navaid:')); }"""
+    )
+
+
+def test_the_map_loads_for_the_airport_and_draws_its_places(page):
+    wait_for_traffic(page)
+    debug = radar_debug(page)
+    assert debug["mapFor"] == "KPDX"
+    assert debug["layers"]["coast"] > 0 and debug["layers"]["river"] > 0
+    keys = {p["key"] for p in debug["placed"]}
+    assert "home" in keys
+    assert any(k.startswith("navaid:") for k in keys) and any(k.startswith("city:") for k in keys)
+
+
+def test_every_aircraft_on_the_radar_is_a_row_in_the_table(page):
+    wait_for_traffic(page)
+    # Compared inside one evaluation, and retried, so a poll arriving between
+    # reading the radar and reading the table cannot make them disagree.
+    page.wait_for_function(
+        """() => {
+            const radar = window.kcgx.radar.debug().hits.map(h => h.hex).sort();
+            const rows = [...document.querySelectorAll('#tracks-body tr')].map(r => r.dataset.hex).sort();
+            const hud = document.getElementById('radar-tracks').textContent;
+            return rows.length >= 5 && radar.join() === rows.join() && hud === `${rows.length} TRACKS`;
+        }"""
+    )
+
+
+def test_clicking_an_aircraft_focuses_it_and_the_table_follows(page):
+    wait_for_traffic(page)
+    hits = radar_debug(page)["hits"]
+    # One with no other aircraft within 40 px, so the click cannot land on a neighbour.
+    hit = next(
+        h for h in hits
+        if all(o is h or abs(o["x"] - h["x"]) + abs(o["y"] - h["y"]) > 40 for o in hits)
+    )
+    page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
+    page.wait_for_selector(f'#tracks-body tr.focused[data-hex="{hit["hex"]}"]')
+    assert page.eval_on_selector_all("#tracks-body tr.dimmed", "rs => rs.length") >= 4
+    # the callsign in the table is the same switch
+    page.click(f'#tracks-body tr[data-hex="{hit["hex"]}"] .callsign')
+    page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused, #tracks-body tr.dimmed').length === 0")
+
+
+def test_place_names_brighten_under_the_pointer(page):
+    wait_for_traffic(page)
+    size = page.eval_on_selector("#radar", "c => [c.width, c.height]")
+    label = next(
+        p for p in radar_debug(page)["placed"]
+        if p["key"].startswith(("city:", "navaid:")) and p["x"] > 0 and p["y"] > 0
+        and p["x"] + p["w"] < size[0] and p["y"] + p["h"] < size[1]
+    )
+    page.mouse.move(*on_screen(page, label["x"] + label["w"] / 2, label["y"] + label["h"] / 2))
+    page.wait_for_function(f"window.kcgx.radar.debug().hovered === {label['key']!r}")
+    page.mouse.move(5, 5)
+    page.wait_for_function("window.kcgx.radar.debug().hovered === null")
+
+
+def test_the_wheel_zooms_dragging_pans_and_recentre_resets(page):
+    wait_for_traffic(page)
+    x, y = on_screen(page, 300, 300)
+    page.mouse.move(x, y)
+    page.mouse.wheel(0, -500)
+    page.wait_for_function("window.kcgx.radar.debug().view.zoom > 1.5")
+    page.mouse.down()
+    page.mouse.move(x + 120, y + 60, steps=6)
+    page.mouse.up()
+    view = radar_debug(page)["view"]
+    assert view["panX"] != 0 and view["panY"] != 0
+    page.click("#recentre")
+    assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+
+
+def test_a_column_header_sorts_the_table(page):
+    wait_for_traffic(page)
+    page.wait_for_selector("#tracks-body tr")
+    page.click("#tracks-head button:text-is('ALT FT')")
+    alts = page.eval_on_selector_all(
+        "#tracks-body tr td:nth-child(3)", "cells => cells.map(c => c.textContent === 'GND' ? 0 : Number(c.textContent))"
+    )
+    assert alts == sorted(alts)
+    page.click("#tracks-head button:text-is('ALT FT')")
+    alts = page.eval_on_selector_all("#tracks-body tr td:nth-child(3)", "cells => cells.map(c => Number(c.textContent))")
+    assert alts == sorted(alts, reverse=True)
+
+
+def test_an_emergency_squawk_lights_the_lamp_and_turns_the_row_red(page):
+    wait_for_traffic(page)
+    page.evaluate(
+        """window.kcgx.store.apply({t: "aircraft", ok: true, error: "", age: 0, refresh: 15, range: 40,
+            ac: [{hex: "e1", label: "N52RT", type: "BE36", lat: 45.9, lon: -123.0, alt: 7500, gs: 150,
+                  trk: 120, sq: "7600", age: 0, dist: 25.2, brg: 315}]})"""
+    )
+    page.wait_for_selector(".lamp.emerg .lamp-label:text-is('7600')")
+    assert page.get_attribute('#tracks-body tr[data-hex="e1"]', "class") == "emergency"
+
+
+def test_a_refused_radar_says_so_and_dims_its_lamp(page):
+    wait_for_traffic(page)
+    page.evaluate(
+        """window.kcgx.store.apply({t: "aircraft", ok: false, error: "ERR 429", age: 40, refresh: 15,
+            range: 40, ac: []})"""
+    )
+    page.wait_for_function("document.getElementById('radar-poll').textContent.startsWith('ERR 429')")
+    assert "warn" in page.get_attribute(".lamp:has(.lamp-label:text-is('RADAR'))", "class")
