@@ -164,3 +164,22 @@ def test_the_buffer_can_be_tuned(tmp_path):
     path = tmp_path / "squelch.toml"
     path.write_text("buffer_seconds = 8.0\n")
     assert load_config(path).buffer_seconds == 8.0
+
+
+def test_the_radar_keys_default_to_adsb_lols_pace():
+    cfg = Config()
+    assert (cfg.radar_refresh_secs, cfg.radar_range_nm, cfg.radar_stale_secs) == (15, 40, 60)
+
+
+def test_the_radar_keys_can_be_configured(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text("radar_refresh_secs = 30\nradar_range_nm = 25\nradar_stale_secs = 90\n")
+    cfg = load_config(path)
+    assert (cfg.radar_refresh_secs, cfg.radar_range_nm, cfg.radar_stale_secs) == (30, 25, 90)
+
+
+def test_a_fractional_radar_range_is_rejected(tmp_path):
+    path = tmp_path / "squelch.toml"
+    path.write_text("radar_range_nm = 40.5\n")
+    with pytest.raises(ConfigError, match="radar_range_nm"):
+        load_config(path)
