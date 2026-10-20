@@ -78,6 +78,7 @@ def snapshot(
     audio_ok: bool,
     log: Iterable[dict],
     prefs: dict | None = None,
+    radar: dict | None = None,
 ) -> dict:
     """Everything a page needs to draw from nothing: sent on connect and
     after every airport change."""
@@ -92,6 +93,7 @@ def snapshot(
         "audio_ok": bool(audio_ok),
         "log": list(log),
         "prefs": dict(prefs or DEFAULTS),
+        "radar": radar,
     }
 
 

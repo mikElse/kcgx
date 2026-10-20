@@ -348,3 +348,49 @@ async def test_a_prefs_change_is_remembered_and_reaches_every_page():
     assert frames(page, "prefs") == [{"t": "prefs", "palette": "MATRIX", "glow": "LOW", "display": "CRT"}]
     station.handle({"t": "prefs", "glow": "OFF"})
     assert station.prefs == {"palette": "MATRIX", "glow": "OFF", "display": "CRT"}
+
+
+# -- the radar ---------------------------------------------------------------
+
+
+async def test_changing_airport_points_the_radar_at_it():
+    station, hub, *_ = make()
+    page = watch(hub)
+    await station.change_airport("KSEA")
+    assert (station.radar.lat, station.radar.lon) == (station.airport.lat, station.airport.lon)
+    aircraft = frames(page, "aircraft")
+    assert aircraft and aircraft[-1]["ac"] == []
+
+
+async def test_the_snapshot_carries_the_radar_picture():
+    station, *_ = make()
+    await station.open("KPDX")
+    station.radar.merge({"ac": [{"hex": "abc", "flight": "ASA1", "lat": 45.6, "lon": -122.5}]})
+    assert [ac["label"] for ac in station.snapshot()["radar"]["ac"]] == ["ASA1"]
+
+
+async def test_radar_frames_and_emergencies_reach_every_page():
+    station, hub, *_ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.radar.merge({"ac": [{"hex": "e", "flight": "N52RT", "squawk": "7700", "lat": 45.9, "lon": -122.6}]})
+    station.radar.on_frame(station.radar.frame())
+    assert frames(page, "aircraft")[-1]["ac"][0]["sq"] == "7700"
+    assert hub.log[-1]["text"].startswith("N52RT squawking 7700 (emergency), 19 nm N")
+
+
+async def test_the_radar_takes_its_settings_from_the_config():
+    loop = asyncio.get_running_loop()
+    station = Station(
+        Config(radar_refresh_secs=30, radar_range_nm=25, radar_stale_secs=90),
+        Hub(),
+        post=lambda fn, *args: loop.call_soon_threadsafe(fn, *args),
+        airports=AIRPORTS,
+        mixer=Mixer(),
+        feeds_loader=listing,
+        sessions_builder=Builder(),
+        picker_loader=picker,
+        remember=lambda icao: None,
+        remember_prefs=lambda prefs: None,
+    )
+    assert (station.radar.refresh_secs, station.radar.range_nm, station.radar.stale_secs) == (30, 25, 90)

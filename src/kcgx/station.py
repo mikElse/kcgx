@@ -23,6 +23,7 @@ from kcgx import protocol
 from kcgx.airports import Airport, find
 from kcgx.hub import Hub
 from kcgx.prefs import DEFAULTS, write_prefs
+from kcgx.radar import Fetch, Radar, fetch_adsb_lol
 from kcgx.state import write_airport
 from squelch.cockpit import ADDED, FEED, MESSAGE, ORDER, Cockpit
 from squelch.config import Config
@@ -52,6 +53,7 @@ class Station:
         remember: Callable[[str], None] = write_airport,
         prefs: dict | None = None,
         remember_prefs: Callable[[dict], None] = write_prefs,
+        radar_fetch: Fetch = fetch_adsb_lol,
     ) -> None:
         self.config = config
         self.hub = hub
@@ -64,6 +66,16 @@ class Station:
         self._remember = remember
         self._remember_prefs = remember_prefs
         self.prefs = dict(prefs or DEFAULTS)
+        # Polled by the server's radar task (kcgx.server), retargeted here
+        # on every airport change.
+        self.radar = Radar(
+            on_frame=self.hub.broadcast,
+            on_note=self.hub.note,
+            fetch=radar_fetch,
+            refresh_secs=config.radar_refresh_secs,
+            range_nm=config.radar_range_nm,
+            stale_secs=config.radar_stale_secs,
+        )
         self._events = SessionEvents(
             on_state=lambda session, state: self._post(self._session_changed, session),
             on_warn=lambda session, message: self._post(
@@ -110,6 +122,7 @@ class Station:
         self._discard()
         config = replace(self.config, icao=airport.icao)
         self.icao, self.airport, self.loading = airport.icao, airport, True
+        self.radar.retarget(airport.lat, airport.lon)
         self._picker = {}
         self.cockpit = self._new_cockpit(config, [])
         self.hub.broadcast(self.snapshot())
@@ -217,6 +230,7 @@ class Station:
             audio_ok=not getattr(self.mixer, "failed", False),
             log=self.hub.log,
             prefs=self.prefs,
+            radar=self.radar.frame(),
         )
 
     # -- shutting down -----------------------------------------------------
