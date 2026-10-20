@@ -15,3 +15,6 @@ src/squelch/assets/audio/*.mp3
 
 # Reference stills for the web cockpit spec; not ours to publish.
 war_games_examples/
+
+# Downloaded map sources for tools/build_geodata.py; the built map is committed.
+.geo-sources/
