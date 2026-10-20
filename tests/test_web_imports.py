@@ -17,6 +17,7 @@ WEB_MODULES = [
     "kcgx.prefs",
     "kcgx.demo",
     "kcgx.geodata",
+    "kcgx.radar",
 ]
 
 
