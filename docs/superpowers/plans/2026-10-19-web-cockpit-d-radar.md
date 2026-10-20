@@ -3363,8 +3363,9 @@ Built 2026-10-19 on `feat/web-cockpit`, one commit per task (73e032f to
 modifies matched the dry run's base. On the branch, in the Mac's sandbox
 without the browser tests: 984 passed, which is 1008 less the 24 in
 `test_page.py`. Those passed against the same files in the cloud sandbox;
-their first run on the branch is on the Mac. Task 10, by hand on the Mac,
-is pending.
+their first run on the branch is on the Mac. Task 10, 2026-10-19: the owner ran the
+suite with the browser tests on the Mac and the page with `--demo` and with
+real traffic, and confirmed every check passes.
 
 ## Self-Review Notes
 
