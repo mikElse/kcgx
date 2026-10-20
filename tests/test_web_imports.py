@@ -16,6 +16,7 @@ WEB_MODULES = [
     "kcgx.server",
     "kcgx.prefs",
     "kcgx.demo",
+    "kcgx.geodata",
 ]
 
 
