@@ -9,6 +9,7 @@ import { mountStatus } from "./status.js";
 import { mountLamps } from "./lamps.js";
 import { mountLog } from "./log.js";
 import { mountRadar } from "./radar.js";
+import { mountTracks } from "./tracks.js";
 import {
   CHOICES, mountAirportSheet, mountConfigSheet, mountFeedsSheet, mountShutdownSheet,
 } from "./sheets.js";
@@ -34,7 +35,10 @@ mountStatus({
   icao: $("icao"), name: $("airport-name"), where: $("airport-where"), zulu: $("zulu"), local: $("local"),
 }, store);
 mountLamps($("lamps"), store);
-const radar = mountRadar($("radar"), store);
+const radar = mountRadar($("radar"), store, {
+  hud: { poll: $("radar-poll"), tracks: $("radar-tracks"), position: $("radar-position") },
+});
+mountTracks({ head: $("tracks-head"), body: $("tracks-body"), empty: $("tracks-empty") }, store);
 
 const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,
@@ -62,7 +66,8 @@ $("next-palette").addEventListener("click", () => {
   const next = all[(all.indexOf(store.state.prefs.palette) + 1) % all.length];
   send({ t: "prefs", palette: next });
 });
-$("recentre").addEventListener("click", () => radar.redraw());
+$("recentre").addEventListener("click", () => radar.recentre());
+window.kcgx = { radar, store }; // for the browser tests
 
 function banner() {
   const { state } = store;

@@ -10,6 +10,7 @@ export function colours() {
     cache = {
       cyan: read("--cyan"), dim: read("--dim"), pink: read("--pink"), white: read("--white"),
       amber: read("--amber"), alarm: read("--alarm"), muted: read("--muted"), text: read("--text"),
+      blue: read("--blue"), green: read("--green"), frame: read("--frame"),
     };
   }
   return cache;
