@@ -27,12 +27,12 @@ from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from kcgx import protocol
+from kcgx import geodata, protocol
 from kcgx.airports import find, load_airports, search
 from kcgx.hub import Client, Hub
 from kcgx.prefs import read_prefs
@@ -112,10 +112,12 @@ def create_app(
     on_exit: Callable[[], None] = lambda: None,
     level_hz: float = LEVEL_HZ,
     resort_seconds: float = RESORT_SECONDS,
+    radar: bool = True,
 ) -> Any:
     """The ASGI app. `station_factory(hub, post)` builds the Station once
     the event loop is running; `on_exit` is what POST /api/shutdown calls.
-    A zero `level_hz` or `resort_seconds` turns that loop off (tests)."""
+    A zero `level_hz` or `resort_seconds` turns that loop off, and
+    `radar=False` keeps the radar from polling (tests)."""
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -135,6 +137,8 @@ def create_app(
             tasks.append(asyncio.create_task(_every(1 / level_hz, station.tick_levels)))
         if resort_seconds:
             tasks.append(asyncio.create_task(_every(resort_seconds, station.tick_resort)))
+        if radar:
+            tasks.append(asyncio.create_task(_guarded(hub, station.radar.run())))
         try:
             yield
         finally:
@@ -186,6 +190,17 @@ def create_app(
         asyncio.create_task(_guarded(station.hub, station.change_airport(airport.icao)))
         return JSONResponse({"icao": airport.icao}, status_code=202)
 
+    async def geo(request: Request):
+        """The radar's map for one airport: everything within 200 nm. Asked
+        for by ICAO so a page never draws one field's map around another."""
+        station = request.app.state.station
+        try:
+            airport = station.check_airport(request.query_params.get("icao", ""))
+        except UnknownAirport:
+            return JSONResponse({"error": "no such airport"}, status_code=404)
+        body = await asyncio.to_thread(geodata.clipped_json, airport.icao, airport.lat, airport.lon)
+        return Response(body, media_type="application/json", headers=NO_CACHE)
+
     async def available(request: Request):
         return JSONResponse(await request.app.state.station.available_feeds())
 
@@ -230,6 +245,7 @@ def create_app(
             Route("/api/airports", airports),
             Route("/api/airport", set_airport, methods=["POST"]),
             Route("/api/feeds/available", available),
+            Route("/api/geo", geo),
             Route("/api/shutdown", shutdown, methods=["POST"]),
             WebSocketRoute("/ws", live),
         ],
@@ -339,6 +355,7 @@ def main(
             "picker_loader": demo.picker,
             "remember": lambda icao: None,
             "remember_prefs": lambda prefs: None,
+            "radar_fetch": demo.traffic,
         }
     else:
         options = {}

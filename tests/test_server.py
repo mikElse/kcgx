@@ -41,7 +41,7 @@ def app(**kwargs):
             remember_prefs=lambda prefs: None,
         )
 
-    options = dict(level_hz=0, resort_seconds=0)
+    options = dict(level_hz=0, resort_seconds=0, radar=False)
     options.update(kwargs)
     return create_app(
         station_factory=factory, initial_icao="KPDX", on_exit=lambda: exits.append(True), **options
@@ -397,3 +397,61 @@ def test_prefs_are_read_at_startup(monkeypatch, tmp_path):
          serve=lambda asgi, port, on_server: served.setdefault("app", asgi), out=lambda line: None)
     with TestClient(served["app"], base_url=BASE) as http, http.websocket_connect(WS) as ws:
         assert ready(ws)["prefs"] == {"palette": "MATRIX", "glow": "OFF", "display": "VECTOR"}
+
+
+# -- the radar -----------------------------------------------------------------
+
+
+def test_the_map_for_an_airport_is_served():
+    asgi, _ = app()
+    with client(asgi) as http:
+        response = http.get("/api/geo?icao=kpdx")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+    geo = response.json()
+    pdx = next(a for a in AIRPORTS if a.icao == "KPDX")
+    assert geo["center"] == [round(pdx.lon * 10_000), round(pdx.lat * 10_000)]
+    assert len(geo["runways"]) == 3
+    assert geo["lines"]["coast"]
+
+
+@pytest.mark.parametrize("query", ["?icao=ZZZZ", "", "?icao="])
+def test_the_map_of_an_unknown_airport_is_a_404(query):
+    asgi, _ = app()
+    with client(asgi) as http:
+        assert http.get(f"/api/geo{query}").status_code == 404
+
+
+def radar_app(fetch, **options):
+    def factory(hub, post):
+        return Station(
+            Config(icao="KPDX", feed="kpdx3_twr"),
+            hub,
+            post=post,
+            airports=AIRPORTS,
+            mixer=Mixer(),
+            feeds_loader=listing,
+            sessions_builder=Builder(),
+            picker_loader=picker,
+            remember=lambda icao: None,
+            remember_prefs=lambda prefs: None,
+            radar_fetch=fetch,
+        )
+
+    return create_app(station_factory=factory, initial_icao="KPDX", level_hz=0, resort_seconds=0, **options)
+
+
+def test_the_radar_polls_from_startup_and_every_page_sees_it():
+    def fetch(lat, lon, range_nm):
+        return {"ac": [{"hex": "abc", "flight": "ASA412", "lat": lat + 0.1, "lon": lon, "alt_baro": 5000}]}
+
+    with client(radar_app(fetch)) as http, http.websocket_connect(WS) as ws:
+        frame = until(ws, lambda f: f["t"] == "aircraft" and f["ac"])
+    assert frame["ac"][0]["label"] == "ASA412" and frame["ok"]
+
+
+def test_radar_off_means_no_polling():
+    calls = []
+    with client(radar_app(lambda *a: calls.append(a) or {"ac": []}, radar=False)) as http, http.websocket_connect(WS) as ws:
+        ready(ws)
+    assert calls == []
