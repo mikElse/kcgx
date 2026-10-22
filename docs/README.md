@@ -18,7 +18,7 @@ Start with the [spec](superpowers/specs/2026-10-18-web-cockpit-design.md).
 | **B** | server, routes, WebSocket, levels loop | [plan](superpowers/plans/2026-10-18-web-cockpit-b-server.md) | built; audio confirmed on the Mac |
 | **C** | page: status, feed stack, meters, config, feed picker, log | [plan](superpowers/plans/2026-10-19-web-cockpit-c-page.md) | built; checked by hand on the Mac |
 | **D** | radar: geodata, vector renderer, poller, palettes, display effects | [plan](superpowers/plans/2026-10-19-web-cockpit-d-radar.md) | built; checked by hand on the Mac |
-| **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | | not started |
+| **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | [plan](superpowers/plans/2026-10-22-web-cockpit-e-launcher.md) | planned |
 
 ## Audio pane upgrades — planned, not started
 

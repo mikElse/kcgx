@@ -69,7 +69,9 @@ promises, and nothing here changes that.
 
 ## Feature parity
 
-Every row must hold before the terminal cockpit is retired.
+Every row must hold before the terminal cockpit is retired. They did:
+phase E retired it on 2026-10-22, after the owner checked phases C and D on
+the Mac against real feeds and traffic.
 
 | Today | In the browser |
 |---|---|
@@ -86,10 +88,10 @@ Every row must hold before the terminal cockpit is retired.
 | `f` feed picker, opens a feed that is not open | FEEDS button opens the same, as a searchable list |
 | Message log, capped at 200 | Same cap, same text |
 | Feed list cache, retry budgets, one feed fallback, never another airport's audio | Unchanged: `load_feeds`, `picker_feeds`, `_no_feeds` move as they are |
-| `squelch --refresh-feeds` | Unchanged CLI |
+| `squelch --refresh-feeds` | `kcgx-web --refresh-feeds [--icao]` (phase E); `squelch.runtime.refresh_feeds` does the work, as before |
 | Status pane: big ICAO, airport name, Zulu and local clocks | Airport name in large stroked capitals beside its ring on the radar; ICAO and both clocks on the status screen. Local is the viewer's own clock and zone, since the airport dataset has no time zones |
 | `Ctrl-b a` / click `▾ airport` opens airport search | CHANGE AIRPORT button, or click the airport name; same `search()` over the same CSV |
-| `kcgx go [query]`, exact ICAO skips the picker | Same CLI; it talks to the running server |
+| `kcgx go [query]`, exact ICAO skips the picker | Same CLI; it talks to the running server. An ICAO, or a query naming one airport, switches at once (starting the server there if need be); none, or one naming several, opens the page at `#airport=<query>` with the search showing (phase E) |
 | Remembered airport in `~/.local/state/kcgx/airport` | Same file, same `current_icao()` resolution order |
 | Airports LiveATC does not cover still get a radar | Same: empty stack with a message, radar works |
 | Radar: aircraft around the airport from adsb.lol, 15 s polling | Our own radar on a map. Same endpoint, same interval, same polite User-Agent |
@@ -127,7 +129,8 @@ Every row must hold before the terminal cockpit is retired.
 directions, as pure functions; nothing else builds a frame. `squelch.runtime`
 holds feed loading and session building (`load_feeds`, `build_sessions`,
 `picker_feeds`), moved out of `squelch.__main__` because that module imports
-Textual and the server must not. `squelch.__main__` re-exports every name.
+Textual and the server must not. `squelch.__main__` re-exported every name
+until phase E removed it with the terminal app.
 
 ### The controller: the one real refactor
 
@@ -643,30 +646,52 @@ shortcuts, and it costs the page nothing.
 
 ## The launcher
 
-`bin/kcgx` stops being a tmux script and becomes a thin wrapper over a new
-`kcgx` console script:
+Built in phase E. `bin/kcgx` stopped being a 480 line tmux script and became a
+short wrapper: it resolves its own symlink to find the repo and runs
+the `kcgx` console script there with `uv run`. Everything else is
+`kcgx.launcher`:
 
 ```
-kcgx              start the server if it is not running, then open the page
-kcgx go [query]   pick an airport (terminal prompt, or exact ICAO) and tell the server
-kcgx stop         ask the server to stop
-kcgx --no-open    start without opening a browser
+kcgx                  start the server if it is not running, then open the page
+kcgx go [query]       switch airport, or open the page's airport search
+kcgx stop             stop the server
+kcgx status           running at http://127.0.0.1:8473/  (KPDX), or not running (exit 3)
+kcgx --no-open        start without opening a browser
+kcgx --demo           start the demo server
 ```
 
-The server runs detached, writes its port and pid to
-`~/.local/state/kcgx/server.json`, and logs to
-`~/.local/state/kcgx/server.log`. "Running" means `GET /api/health` answers,
-not that the file exists; a stale file from a crash is replaced. The default
-port is `8473` (`KCGX_PORT` overrides it); if it is taken by something that
-is not kcgx, the server picks a free one and records it.
+The server runs detached (its own session, so it outlives the terminal),
+writes its port, pid and whether it is the demo to
+`~/.local/state/kcgx/server.json`, and logs to `server.log` beside it
+(rolled to `server.log.1` past 1 MB). Both sit beside the remembered
+airport, so `KCGX_STATE_PATH` moves them too. "Running" means
+`GET /api/health` answers **as kcgx**: the health reply carries
+`"app": "kcgx"` so the launcher can tell its server from anything else on
+the port. A record whose server does not answer is removed. A kcgx server
+nobody recorded (a lost file) is adopted. The default port is `8473`
+(`KCGX_PORT` overrides it); if something that is not kcgx holds it, the
+server takes a free one and records that.
 
-Until then, phase B's `kcgx-web` runs the same server in the foreground
-(`kcgx-web [--port 8473] [--icao KPDX]`), refusing to start without ffmpeg
-or at an airport the dataset does not have. The launcher wraps it.
+If the server will not start (no ffmpeg, a config file it refuses), the
+launcher sees the process exit, and prints the end of the log rather than
+waiting out its 20 s timeout.
 
-`kcgx go` without a query keeps the existing Textual picker for now, since
-it is a terminal command; with `--open` it opens the page with the search
-already showing instead.
+`kcgx go`: an exact ICAO, or a query that `search()` resolves to exactly one
+airport, is posted to `/api/airport`; if no server is running, the airport is
+written to the state file first and the server started there. No query, or
+one naming several airports, opens the page at `#airport` or
+`#airport=<query>`, which opens CHANGE AIRPORT with the query typed and
+clears the fragment. A query matching nothing is an error and changes
+nothing. `--open` opens the page after switching. The terminal airport
+picker, and Textual with it, are gone (decided 2026-10-22).
+
+`kcgx stop` posts `/api/shutdown`, waits for health to stop answering, and
+falls back to SIGTERM to the recorded pid; stopping something that is not
+running is not an error.
+
+`kcgx-web` still runs the server in the foreground
+(`kcgx-web [--port 8473] [--icao KPDX] [--demo]`), and gained
+`--refresh-feeds [--icao]` for setup's step 6.
 
 ## Security
 
@@ -682,20 +707,26 @@ No authentication beyond that: it is one person's machine.
 
 ## Install changes
 
-`setup.sh` gets shorter.
+Built in phase E. `setup.sh` went from nine steps to seven:
 
-| Step | Becomes |
-|---|---|
-| 2 System packages | `ffmpeg` and PortAudio; **tmux dropped** |
-| 4 Python dependencies | adds `starlette`, `uvicorn` and `websockets` (and `httpx2` for the tests) |
-| 5 Launcher on `PATH` | unchanged, and no longer critical: no popup depends on it |
-| 6 `adsb-tui` | **removed**, with its licence prompt |
-| 7 Where the radar gets aircraft | **removed**; there is no adsb-tui config to write |
-| 8 Feed list | unchanged |
-| 9 Checking it works | starts the server, insists on `200` from `/api/health`, checks the page and the WebSocket, then stops it |
+| | Step | Was |
+|---|---|---|
+| 1 | What you have | no tmux or adsb-tui rows; no terminal width check |
+| 2 | System packages: `ffmpeg` and PortAudio | **tmux dropped** |
+| 3 | `uv` | unchanged |
+| 4 | Python dependencies | lists `starlette`, `uvicorn` and `websockets`; no `textual` |
+| 5 | The launcher on `PATH` | unchanged, and no longer critical: no popup depends on it, so declining costs only plain `kcgx` |
+| 6 | The feed list | was step 8; runs `kcgx-web --refresh-feeds --icao <remembered airport>` |
+| 7 | Checking it works | was step 9; runs `ffmpeg`, imports the five dependencies, runs `python -m kcgx.selfcheck` (starts the demo server on a free port and checks health, the page and the WebSocket's first frame, then stops it), counts audio devices, and probes LiveATC and adsb.lol |
 
-Platform support widens: with no adsb-tui binary to download, ARM Linux is
-no longer a stopping point.
+The adsb-tui download and licence prompt (old step 6) and its config file
+(old step 7) are **removed**. An `adsb-tui.toml` an earlier setup wrote is
+left where it is; nothing reads it now.
+
+Platform support widens: with no adsb-tui binary to download, any processor
+will do, and ARM Linux is no longer a stopping point. The adsb.lol
+User-Agent setup's probe sends is a literal in `setup.sh` that a test
+compares with `kcgx.radar.DEFAULT_UA`, now that `bin/kcgx` has none.
 
 ## Components
 
@@ -718,13 +749,20 @@ src/kcgx/geodata.py           new in D: loads the map once, clips it per airport
 src/kcgx/data/geo.json.gz     new in D: the committed map
 tools/build_geodata.py        new in D: builds it from the sources above
 src/kcgx/web/static/js/       radar.js, tracks.js, focus.js new in D
-src/kcgx/launcher.py          new: start/stop/go, server.json, health check
+src/kcgx/launcher.py          new in E: kcgx start/go/stop/status, server.json, health
+src/kcgx/selfcheck.py         new in E: setup.sh step 7's server check
+bin/kcgx                      rewritten in E: finds the repo, runs kcgx through uv
 ```
 
-Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
-`squelch/radar_theme.py`, the Textual halves of `themes.py`, `rows.py`,
-`config_view.py`, `kcgx/status.py`, `kcgx/bigtext.py`. Whether
-`squelch/app.py` and `kcgx/picker.py` go too is an open question.
+Removed in phase E, with their tests: `bin/kcgx`'s tmux logic,
+`bin/kcgx-no-radar`, `kcgx.tmux.conf`, the whole terminal app
+(`squelch/app.py`, `__main__.py`, `rows.py`, `config_view.py`, `themes.py`,
+`radar_theme.py`, `squelch.tcss`), and the kcgx terminal pieces
+(`kcgx/status.py`, `bigtext.py`, `picker.py`, `__main__.py`). The
+`squelch`, `kcgx-airport` and `kcgx-status` commands went with them, and
+Textual left the dependencies. The terminal app's tests of feed loading and
+session building moved to `tests/test_runtime.py`, because the server uses
+all of that code.
 
 ## Testing
 
@@ -762,8 +800,15 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
   cleared. In the browser an emergency frame lights the EMERG lamp with its
   code and turns the row red orange. The demo's N52RT squawks 7600 for one
   minute in five so all of it can be seen.
-* **Launcher.** Start, second start reuses, stale `server.json`, `stop` when
-  not running is not an error, port collision.
+* **Launcher.** Built in phase E as `tests/test_launcher.py`, against real
+  demo servers on free ports with their state in a temporary folder: start,
+  second start reuses, a stale `server.json` is replaced, an unrecorded kcgx
+  server is adopted, a port held by something else is skipped, a server that
+  cannot start says why at once, `stop` and `status` with and without a
+  server, every shape of `kcgx go`, the server outliving the command, and
+  `bin/kcgx` through a symlink and without uv. `tests/test_selfcheck.py`
+  runs setup's server check for real, and `tests/test_setup.py` drives the
+  seven step script with a stubbed `PATH`, as before.
 * **Browser.** Built in phase C as `tests/test_page.py`: Playwright 1.56.0
   drives Chromium against a real `kcgx-web --demo` subprocess whose state
   lives in a temporary folder. It checks that no two screens overlap and
@@ -798,12 +843,13 @@ Removed in the final phase: `bin/kcgx`'s tmux logic, `kcgx.tmux.conf`,
 | **B** | Server, routes, WebSocket, levels loop | server tests pass; a fake cockpit is drivable from a script |
 | **C** | Page: status header, feed stack, meters, config sheet, feed picker, messages | Playwright tests against `--demo` |
 | **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata, radar and browser tests; manual check at a busy airport |
-| **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | parity table holds end to end; manual hardware run |
+| **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | launcher, self check and setup tests; a fresh `./setup.sh` and `kcgx` on the Mac |
 
 A comes first because it is the only phase that touches working code, and it
 leaves the terminal cockpit intact. B through D add new files alongside the
-existing cockpit, reachable as `kcgx web` while they are being built. E is
-the switch, and the only phase that deletes anything.
+existing cockpit, reachable as `kcgx-web` while they are being built. E is
+the switch, and the only phase that deletes anything; the last commit with
+the terminal cockpit is tagged `terminal-cockpit`.
 
 ## Error handling
 
@@ -833,9 +879,11 @@ the switch, and the only phase that deletes anything.
    first launch, or a DEFCON style status readout, would be fun and is easy
    to overdo. Leaning toward one quiet nod in the splash and none in the
    working UI.
-2. **Keep the terminal squelch?** After phase A it costs little to keep
-   `squelch` as a standalone terminal player on the shared controller. The
-   cost is keeping Textual as a dependency and its tests alive.
+2. **Keep the terminal squelch?** Decided 2026-10-22: **no.** One cockpit
+   to maintain; Textual, about 2,000 lines of terminal UI and 400 tests
+   went in phase E (30 more, of feed loading, moved to `test_runtime.py`).
+   It is all at the `terminal-cockpit` tag. The terminal airport picker
+   went too: `kcgx go` with no airport opens the page's search.
 3. **Feed reordering under the pointer.** Hovering the stack counts as
    touching it, so rows do not move under a cursor that is about to click.
    That may hold the order still for too long if the mouse just rests there;
