@@ -1,7 +1,7 @@
 [project]
 name = "squelch"
 version = "0.1.0"
-description = "Add your description here"
+description = "KCGX: live ATC audio and traffic around an airport, in your browser"
 readme = "README.md"
 authors = [
     { name = "Mike Else", email = "melse@jellyvision.com" }
@@ -11,17 +11,13 @@ dependencies = [
     "numpy>=2.5.1",
     "sounddevice>=0.5.5",
     "starlette>=1.9.0,<2",
-    "textual>=8.2.8,<9",
     "uvicorn>=0.54.0,<0.55",
     "websockets>=17.2,<18",
 ]
 
 [project.scripts]
-squelch = "squelch.__main__:main"
-kcgx-airport = "kcgx.__main__:main"
-kcgx-status = "kcgx.status:main"
-kcgx-web = "kcgx.server:main"
 kcgx = "kcgx.launcher:main"
+kcgx-web = "kcgx.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]

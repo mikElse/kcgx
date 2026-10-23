@@ -2,17 +2,17 @@
 
 Which feeds hold one of LiveATC's streams, what solo restores, when the
 stack may reorder, what opening a feed does. All of it used to live inside
-SquelchApp, where only a running Textual app could reach it. The browser
-front end needs exactly the same rules, so they live here and both front
-ends drive them.
+the terminal app, where only a running Textual app could reach it; it was
+pulled out here in phase A so the browser front end could drive the same
+rules, and the terminal app was retired in phase E.
 
 Feeds are addressed by ident, never by position or by id(session): a
 browser cannot hold a Python object id, and a position is exactly what
 reordering changes.
 
-Single threaded by contract. Every call comes from one thread: Textual's
-event loop today, the server's asyncio loop later. Session threads never
-call in; their state changes still reach the UI through SessionEvents.
+Single threaded by contract. Every call comes from one thread: the server's
+asyncio loop. Session threads never call in; their state changes reach it
+through SessionEvents.
 """
 
 from __future__ import annotations

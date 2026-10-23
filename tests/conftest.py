@@ -29,7 +29,7 @@ def isolate_kcgx_state(tmp_path, monkeypatch):
     So all three levers are redirected, not one:
 
     - KCGX_STATE_PATH, which is what a test normally overrides, and what
-      reaches Python through a subprocess (bin/kcgx -> uv -> kcgx-airport);
+      reaches Python through a subprocess (the launcher's server, the self check);
     - kcgx.state.STATE_PATH, for anything in-process that ignores the env
       var -- the constant is bound at import, so patching HOME cannot
       reach it;

@@ -1,19 +1,9 @@
-"""Tests for the wiring: discovering feeds, building sessions, starting up."""
+"""squelch.runtime: discovering an airport's feeds, building sessions, and
+filling the feed cache. Moved here from the terminal app's test_main.py when
+the terminal app was retired in phase E; the server uses all of it."""
 
 from __future__ import annotations
 
-import pytest
-
-from squelch.__main__ import (
-    FFMPEG_MISSING,
-    build_sessions,
-    load_feeds,
-    main,
-    parse_args,
-    refresh_feeds,
-    report_audio_failure,
-    safe_call,
-)
 from squelch.config import Config
 from squelch.feeds import (
     COLD_FETCH_ATTEMPTS,
@@ -22,6 +12,11 @@ from squelch.feeds import (
     read_cached_feeds,
 )
 from squelch.mixer import Mixer
+from squelch.runtime import (
+    build_sessions,
+    load_feeds,
+    refresh_feeds,
+)
 from squelch.session import FeedSession
 
 FEEDS = [
@@ -32,18 +27,6 @@ FEEDS = [
 
 
 # -- arguments -------------------------------------------------------------
-
-
-def test_defaults_come_from_config():
-    args = parse_args([])
-    assert args.feed is None
-    assert args.icao is None
-
-
-def test_feed_and_icao_overrides():
-    args = parse_args(["--feed", "ksea_twr", "--icao", "KSEA"])
-    assert args.feed == "ksea_twr"
-    assert args.icao == "KSEA"
 
 
 # -- feed discovery --------------------------------------------------------
@@ -152,139 +135,6 @@ def test_building_no_sessions_does_not_crash():
 # -- misc ------------------------------------------------------------------
 
 
-def test_safe_call_swallows_an_app_that_is_not_running():
-    class DeadApp:
-        def call_from_thread(self, func, *args):
-            raise RuntimeError("App is not running")
-
-    safe_call(DeadApp(), lambda: None)  # must not raise
-
-
-# -- main() ----------------------------------------------------------------
-
-
-class FakeApp:
-    def __init__(self, config, sessions, **kwargs):
-        self.config = config
-        self.sessions = sessions
-        self.on_start = lambda: None
-        self.on_feed_selected = lambda feed: None
-        self.warnings = []
-        self.ran = False
-
-    def warn(self, message):
-        self.warnings.append(message)
-
-    def start_streams(self):
-        # Which sessions get a stream is SquelchApp's call (tests/test_app.py
-        # covers it); here every one does, so main's wiring is what is tested.
-        for session in self.sessions:
-            session.start()
-
-    def run(self):
-        self.ran = True
-        self.on_start()
-
-
-def run_main(argv=None, **overrides):
-    holder = {}
-
-    def app_factory(config, sessions, **kwargs):
-        holder["app"] = FakeApp(config, sessions, **kwargs)
-        return holder["app"]
-
-    kwargs = dict(
-        app_factory=app_factory,
-        feeds_loader=lambda config, warn: FEEDS,
-        sessions_builder=lambda feeds, config, events, mixer=None: [
-            StubSession(f, events) for f in feeds
-        ],
-        which=lambda name: f"/usr/bin/{name}",
-    )
-    kwargs.update(overrides)
-    code = main(argv or [], **kwargs)
-    return code, holder.get("app")
-
-
-def test_main_starts_every_session():
-    code, app = run_main()
-    assert code == 0
-    assert app.ran
-    assert all(s.started for s in app.sessions)
-
-
-def test_main_stops_every_session_even_if_the_ui_raises():
-    """A dozen ffmpeg processes and PortAudio streams must not be left behind."""
-    holder = {}
-
-    class ExplodingApp(FakeApp):
-        def run(self):
-            self.on_start()
-            raise RuntimeError("ui blew up")
-
-    def app_factory(config, sessions, **kwargs):
-        holder["app"] = ExplodingApp(config, sessions, **kwargs)
-        return holder["app"]
-
-    with pytest.raises(RuntimeError):
-        main(
-            [],
-            app_factory=app_factory,
-            feeds_loader=lambda config, warn: FEEDS,
-            sessions_builder=lambda feeds, config, events, mixer=None: [
-                StubSession(f, events) for f in feeds
-            ],
-            which=lambda name: f"/usr/bin/{name}",
-        )
-    assert all(s.stopped for s in holder["app"].sessions)
-
-
-def test_main_refuses_to_start_without_ffmpeg(capsys):
-    code, app = run_main(which=lambda name: None)
-    assert code == 2
-    assert app is None, "the UI must not start with no way to decode audio"
-    assert "brew install ffmpeg" in capsys.readouterr().err
-
-
-def test_discovery_warnings_are_replayed_once_the_ui_is_running():
-    """Warnings raised before the app exists have nowhere to go yet."""
-
-    def loader(config, warn):
-        warn("could not list feeds for KPDX")
-        return FEEDS[:1]
-
-    _code, app = run_main(feeds_loader=loader)
-    assert "could not list feeds for KPDX" in app.warnings
-
-
-def test_main_rejects_an_invalid_config_before_starting_the_ui(tmp_path, monkeypatch):
-    bad = tmp_path / "squelch.toml"
-    bad.write_text("feed = 3\n")  # must be a string
-    import squelch.config as config_module
-
-    monkeypatch.setattr(config_module, "DEFAULT_PATH", bad)
-    started = []
-
-    def app_factory(config, sessions, **kwargs):
-        started.append(config)
-        raise AssertionError("the UI must not start with an unusable config")
-
-    assert main([], app_factory=app_factory) == 2
-    assert started == []
-
-
-def test_cli_overrides_reach_the_sessions():
-    seen = {}
-
-    def loader(config, warn):
-        seen["config"] = config
-        return FEEDS
-
-    run_main(["--icao", "KSEA", "--feed", "ksea_twr"], feeds_loader=loader)
-    assert seen["config"].icao == "KSEA"
-    assert seen["config"].feed == "ksea_twr"
-
-
 # -- feed discovery, cached ------------------------------------------------
 #
 # LiveATC's listing page sits behind Cloudflare bot protection that refuses
@@ -373,8 +223,8 @@ def test_picker_refreshes_but_falls_back_to_the_cache(tmp_path):
     usually says "could not load feeds" is useless — the cache is a far
     better answer than an error.
     """
-    from squelch.__main__ import picker_feeds
     from squelch.feeds import write_cached_feeds
+    from squelch.runtime import picker_feeds
 
     write_cached_feeds("KPDX", FEEDS, directory=tmp_path)
 
@@ -387,8 +237,8 @@ def test_picker_refreshes_but_falls_back_to_the_cache(tmp_path):
 
 
 def test_picker_prefers_a_successful_refresh_and_recaches_it(tmp_path):
-    from squelch.__main__ import picker_feeds
     from squelch.feeds import read_cached_feeds, write_cached_feeds
+    from squelch.runtime import picker_feeds
 
     write_cached_feeds("KPDX", [Feed("old", "Old")], directory=tmp_path)
     fresh = picker_feeds(
@@ -400,7 +250,7 @@ def test_picker_prefers_a_successful_refresh_and_recaches_it(tmp_path):
 
 def test_picker_returns_empty_when_there_is_no_cache_and_no_network(tmp_path):
     """Empty is what makes the app say 'could not load feeds'."""
-    from squelch.__main__ import picker_feeds
+    from squelch.runtime import picker_feeds
 
     def blocked(icao, **_):
         raise RuntimeError("HTTP 403")
@@ -562,20 +412,6 @@ def test_the_first_feed_is_used_when_there_is_no_tower():
 # -- the mixer -------------------------------------------------------------
 
 
-class FakeStream:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def start(self):
-        pass
-
-    def stop(self):
-        pass
-
-    def close(self):
-        pass
-
-
 def test_every_session_gets_a_channel():
     mixer = Mixer()
     feeds = [Feed(ident="a_twr", label="A Tower"), Feed(ident="a_gnd", label="A Ground")]
@@ -596,29 +432,6 @@ def test_the_configured_feed_starts_audible_on_its_channel():
     )
     assert mixer._channels[0].muted is False
     assert mixer._channels[1].muted is True
-
-
-def test_a_failed_audio_device_warns_once_and_still_runs():
-    """Losing sound must not lose the pane."""
-    warnings = []
-    mixer = Mixer()
-
-    def explode(**_kwargs):
-        raise RuntimeError("no device")
-
-    mixer.start(stream_factory=explode)
-    assert mixer.failed is True
-    report_audio_failure(mixer, warnings.append)
-    assert len(warnings) == 1
-    assert "audio" in warnings[0].lower()
-
-
-def test_no_warning_when_the_device_opened():
-    warnings = []
-    mixer = Mixer()
-    mixer.start(stream_factory=lambda **kw: FakeStream(**kw))
-    report_audio_failure(mixer, warnings.append)
-    assert warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -678,26 +491,6 @@ def test_refresh_feeds_reports_a_refusal_without_caching_anything(tmp_path):
     assert "bot protection" in printed, "no hint that this is usually not local"
 
 
-def test_refresh_feeds_does_not_need_ffmpeg_or_a_ui(tmp_path, monkeypatch):
-    """It runs from setup.sh, potentially before the audio path is complete,
-    and has no business starting a mixer or an app to fill a JSON file.
-    """
-    monkeypatch.setattr("squelch.feeds.CACHE_DIR", tmp_path)
-    built = []
-
-    def app_factory(*args, **kwargs):
-        built.append(args)
-        raise AssertionError("--refresh-feeds started the UI")
-
-    code = main(
-        ["--refresh-feeds", "--icao", "KPDX"],
-        app_factory=app_factory,
-        which=lambda name: None,          # ffmpeg absent
-    )
-    assert code in (0, 1), code
-    assert built == [], "the app was constructed"
-
-
 # ---------------------------------------------------------------------------
 
 def test_the_fallback_to_one_feed_still_says_how_to_retry(tmp_path):
@@ -724,45 +517,3 @@ def test_the_fallback_to_one_feed_still_says_how_to_retry(tmp_path):
     assert "403" in message, message
 
 
-def test_a_feed_opened_after_startup_is_still_stopped_at_shutdown():
-    """Shutdown used to iterate the list built before the app existed, which
-    is not where a feed opened from the picker lands. Missing one leaks an
-    ffmpeg process and a decode thread per feed opened that way -- and the
-    picker is the documented recovery from a refused listing, so it is the
-    path most likely to be used on a bad day.
-    """
-    holder = {}
-    late = []
-
-    class OpeningApp(FakeApp):
-        def run(self):
-            self.on_start()
-            # What SquelchApp.open_feed does: build a session, append it to
-            # the app's own list, start it.
-            session = self._opener(Feed(ident="kpdx_gnd", label="Ground"))
-            late.append(session)
-            self._sessions.append(session)
-
-    def app_factory(config, sessions, **kwargs):
-        app = OpeningApp(config, sessions, **kwargs)
-        app._sessions = list(sessions)
-        app._opener = kwargs["feed_opener"]
-        holder["app"] = app
-        return app
-
-    code = main(
-        [],
-        app_factory=app_factory,
-        feeds_loader=lambda config, warn: FEEDS[:1],
-        sessions_builder=lambda feeds, config, events, mixer=None: [
-            StubSession(f, events) for f in feeds
-        ],
-        which=lambda name: f"/usr/bin/{name}",
-    )
-    assert code == 0
-    assert late, "the opener was never reachable from the app"
-    # The point of the test: it is deliberately not in the list main built
-    # before the app existed, which is what shutdown used to iterate.
-    assert late[0] not in holder["app"].sessions
-    assert late[0].stopped, "a feed opened from the picker was left running"
-    assert all(s.stopped for s in holder["app"]._sessions)

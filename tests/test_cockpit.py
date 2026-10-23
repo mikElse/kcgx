@@ -9,9 +9,6 @@ the terminal UI is retired.
 
 from __future__ import annotations
 
-import subprocess
-import sys
-
 import pytest
 
 from squelch.activity import QUIET_SECONDS, SETTLE_ROUNDS
@@ -119,13 +116,6 @@ def ident(cockpit, index):
 # -- shape -----------------------------------------------------------------
 
 
-def test_importing_the_cockpit_does_not_import_textual():
-    """The point of the module. A stray import would make the browser
-    server pay for Textual, and would be the first step back to rules that
-    only a terminal app can reach."""
-    probe = "import sys, squelch.cockpit; sys.exit('textual' in sys.modules)"
-    result = subprocess.run([sys.executable, "-c", probe])
-    assert result.returncode == 0, "squelch.cockpit pulled in textual"
 
 
 def test_sessions_keep_the_order_given():

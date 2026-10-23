@@ -20,11 +20,11 @@ FALLBACK_ICAO = "KPDX"
 def default_path() -> Path:
     """Where the ICAO is remembered, unless a caller says otherwise.
 
-    KCGX_STATE_PATH relocates it. That seam exists so a test can drive the
-    *real* `kcgx-airport pick` -- through bin/kcgx, through uv, all the way
-    to a written record -- without any of it landing in the developer's own
-    ~/.local/state/kcgx. Read at call time, not import time, so a subprocess
-    inheriting the variable is enough.
+    KCGX_STATE_PATH relocates it, and with it everything kept beside it
+    (prefs.json, server.json, server.log). That seam exists so a test can
+    drive the real launcher and server, as subprocesses, without any of it
+    landing in the developer's own ~/.local/state/kcgx. Read at call time,
+    not import time, so a subprocess inheriting the variable is enough.
 
     The `path=` keyword on read_airport/write_airport stays the more
     specific override: an explicit argument always beats the environment.
