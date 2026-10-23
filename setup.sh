@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 # setup.sh — install everything kcgx needs, prove it works, open the cockpit.
 #
-# Nine steps. Each announces itself, each asks before changing anything, and
+# Seven steps. Each announces itself, each asks before changing anything, and
 # each is idempotent -- so the second run, the one you do when you think
 # something went wrong, ends exactly where the first did.
 #
 # The contract is that reaching the end means the cockpit works: every
-# dependency installed, every config written, and step 9 having actually run
-# each moving part rather than having checked that a file exists. A setup
-# script that finishes and leaves you with a broken pane has not finished.
+# dependency installed, and step 7 having actually started the server and
+# asked it for the page and its WebSocket, rather than having checked that a
+# file exists. A setup script that finishes and leaves you with a broken
+# page has not finished.
+#
+# Phase E of the web cockpit (2026-10-22) took out tmux, adsb-tui and its
+# config, and the terminal width check: the cockpit is a page in your
+# browser now, and the radar is the server's own.
 #
 # Test seams (all default to production behaviour when unset):
 #   KCGX_SETUP_YES         non-empty takes every prompt's default answer
 #   KCGX_SETUP_NO_LAUNCH   non-empty stops before exec'ing the launcher
-#   KCGX_SETUP_RELEASE_URL base URL for the adsb-tui release tarball
 #   KCGX_SETUP_OS          override the detected operating system
-#   KCGX_SETUP_PLATFORM    override the detected release asset name
 #   KCGX_SETUP_PKG         override the detected package manager
 #   KCGX_SETUP_SKIP_NET    non-empty skips the two reachability probes
 
@@ -23,33 +26,19 @@ set -euo pipefail
 
 REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Set by detect_platform, read by nearly every step. Declared here so the
+# Set by resolve_platform, read by nearly every step. Declared here so the
 # ordering is explicit rather than a happy accident of which step runs first.
 OS=""        # macos | linux | unsupported
-PLATFORM=""  # macos-arm64 | macos-x64 | linux-x64 | unsupported
 PKG=""       # brew | apt | dnf | pacman | none
 SUDO=""      # "" when root or on brew, else "sudo"
 
-ADSB_VERSION="v0.2.1"
-RELEASE_URL="${KCGX_SETUP_RELEASE_URL:-https://github.com/j4v3l/ADS-B_TUI/releases/download}"
 PREFIX="$HOME/.local/bin"
-# adsb-tui resolves its config under XDG, and says so in its own --help:
-# "default path is $XDG_CONFIG_HOME/ads-b-tui/adsb-tui.toml". Hardcoding
-# ~/.config wrote a file it would never read on a machine that sets the
-# variable -- setup reported success and the radar came up empty.
-ADSB_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ads-b-tui/adsb-tui.toml"
-# adsb.lol 403s a request that carries no User-Agent. One spelling, shared by
-# the config step 7 writes and the check step 9 makes -- a check that proves a
-# different request than the app sends proves nothing.
-#
-# bin/kcgx holds the same string, because the cockpit passes the UA to
-# adsb-tui as a flag rather than trusting the config file to still hold it
-# (the comment on ADSB_UA there has the why). Two literals in two scripts is
-# the price of neither one being sourceable by the other; tests/test_setup.py
-# fails the moment they disagree.
+# adsb.lol 403s a request that carries no User-Agent. Step 7's probe sends the
+# one the server's radar sends (kcgx.radar.DEFAULT_UA): a check that proves a
+# different request than the app sends proves nothing. The two are literals
+# in two languages, and tests/test_setup.py fails the moment they disagree.
 ADSB_UA="kcgx/0.1 (+https://github.com/mikElse/kcgx)"
-MIN_COLS=100
-STEPS=9
+STEPS=7
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'setup: %s\n' "$*" >&2; }
@@ -84,18 +73,9 @@ confirm() {  # $1=question $2=default(y|n); returns 0 to proceed
 
 # -- platform ---------------------------------------------------------------
 #
-# Keyed on uname -s AND uname -m, not on -m alone. Keyed on the machine only,
-# an x86_64 Linux box resolved to `macos-x64`, downloaded a Mach-O binary that
-# unpacked cleanly and tested executable, and was reported as installed. The
-# first sign of trouble was an empty radar pane with no error anywhere.
-detect_platform() {
-    case "$(uname -s)-$(uname -m)" in
-        Darwin-arm64|Darwin-aarch64) printf 'macos-arm64' ;;
-        Darwin-x86_64)               printf 'macos-x64' ;;
-        Linux-x86_64)                printf 'linux-x64' ;;
-        *)                           printf 'unsupported' ;;
-    esac
-}
+# Any processor will do. Setup used to key a release download on the machine
+# (adsb-tui published macOS and x86_64 Linux binaries only), which made ARM
+# Linux a stopping point; with nothing to download there is nothing to match.
 
 detect_os() {
     case "$(uname -s)" in
@@ -115,11 +95,10 @@ detect_pkg() {
     printf 'none'
 }
 
-# One place that settles all four, so `--verify` and a full run cannot
+# One place that settles all three, so `--verify` and a full run cannot
 # disagree about what machine they are on.
 resolve_platform() {
     OS="${KCGX_SETUP_OS:-$(detect_os)}"
-    PLATFORM="${KCGX_SETUP_PLATFORM:-$(detect_platform)}"
     PKG="${KCGX_SETUP_PKG:-$(detect_pkg)}"
     detect_sudo
 }
@@ -137,16 +116,16 @@ detect_sudo() {
     return 0
 }
 
-# $1 = ffmpeg | tmux | portaudio. Empty output means "not a package here".
+# $1 = ffmpeg | portaudio. Empty output means "not a package here".
 pkg_name() {
     case "$1" in
-        ffmpeg|tmux) printf '%s' "$1" ;;
+        ffmpeg) printf '%s' "$1" ;;
         portaudio)
             # Only Linux. The sounddevice wheel bundles its own PortAudio on
             # macOS, which is why this dependency stayed invisible for so
             # long: on Linux the same wheel ships no library at all and
             # `import sounddevice` dies with "PortAudio library not found"
-            # before squelch draws anything.
+            # before the server can play anything.
             case "$PKG" in
                 apt)        printf 'libportaudio2' ;;
                 dnf|pacman) printf 'portaudio' ;;
@@ -170,39 +149,10 @@ pkg_install_cmd() {  # $* = packages
 # terminates a pipeline early. `set -o pipefail` is on, and a `| head -1` or a
 # `| grep -q` sends SIGPIPE upstream the moment it has what it wants: the
 # pipeline then reports 141 and the whole probe reads as a missing tool. It
-# fires on output long enough to still be flowing, so `tmux -V` got away with
-# it and `ffmpeg -version` did not.
+# fires on output long enough to still be flowing, which `ffmpeg -version`
+# is.
 
-# tmux 3.1+ is required by bin/kcgx for `split-window -l <cells>`.
-# The regex, not $2: builds spell it "3.2a" and "next-3.4".
-tmux_version() {
-    tmux -V 2>/dev/null |
-        awk 'match($0, /[0-9]+\.[0-9]+/) && !v { v = substr($0, RSTART, RLENGTH) }
-             END { print v }'
-}
-
-tmux_new_enough() {
-    local version
-    have_command tmux || return 1
-    version="$(tmux_version)"
-    [ -n "$version" ] || return 1
-    awk -v v="$version" 'BEGIN {
-        split(v, p, ".");
-        exit !(p[1] > 3 || (p[1] == 3 && p[2] >= 1))
-    }'
-}
-
-# On PATH, or already sitting in the directory setup installs into. Both the
-# preflight and step 6 ask this one question, so a second run cannot report
-# "missing" and then "already installed" in the same breath -- which is
-# exactly what happens when $PREFIX is not on PATH.
-adsb_installed() { have_command adsb-tui || [ -x "$PREFIX/adsb-tui" ]; }
-
-adsb_binary() {
-    if have_command adsb-tui; then command -v adsb-tui; else printf '%s' "$PREFIX/adsb-tui"; fi
-}
-
-# The install decision only. The truth is `import sounddevice` in step 9:
+# The install decision only. The truth is `import sounddevice` in step 7:
 # ldconfig can be absent or unreadable, and a false "missing" here costs one
 # no-op package install, while a false "present" costs a silent audio failure.
 portaudio_present() {
@@ -221,7 +171,6 @@ version_of() {  # best-effort, for the table only
     case "$1" in
         uv)     uv --version 2>/dev/null | awk 'NR == 1 { v = $2 } END { print v }' ;;
         ffmpeg) ffmpeg -version 2>/dev/null | awk 'NR == 1 { v = $3 } END { print v }' ;;
-        tmux)   tmux_version ;;
         curl)   curl --version 2>/dev/null | awk 'NR == 1 { v = $2 } END { print v }' ;;
     esac
 }
@@ -230,7 +179,6 @@ version_of() {  # best-effort, for the table only
 missing_packages() {
     local needed=""
     have_command ffmpeg  || needed="$needed $(pkg_name ffmpeg)"
-    tmux_new_enough      || needed="$needed $(pkg_name tmux)"
     portaudio_present    || needed="$needed $(pkg_name portaudio)"
     # shellcheck disable=SC2086
     set -- $needed
@@ -253,35 +201,16 @@ check_pyenv() {
     esac
 }
 
-terminal_cols() {
-    local winsize
-    if winsize="$(stty size 2>/dev/null </dev/tty)"; then
-        printf '%s' "${winsize##* }"
-    elif [ -n "${COLUMNS:-}" ]; then
-        printf '%s' "$COLUMNS"
-    fi
-}
-
-check_width() {
-    local cols
-    cols="$(terminal_cols)"
-    case "$cols" in ''|*[!0-9]*) return 0 ;; esac
-    if [ "$cols" -lt "$MIN_COLS" ]; then
-        say ""
-        say "  note: this terminal is $cols columns; kcgx needs $MIN_COLS."
-    fi
-}
-
 # What to do about whatever the table reported as missing. It belongs beside
 # the finding rather than only in the steps that follow: `--check` exits
 # straight after this, so for anyone reading the table first -- which is the
 # point of --check -- a remedy printed three steps later is no remedy. A table
-# naming five tools and no way to get any of them restates the "which
+# naming tools and no way to get any of them restates the "which
 # prerequisites do I need?" problem instead of answering it.
 missing_advice() {
     local packages
     packages="$(missing_packages)"
-    [ -z "$packages" ] && have_command uv && adsb_installed && return 0
+    [ -z "$packages" ] && have_command uv && return 0
 
     say ""
     say "To install what is missing:"
@@ -294,8 +223,6 @@ missing_advice() {
     fi
     have_command uv ||
         say "  curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh"
-    adsb_installed ||
-        say "  ./setup.sh   fetches adsb-tui $ADSB_VERSION from its published release"
     say ""
     say "Or run ./setup.sh, which does all of it, asking before each step."
 }
@@ -306,28 +233,17 @@ preflight() {
     resolve_platform
     step 1 "What you have"
 
-    row "platform" "$PLATFORM"
+    row "platform" "$OS $(uname -m)"
     row "packages" "$PKG"
     say ""
     have_command uv     && row uv     "found    $(version_of uv)"     || row uv     "missing"
     have_command ffmpeg && row ffmpeg "found    $(version_of ffmpeg)" || row ffmpeg "missing"
-    if have_command tmux; then
-        if tmux_new_enough; then
-            row tmux "found    $(version_of tmux)"
-        else
-            row tmux "too old  $(version_of tmux) (needs 3.1+)"
-        fi
-    else
-        row tmux "missing"
-    fi
-    have_command curl && row curl "found    $(version_of curl)" || row curl "missing"
+    have_command curl   && row curl   "found    $(version_of curl)"   || row curl   "missing"
     if [ "$OS" = "linux" ]; then
         portaudio_present && row portaudio "found" || row portaudio "missing"
     fi
-    adsb_installed && row adsb-tui "found" || row adsb-tui "missing"
 
     check_pyenv
-    check_width
     missing_advice
 }
 
@@ -339,7 +255,7 @@ install_packages() {
 
     packages="$(missing_packages)"
     if [ -z "$packages" ]; then
-        say "ffmpeg, tmux and PortAudio are all present. Nothing to install."
+        say "ffmpeg and PortAudio are both present. Nothing to install."
         return 0
     fi
 
@@ -368,10 +284,10 @@ Install them as root, then run this again."
     say ""
     case " $packages " in
         *" libportaudio2 "*|*" portaudio "*)
-            say "PortAudio is what squelch plays sound through. Without it"
-            say "\`import sounddevice\` fails outright and the audio pane cannot"
-            say "start -- on macOS the Python wheel carries its own copy, on"
-            say "Linux it does not."
+            say "PortAudio is what the cockpit plays sound through. Without it"
+            say "\`import sounddevice\` fails outright and nothing can be heard"
+            say "-- on macOS the Python wheel carries its own copy, on Linux it"
+            say "does not."
             say ""
             ;;
     esac
@@ -443,7 +359,9 @@ sync_project() {
     say ""
     say "  numpy        the mixer's sum and scale"
     say "  sounddevice  the output stream (PortAudio, from step 2)"
-    say "  textual      both terminal UIs"
+    say "  starlette    the cockpit's local web server"
+    say "  uvicorn      what runs it"
+    say "  websockets   the page's live connection"
     say ""
     say "Nothing is installed outside this directory."
     say ""
@@ -505,7 +423,7 @@ Remove it yourself if you want setup to manage it."
 Remove it yourself if you want setup to manage it."
     else
         # A symlink rather than a copy: bin/kcgx resolves its own repo root
-        # through symlinks, and a copy would look for kcgx.tmux.conf in
+        # through symlinks, and a copy would look for the project in
         # ~/.local/.
         ln -s "$target" "$link"
         say "Linked $link -> $target"
@@ -520,11 +438,8 @@ Remove it yourself if you want setup to manage it."
     say ""
     say "$PREFIX is NOT on your PATH."
     say ""
-    say "This is not only about typing \`kcgx\`. Ctrl-b a -- the airport"
-    say "picker -- is bound to \`display-popup -E \"kcgx go\"\`, which resolves"
-    say "kcgx by name through the tmux server's own environment. Without it"
-    say "the cockpit opens fine and the picker silently does nothing, which"
-    say "is the least debuggable way for this to be broken."
+    say "Without it the cockpit still starts as $REPO/bin/kcgx, but"
+    say "not as plain \`kcgx\` from any terminal."
     say ""
     say "  $(profile_line)"
     say ""
@@ -538,7 +453,7 @@ edit. Add the line above to it yourself."
     say "That line can go in $profile."
     if ! confirm "Append it to $profile?" y; then
         say ""
-        say "Not appended. Add it yourself, or the picker will not work."
+        say "Not appended. Add it yourself to type plain \`kcgx\`."
         return 0
     fi
 
@@ -554,208 +469,60 @@ edit. Add the line above to it yourself."
     mkdir -p "$(dirname "$profile")"
     printf '\n%s\n%s\n' "$PATH_MARKER" "$(profile_line)" >> "$profile"
     say "Appended to $profile."
-    # This shell, so step 9's checks and the launch below see it too.
+    # This shell, so step 7's checks and the launch below see it too.
     PATH="$PREFIX:$PATH"
-    say ""
-    say "Already-running tmux servers captured their environment when they"
-    say "started, so restart them (kcgx stop) before Ctrl-b a will find it."
+    say "Open a new terminal (or source $profile) for it to reach other shells."
 }
 
 # -- step 6 -----------------------------------------------------------------
 
-install_adsb() {
-    step 6 "adsb-tui, the radar pane"
-
-    if adsb_installed; then
-        say "adsb-tui is already installed: $(adsb_binary)"
-        return 0
-    fi
-
-    if [ "$PLATFORM" = "unsupported" ]; then
-        die "adsb-tui publishes no release for $(uname -s) $(uname -m).
-Published: macos-arm64, macos-x64, linux-x64.
-The cockpit needs it. You can build it yourself from
-https://github.com/j4v3l/ADS-B_TUI (it is Rust; expect ~4 GB of toolchain
-for a 3 MB binary), put the result in $PREFIX, and run this again."
-    fi
-
-    say "The radar pane is adsb-tui, from another repository:"
-    say ""
-    say "  https://github.com/j4v3l/ADS-B_TUI  $ADSB_VERSION  ($PLATFORM)"
-    say ""
-    say "  Licence: ADS-B TUI Non-Commercial License -- NOT OSI-approved."
-    say "  This downloads the published release into $PREFIX."
-    say "  Nothing is built from source and cargo is never invoked."
-    say ""
-    confirm "Download adsb-tui now?" y ||
-        die "adsb-tui is required for the cockpit; stopping here."
-
-    have_command curl || die "curl is needed to fetch adsb-tui, and is not installed."
-    mkdir -p "$PREFIX"
-    curl -fL --progress-bar "$RELEASE_URL/$ADSB_VERSION/adsb-tui-$PLATFORM.tar.gz" \
-        | tar xzf - -C "$PREFIX" ||
-        die "could not download adsb-tui from
-  $RELEASE_URL/$ADSB_VERSION/adsb-tui-$PLATFORM.tar.gz
-Check your connection and run this again."
-    chmod +x "$PREFIX/adsb-tui" 2>/dev/null || true
-
-    # A tar that unpacked something other than the binary exits 0 just like a
-    # good one, so "the download worked" is not the same claim as "adsb-tui is
-    # installed". Only make the one that is true.
-    [ -x "$PREFIX/adsb-tui" ] ||
-        die "the adsb-tui archive held no usable binary at $PREFIX/adsb-tui."
-    say "Installed $PREFIX/adsb-tui"
-}
-
-# -- step 7 -----------------------------------------------------------------
-
-# adsb-tui defaults to http://adsb.local/data/aircraft.json -- a receiver on
-# your own network. Without one the radar is empty, so point it at a public
-# aggregator, slowly enough that the aggregator keeps answering.
-#
-# This was airplanes.live until 2026-08-13, when it began answering 403 on
-# every endpoint -- its own root included -- for unauthenticated clients,
-# directing you to email contact@airplanes.live describing your project. A
-# gate, not an outage: the same 403 came back from two unrelated networks
-# and with a browser User-Agent. adsb.lol serves the identical path shape
-# and schema, so the switch is one line.
-#
-# adsb.lol has a gate of its own, and it is easy to mistake for the same
-# wall: it answers 403 "User-Agent too generic; include valid contact info."
-# to a request carrying no User-Agent, which is precisely what adsb-tui's
-# HTTP client sends by default. adsb-tui has no --user-agent flag, so the
-# config below smuggles one in through api_key_header.
-#
-# bin/kcgx passes the same pair as flags on every launch, so the cockpit
-# does not depend on these two lines surviving -- and they do not always:
-# adsb-tui deletes api_key from this file whenever its own config screen
-# (C) saves. What the file buys is adsb-tui run on its own, outside the
-# cockpit, which has nothing passing it flags.
-write_adsb_config() {
-    step 7 "Where the radar gets its aircraft"
-
-    if [ -e "$ADSB_CONFIG" ]; then
-        say "$ADSB_CONFIG already exists; leaving it alone."
-        return 0
-    fi
-
-    say "adsb-tui looks for a receiver on your own network by default"
-    say "(http://adsb.local/data/aircraft.json). Without one the radar stays"
-    say "empty, so setup can point it at a public aggregator instead -- no"
-    say "API key, no receiver hardware:"
-    say ""
-    say "  url_template = \"https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}\""
-    say "  refresh_secs = 15"
-    say "  api_key_header = \"User-Agent\"   # adsb.lol 403s a request without one"
-    say ""
-    say "kcgx fills in {lat}/{lon} per launch from the airport you pick."
-    say ""
-    if ! confirm "Write $ADSB_CONFIG?" y; then
-        say "Not written. The radar pane will be empty until you configure it."
-        return 0
-    fi
-
-    mkdir -p "$(dirname "$ADSB_CONFIG")"
-    cat > "$ADSB_CONFIG" <<TOML
-# Written by kcgx setup.sh. Safe to edit -- setup never overwrites it.
-#
-# Live aircraft with no receiver hardware and no API key. kcgx fills in
-# {lat}/{lon} per launch from the airport you pick, so this file does not
-# pin a fixed location of its own.
-url_template = "https://api.adsb.lol/v2/point/{lat}/{lon}/{range_nm}"
-
-# 15 s, not the 2 s that reads like the obvious choice for a live radar.
-# adsb.lol states plainly that "rate limits are dynamic based on the
-# environment load", and it behaves like it: measured from one address,
-# 2 s and 5 s polling drew a steady stream of 429s, and once the limit was
-# tripped the refusal persisted through slower intervals too. That is an
-# over-rate penalty rather than a per-request check, which is why there is
-# no interval that is provably safe -- only intervals that are polite.
-# 15 s polled clean. adsb-tui interpolates between polls and holds the last
-# fix for stale_secs, so the radar still reads live at this rate.
-refresh_secs = 15
-
-# adsb.lol refuses a request that sends no User-Agent -- 403 "User-Agent too
-# generic; include valid contact info." -- and adsb-tui's HTTP client sends
-# none. It has no flag for one either, but api_key_header names an arbitrary
-# header, so point that at User-Agent and the key becomes the UA. The header
-# slot is free: the only provider that wants a real key is airplanes.live,
-# which is not what this file talks to. Put your own contact in here if you
-# fork it -- being reachable is the whole thing adsb.lol is asking for.
-#
-# adsb-tui deletes the api_key line below whenever its own config screen
-# saves -- open it with C and press w, having edited nothing, and it is
-# gone. That is deliberate on its part; it treats the value as a secret.
-# The cockpit survives that because bin/kcgx passes the same pair as flags
-# on every launch, so this line is really for adsb-tui run on its own. Put
-# it back if that stops working.
-api_key_header = "User-Agent"
-api_key = "$ADSB_UA"
-
-# The radar is the point of the left pane, so open on it. adsb-tui's own
-# default is "full", which opens on the table and the stats panel instead.
-layout = "radar"
-
-# Terminal cells are about twice as tall as they are wide, so a circular
-# range ring needs aspect = 2 * (rows - 8) / (cols - 2) -- measured on the
-# radar pane, not the whole terminal. 0.49 suits kcgx's left pane in a
-# ~197-column terminal. Left unset the ring renders as a clipped ellipse,
-# so a wrong-ish number here beats no number; recompute it if your
-# terminal is much narrower or wider.
-radar_aspect = 0.49
-TOML
-    say "Wrote $ADSB_CONFIG"
-}
-
-# -- step 8 -----------------------------------------------------------------
-
 # LiveATC fronts its listing with Cloudflare and refuses roughly three
-# requests in four. squelch handles that by caching the result for a week,
-# so the launch you actually do makes no request at all -- but the *first*
-# launch at an airport has no cache to read, tries eight times, and then
-# opens the single configured feed. At the default airport that reads as
-# "squelch could only find KPDX tower", with no sign that eleven other feeds
-# exist and nothing said about why.
+# requests in four. kcgx handles that by caching the result for a week, so
+# the start you actually do makes no request at all -- but the *first* start
+# at an airport has no cache to read, tries eight times, and then opens the
+# single configured feed. At the default airport that reads as "kcgx could
+# only find KPDX tower", with no sign that eleven other feeds exist and
+# nothing said about why.
 #
 # Filling the cache here is the fix, because here is where waiting is free.
-# Nobody is looking at a UI, so it can try twenty times.
+# Nobody is looking at a page, so it can try twenty times.
 #
 # Not fatal: the feed list is a week-long cache, not a dependency, and
 # LiveATC being unreachable at this moment is no reason to refuse to install
-# an airport radar and a launcher.
+# the cockpit.
 warm_feed_cache() {
     local icao
-    step 8 "The LiveATC feed list"
+    step 6 "The LiveATC feed list"
 
     icao="$(uv run --project "$REPO" python -c '
-from squelch.config import load_config
-print(load_config().icao)
+from kcgx.state import current_icao
+print(current_icao(known=lambda icao: True, warn=lambda line: None))
 ' 2>/dev/null || true)"
     if [ -z "$icao" ]; then
         warn "could not work out which airport to prefetch; skipping."
         return 0
     fi
 
-    say "squelch opens every feed an airport publishes, which means asking"
+    say "The cockpit opens every feed an airport publishes, which means asking"
     say "LiveATC for the list. That request is behind Cloudflare and is"
-    say "refused about three times in four, so squelch caches the answer for"
-    say "a week -- but the first launch at a new airport has nothing cached,"
+    say "refused about three times in four, so kcgx caches the answer for a"
+    say "week -- but the first start at a new airport has nothing cached,"
     say "gives up after eight tries, and opens one feed instead of twelve."
     say ""
     say "Fetching it now avoids that: out here it can retry twenty times and"
     say "nobody is waiting. Takes a minute or two if it is being refused."
     say ""
     if ! confirm "Fetch the feed list for $icao now?" y; then
-        say "Skipped. Run \`uv run --project '$REPO' squelch --refresh-feeds\`"
-        say "later, or just start squelch and press f if it opens short."
+        say "Skipped. Run \`uv run --project '$REPO' kcgx-web --refresh-feeds\`"
+        say "later, or just start kcgx and open FEEDS if it opens short."
         return 0
     fi
 
-    uv run --project "$REPO" squelch --refresh-feeds ||
-        warn "could not cache the feed list; squelch will try again on launch."
+    uv run --project "$REPO" kcgx-web --refresh-feeds --icao "$icao" ||
+        warn "could not cache the feed list; kcgx will try again when it starts."
 }
 
-# -- step 9 -----------------------------------------------------------------
+# -- step 7 -----------------------------------------------------------------
 
 VERIFY_FAILED=0
 VERIFY_WARNED=0
@@ -764,19 +531,10 @@ ok()    { vrow "$1" "ok" "${2:-}"; }
 bad()   { vrow "$1" "FAIL" "${2:-}"; VERIFY_FAILED=$((VERIFY_FAILED + 1)); }
 meh()   { vrow "$1" "warn" "${2:-}"; VERIFY_WARNED=$((VERIFY_WARNED + 1)); }
 
-# Any HTTP response at all proves the host is reachable. LiveATC fronts its
-# listing with Cloudflare and refuses roughly three requests in four, so
-# demanding a 200 here would report a working install as broken.
-reachable() {  # $1=url
-    local code
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$1" 2>/dev/null || true)"
-    [ -n "$code" ] && [ "$code" != "000" ]
-}
-
 # `reachable` only proves that something answered, and a 403 answers. Both
-# providers now refuse a request shape rather than going down, so the checks
-# that matter send exactly what the app sends and insist on a 200. Reporting
-# "adsb.lol reachable" over a radar pane stuck on ERR 403 is how this went
+# providers refuse a request shape rather than going down, so the checks that
+# matter send exactly what the app sends and insist on a 200. Reporting
+# "adsb.lol reachable" over a radar stuck on ERR 403 is how this once went
 # unnoticed for a fortnight.
 serves() {  # $1=url $2=user-agent (optional)
     local code
@@ -791,11 +549,11 @@ serves() {  # $1=url $2=user-agent (optional)
 }
 
 verify() {
-    local version devices cols
-    step 9 "Checking it works"
+    local version devices check
+    step 7 "Checking it works"
 
     say "Running each moving part rather than checking that a file exists --"
-    say "an install that reports success and then opens a broken pane has"
+    say "an install that reports success and then opens a broken page has"
     say "not succeeded."
     say ""
 
@@ -803,65 +561,32 @@ verify() {
     if [ -n "$version" ]; then
         ok "ffmpeg" "$version"
     else
-        bad "ffmpeg" "not runnable; squelch decodes every feed with it"
-    fi
-
-    if tmux_new_enough; then
-        ok "tmux" "$(tmux_version)"
-    else
-        bad "tmux" "missing or older than 3.1; the cockpit is built with it"
-    fi
-
-    # Runs the binary. This is the check that catches an archive for the
-    # wrong platform: a Mach-O binary on Linux is present, executable, and
-    # cannot run, and every file-based test says it is fine.
-    if "$(adsb_binary)" --help >/dev/null 2>&1; then
-        ok "adsb-tui" "$(adsb_binary)"
-    else
-        bad "adsb-tui" "missing, or will not run on this machine"
-    fi
-
-    if [ -e "$ADSB_CONFIG" ]; then
-        # Existence is not the interesting question. Step 7 leaves an existing
-        # config alone by design, so a config written before adsb.lol started
-        # refusing User-Agent-less requests is still sitting there pointing at
-        # adsb.lol with no UA. The cockpit no longer hangs on that -- bin/kcgx
-        # passes the pair as flags -- but adsb-tui run on its own still does,
-        # and so does anything else reading this file. Worth being specific
-        # either way: the cure is two lines, and nothing else in the file
-        # hints at them.
-        if grep -q 'adsb\.lol' "$ADSB_CONFIG" 2>/dev/null &&
-           ! grep -qi '^[[:space:]]*api_key_header[[:space:]]*=[[:space:]]*"User-Agent"' \
-                "$ADSB_CONFIG" 2>/dev/null; then
-            meh "radar config" \
-                "reads adsb.lol with no User-Agent; adsb-tui alone gets a 403"
-            say "      The cockpit is fine: kcgx passes the User-Agent to the"
-            say "      radar pane as a flag on every launch. Running adsb-tui"
-            say "      yourself is not -- it sends none and has no flag for"
-            say "      one. Add these two lines to $ADSB_CONFIG:"
-            say "        api_key_header = \"User-Agent\""
-            say "        api_key = \"$ADSB_UA\""
-        else
-            ok "radar config" "$ADSB_CONFIG"
-        fi
-    else
-        meh "radar config" "absent; the radar will have nowhere to read from"
+        bad "ffmpeg" "not runnable; the cockpit decodes every feed with it"
     fi
 
     # The one check that proves step 2 and step 4 landed together: sounddevice
     # imports only if PortAudio is installed *and* the venv is synced.
-    if uv run --project "$REPO" python -c 'import numpy, sounddevice, textual' \
+    if uv run --project "$REPO" python -c 'import numpy, sounddevice, starlette, uvicorn, websockets' \
         >/dev/null 2>&1; then
-        ok "python deps" "numpy, sounddevice, textual"
+        ok "python deps" "numpy, sounddevice, starlette, uvicorn, websockets"
     else
         bad "python deps" "import failed -- run: uv run --project '$REPO' python -c 'import sounddevice'"
     fi
 
-    if uv run --project "$REPO" squelch --help >/dev/null 2>&1; then
-        ok "squelch" "starts"
-    else
-        bad "squelch" "will not start"
-    fi
+    # Starts the real server, as the demo (no network, no audio, nothing
+    # remembered), on a free port, and asks it for what a page asks for: its
+    # health, the page, and the WebSocket's first frame; then stops it.
+    # kcgx.selfcheck prints a row per check and a last line saying how it went.
+    check="$(uv run --project "$REPO" python -m kcgx.selfcheck 2>&1 || true)"
+    case "$check" in
+        *"selfcheck ok"*)
+            ok "server" "health, page and WebSocket answer"
+            ;;
+        *)
+            bad "server" "would not serve the cockpit:"
+            printf '%s\n' "$check" | sed -n '/FAIL/s/^/      /p'
+            ;;
+    esac
 
     # A machine with PortAudio but no output device is a real state (headless
     # boxes, containers, an unplugged dock) and not one setup can fix, so it
@@ -878,7 +603,7 @@ print(sum(1 for d in sounddevice.query_devices() if d["max_output_channels"] > 0
     if have_command kcgx; then
         ok "kcgx on PATH" "$(command -v kcgx)"
     else
-        meh "kcgx on PATH" "the Ctrl-b a picker will do nothing (step 5)"
+        meh "kcgx on PATH" "start it as $REPO/bin/kcgx until it is (step 5)"
     fi
 
     if [ -z "${KCGX_SETUP_SKIP_NET:-}" ]; then
@@ -897,18 +622,6 @@ print(sum(1 for d in sounddevice.query_devices() if d["max_output_channels"] > 0
             meh "adsb.lol" "refused the request; the radar will stay empty"
         fi
     fi
-
-    cols="$(terminal_cols)"
-    case "$cols" in
-        ''|*[!0-9]*) ;;
-        *)
-            if [ "$cols" -lt "$MIN_COLS" ]; then
-                meh "terminal width" "$cols columns; kcgx refuses below $MIN_COLS"
-            else
-                ok "terminal width" "$cols columns"
-            fi
-            ;;
-    esac
 
     say ""
     if [ "$VERIFY_FAILED" -gt 0 ]; then
@@ -933,7 +646,7 @@ usage() {
     say "  (no arguments)  install everything kcgx needs and open the cockpit,"
     say "                  asking before each step that changes anything"
     say "  --check         print what you have and what is missing, then exit"
-    say "  --verify        run the step 9 checks against this machine, then exit"
+    say "  --verify        run the step 7 checks against this machine, then exit"
     say "  --yes           take every prompt's default (including appending to"
     say "                  your shell profile); for unattended installs"
     say "  --help, -h      this message"
@@ -971,18 +684,17 @@ install_packages
 install_uv
 sync_project
 link_launcher
-install_adsb
-write_adsb_config
 warm_feed_cache
 verify
 
 say ""
-say "Setup complete. Opening the cockpit..."
+say "Setup complete. Opening the cockpit in your browser..."
 
 if [ -n "${KCGX_SETUP_NO_LAUNCH:-}" ]; then
     exit 0
 fi
 
 # By absolute path, not by name: a PATH the user has not reloaded yet must
-# not stop the cockpit opening on this first run.
+# not stop the cockpit opening on this first run. bin/kcgx starts the server
+# in the background and opens the page.
 exec "$REPO/bin/kcgx"
