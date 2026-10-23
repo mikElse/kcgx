@@ -1,8 +1,7 @@
-"""Loading an airport's feeds and building their sessions, with no UI.
-
-Moved out of squelch.__main__ so the web server can use exactly what the
-terminal app uses without importing Textual. squelch.__main__ re-exports
-every name here, so nothing that imported them from there has to change.
+"""Loading an airport's feeds, building their sessions, and filling the feed
+cache, with no UI. The web server's station uses all of it; it was moved
+here from the terminal app's __main__ in phase B, and the terminal app was
+retired in phase E.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ from typing import Any
 from squelch.config import Config
 from squelch.feeds import (
     CACHE_TTL_SECONDS,
+    REFRESH_ATTEMPTS,
     Feed,
     FeedError,
     cached_age_seconds,
@@ -30,7 +30,7 @@ AUDIO_FAILED = (
 
 FFMPEG_MISSING = (
     "ffmpeg not found on PATH — squelch decodes feeds with it. "
-    "Install it (macOS: brew install ffmpeg) and start squelch again."
+    "Install it (macOS: brew install ffmpeg) and start kcgx again."
 )
 
 
@@ -183,6 +183,48 @@ def picker_feeds(
         write_cached_feeds(config.icao, feeds, directory=cache_dir)
         return feeds
     return read_cached_feeds(config.icao, directory=cache_dir) or []
+
+
+def refresh_feeds(
+    config: Config,
+    *,
+    out: Callable[[str], None] = print,
+    fetch: Callable[..., list[Feed]] = fetch_feeds,
+    cache_dir: Path | None = None,
+) -> int:
+    """Fill the feed cache for `config.icao` from outside the cockpit.
+
+    This exists because of where the waiting can happen. LiveATC fronts its
+    listing with Cloudflare and refuses roughly three requests in four, so a
+    cold start is a coin flip: the station tries eight times and then opens
+    the single configured feed, which at the default airport reads as "kcgx
+    only found KPDX tower" and gives no sign that the other eleven feeds
+    exist. More attempts at start is not the answer: that trades a wrong
+    stack for one that takes a minute to appear.
+
+    Out here nobody is waiting on a page, so it can afford to be patient.
+    Once this has run, starts read the cache and make no request at all.
+    `kcgx-web --refresh-feeds` runs it; setup.sh step 6 calls that.
+    """
+    out(f"Fetching the LiveATC feed list for {config.icao}...")
+    try:
+        feeds = fetch(config.icao, cache_dir=cache_dir, attempts=REFRESH_ATTEMPTS)
+    except FeedError:
+        out(f"LiveATC publishes no feeds for {config.icao}.")
+        return 1
+    except Exception as exc:  # noqa: BLE001 -- anything here is one more refusal to report
+        out(f"Could not reach LiveATC's listing for {config.icao}: {exc}")
+        out("This is usually its bot protection rather than anything local.")
+        out("Nothing was cached; try again, or just start kcgx.")
+        return 1
+    if not feeds:
+        out(f"LiveATC publishes no feeds for {config.icao}.")
+        return 1
+    write_cached_feeds(config.icao, feeds, directory=cache_dir)
+    out(f"Cached {len(feeds)} feed(s) for {config.icao}:")
+    for feed in feeds:
+        out(f"  {feed.ident:<18} {feed.label}")
+    return 0
 
 
 def preferred_index(feeds: list[Feed]) -> int:

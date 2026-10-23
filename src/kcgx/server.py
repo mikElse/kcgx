@@ -306,6 +306,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="synthetic feeds: no network, no ffmpeg, no audio, nothing remembered",
     )
+    parser.add_argument(
+        "--refresh-feeds",
+        action="store_true",
+        help="fetch and cache the airport's LiveATC feed list, then exit; no server, no audio",
+    )
     return parser.parse_args(argv)
 
 
@@ -327,10 +332,22 @@ def main(
     mixer_factory: Callable[..., Any] | None = None,
     out: Callable[[str], None] = print,
 ) -> int:
+    from dataclasses import replace
+
     from squelch.config import ConfigError, load_config
-    from squelch.runtime import FFMPEG_MISSING
+    from squelch.runtime import FFMPEG_MISSING, refresh_feeds
 
     args = parse_args(argv)
+    if args.refresh_feeds:
+        # Before the ffmpeg check: filling the cache needs no decoder, and a
+        # machine part way through setup should still be able to warm it.
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            print(f"kcgx-web: {exc}", file=sys.stderr)
+            return 2
+        icao = (args.icao or current_icao(known=lambda i: True, warn=out)).upper()
+        return refresh_feeds(replace(config, icao=icao), out=out)
     if not args.demo and which("ffmpeg") is None:
         print(f"kcgx-web: {FFMPEG_MISSING}", file=sys.stderr)
         return 2

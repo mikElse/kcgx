@@ -461,3 +461,28 @@ def test_radar_off_means_no_polling():
     with client(radar_app(lambda *a: calls.append(a) or {"ac": []}, radar=False)) as http, http.websocket_connect(WS) as ws:
         ready(ws)
     assert calls == []
+
+
+# -- --refresh-feeds -------------------------------------------------------------
+
+
+def test_refresh_feeds_fills_the_cache_without_ffmpeg_or_a_server(monkeypatch, tmp_path):
+    """setup.sh runs it, possibly before the audio path is complete: it has
+    no business starting a mixer or a server to fill a JSON file."""
+    monkeypatch.setattr("squelch.config.DEFAULT_PATH", tmp_path / "missing.toml")
+    asked = []
+    monkeypatch.setattr("squelch.runtime.refresh_feeds", lambda config, out: asked.append(config.icao) or 0)
+    code = main(["--refresh-feeds", "--icao", "ksea"], which=lambda n: None, serve=pytest.fail,
+                mixer_factory=pytest.fail, out=lambda line: None)
+    assert code == 0 and asked == ["KSEA"]
+
+
+def test_refresh_feeds_defaults_to_the_remembered_airport(monkeypatch, tmp_path):
+    from kcgx.state import write_airport
+
+    monkeypatch.setattr("squelch.config.DEFAULT_PATH", tmp_path / "missing.toml")
+    write_airport("KORD")
+    asked = []
+    monkeypatch.setattr("squelch.runtime.refresh_feeds", lambda config, out: asked.append(config.icao) or 1)
+    assert main(["--refresh-feeds"], which=lambda n: None, serve=pytest.fail, out=lambda line: None) == 1
+    assert asked == ["KORD"]

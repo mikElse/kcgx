@@ -151,7 +151,7 @@ FETCH_ATTEMPTS = 5
 # four getting through, five attempts succeed about 76% of the time and
 # eight about 90% -- worth a few extra seconds exactly once per airport.
 COLD_FETCH_ATTEMPTS = 8
-# For `squelch --refresh-feeds`, which runs with nobody waiting on a UI --
+# For `kcgx-web --refresh-feeds`, which runs with nobody waiting on a page --
 # from setup.sh, or by hand. At roughly one request in four getting through,
 # twenty attempts fail about 0.3% of the time against eight's 10%, and the
 # only thing it costs is a wall clock nobody is watching. Launch keeps the
