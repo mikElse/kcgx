@@ -21,6 +21,7 @@ squelch = "squelch.__main__:main"
 kcgx-airport = "kcgx.__main__:main"
 kcgx-status = "kcgx.status:main"
 kcgx-web = "kcgx.server:main"
+kcgx = "kcgx.launcher:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
