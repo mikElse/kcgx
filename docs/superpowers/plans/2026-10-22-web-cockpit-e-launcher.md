@@ -4568,6 +4568,19 @@ git show squelch-with-transcription:src/squelch/asr.py
 
 ---
 
+## Execution record
+
+Built 2026-10-23 on `feat/web-cockpit`, one commit per task (20357bc to
+0a1b35c), from the dry-run files; outside `docs/`, the branch's tree is the
+dry run's, hash for hash. On the branch, in the Mac's sandbox without the
+browser tests, after every task: 985, 987, 1006, 1010, 997, 937, 937, 624
+and 624 passed, which is the counts above less `test_page.py` (24, then 26
+from Task 7), skipped there. `bin/kcgx` ran through a symlink in the same
+sandbox, with its state in a temporary folder: `status` (not running, exit
+3), `--demo --no-open`, `status`, `go KSEA`, `stop`, `status`. The
+`terminal-cockpit` tag is on `main` at 5dcf0c7. Task 10, the checks by hand
+on the Mac, is next.
+
 ## Self-Review Notes
 
 - **Dry run, 2026-10-22.** Every file above was built in a scratch copy of

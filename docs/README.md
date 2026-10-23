@@ -4,7 +4,7 @@ Each piece of work gets a **spec** (what and why, agreed before any code) and a
 **plan** (task-by-task TDD steps, agreed before implementation). Specs live in
 `superpowers/specs/`, plans in `superpowers/plans/`.
 
-## Web cockpit: phases A to D built
+## Web cockpit: all five phases built
 
 The cockpit as a local web app: audio stays on the server, the browser is
 the display and the controls, and our own vector radar in a WarGames style
@@ -18,7 +18,7 @@ Start with the [spec](superpowers/specs/2026-10-18-web-cockpit-design.md).
 | **B** | server, routes, WebSocket, levels loop | [plan](superpowers/plans/2026-10-18-web-cockpit-b-server.md) | built; audio confirmed on the Mac |
 | **C** | page: status, feed stack, meters, config, feed picker, log | [plan](superpowers/plans/2026-10-19-web-cockpit-c-page.md) | built; checked by hand on the Mac |
 | **D** | radar: geodata, vector renderer, poller, palettes, display effects | [plan](superpowers/plans/2026-10-19-web-cockpit-d-radar.md) | built; checked by hand on the Mac |
-| **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | [plan](superpowers/plans/2026-10-22-web-cockpit-e-launcher.md) | planned |
+| **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | [plan](superpowers/plans/2026-10-22-web-cockpit-e-launcher.md) | built; to check by hand on the Mac |
 
 ## Audio pane upgrades — planned, not started
 
