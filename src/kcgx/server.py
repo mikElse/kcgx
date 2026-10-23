@@ -158,6 +158,7 @@ def create_app(
         return JSONResponse(
             {
                 "ok": True,
+                "app": "kcgx",  # how the launcher tells this server from anything else on the port
                 "version": _version(),
                 "protocol": protocol.PROTOCOL,
                 "icao": station.icao,

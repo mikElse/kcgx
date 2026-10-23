@@ -84,6 +84,12 @@ def test_health_answers_once_up():
     assert body["protocol"] == 1
 
 
+def test_health_names_the_app_so_the_launcher_knows_its_own_server():
+    asgi, _ = app()
+    with client(asgi) as http:
+        assert http.get("/api/health").json()["app"] == "kcgx"
+
+
 @pytest.mark.parametrize("base", ["http://evil.example:8473", "http://192.168.1.20:8473"])
 def test_a_request_naming_another_host_is_refused(base):
     asgi, _ = app()
