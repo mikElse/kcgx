@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 URL = "https://api.adsb.lol/v2/point/{lat:.4f}/{lon:.4f}/{range}"
-# The same identifying string bin/kcgx and setup.sh send. KCGX_ADSB_UA
+# The same identifying string setup.sh's check sends. KCGX_ADSB_UA
 # replaces it; set empty, no User-Agent is sent (and adsb.lol refuses).
 DEFAULT_UA = "kcgx/0.1 (+https://github.com/mikElse/kcgx)"
 BACKOFF_CAP_SECS = 120

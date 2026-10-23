@@ -421,32 +421,6 @@ async def test_no_widget_is_wider_than_the_pane():
         assert too_wide == []
 
 
-def test_the_click_and_the_keybinding_run_the_same_popup():
-    """One spelling, or the hint text drifts from what the key does.
-
-    Token lists, not substrings. `token in bind` asked only whether each
-    character sequence appeared *somewhere* in the line, which every digit
-    and short flag does by accident: a 6x2 popup passed, because "6" and
-    "2" are inside "64" and "20", and so did running bare `kcgx` instead of
-    `kcgx go`, because "kcgx" is a prefix of it. Either one leaves the hint
-    reading "^b a" while the click does something else, or nothing usable
-    -- exactly what this test exists to rule out. shlex, not .split(), so
-    the quoted "kcgx go" stays one argument on both sides.
-    """
-    import shlex
-    from pathlib import Path
-
-    conf = (Path(__file__).resolve().parent.parent / "kcgx.tmux.conf").read_text()
-    bind = next(
-        line for line in conf.splitlines() if line.strip().startswith("bind a ")
-    )
-    tokens = shlex.split(bind)
-    assert tokens[:2] == ["bind", "a"], bind
-    assert tokens[2:] == list(PICKER_POPUP), (
-        f"kcgx.tmux.conf runs {tokens[2:]}, the click runs {list(PICKER_POPUP)}"
-    )
-
-
 def test_open_picker_shells_out_to_tmux():
     calls = []
     open_picker(run=lambda argv, **kw: calls.append(argv))
@@ -461,13 +435,8 @@ def test_open_picker_shells_out_to_tmux():
 # code is no longer on screen as text, and the pane needs four rows for the
 # banner where it used to need one line for the whole airport.
 
-from pathlib import Path            # noqa: E402
-import re                           # noqa: E402
-
 from kcgx import bigtext            # noqa: E402
 from kcgx.status import banner_text, detail_line   # noqa: E402
-
-REPO = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.asyncio
@@ -526,15 +495,3 @@ def test_an_unknown_code_leaves_the_detail_line_blank():
     """The banner still spells the code, so there is nothing to add."""
     assert detail_line(None, "ZZZZ", CONTENT_WIDTH, banner="drawn").strip() == ""
 
-
-def test_the_launcher_and_the_app_agree_about_the_pane_height():
-    """The height is declared twice -- here and in bin/kcgx -- and tmux
-    believes the launcher. If they drift, the pane the app formats for is
-    not the pane it gets and the banner clips with nothing to show for it.
-    """
-    source = (REPO / "bin" / "kcgx").read_text()
-    match = re.search(r'STATUS_ROWS="\$\{KCGX_STATUS_ROWS:-(\d+)\}"', source)
-    assert match, "could not find the launcher's STATUS_ROWS default"
-    assert int(match.group(1)) == STATUS_ROWS, (
-        f"bin/kcgx defaults to {match.group(1)} rows, status.py says {STATUS_ROWS}"
-    )

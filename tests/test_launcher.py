@@ -260,3 +260,43 @@ def test_the_server_keeps_running_after_the_command_exits(port, tmp_path):
         if info:
             launcher.stop(info, timeout=5)
 
+
+# -- bin/kcgx ------------------------------------------------------------------------
+
+WRAPPER = Path(__file__).resolve().parent.parent / "bin" / "kcgx"
+
+
+def test_the_wrapper_finds_this_repo_through_a_symlink(tmp_path):
+    """setup.sh installs bin/kcgx as a symlink on PATH: the link must lead
+    back to this repo, not to the folder the link sits in. A uv that records
+    its arguments says exactly which project the wrapper named."""
+    link = tmp_path / "bin" / "kcgx"
+    link.parent.mkdir()
+    link.symlink_to(WRAPPER)
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    record = tmp_path / "uv-args"
+    (fake / "uv").write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{record}"\n')
+    (fake / "uv").chmod(0o755)
+    done = subprocess.run([str(link), "go", "KSEA"], capture_output=True, text=True, timeout=30, check=False,
+                          env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"})
+    assert done.returncode == 0, done.stderr
+    assert record.read_text().split("\n")[:6] == ["run", "--quiet", "--project", str(WRAPPER.parent.parent), "kcgx", "go"]
+
+
+def test_the_wrapper_runs_the_real_launcher(port):
+    done = subprocess.run([str(WRAPPER), "status"], capture_output=True, text=True, timeout=120, check=False,
+                          env={**os.environ, "KCGX_PORT": str(port)})
+    assert done.returncode == 3, done.stderr
+    assert done.stdout.strip() == "kcgx: not running."
+
+
+def test_the_wrapper_says_how_to_get_uv_when_it_is_missing(tmp_path):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    for tool in ("bash", "dirname", "readlink"):
+        found = subprocess.run(["bash", "-c", f"command -v {tool}"], capture_output=True, text=True, check=True).stdout.strip()
+        (bare / tool).symlink_to(found)
+    done = subprocess.run([str(WRAPPER)], capture_output=True, text=True, env={"PATH": str(bare)}, check=False)
+    assert done.returncode == 1
+    assert "uv not found" in done.stderr and "setup.sh" in done.stderr
