@@ -332,3 +332,24 @@ def test_a_refused_radar_says_so_and_dims_its_lamp(page):
     )
     page.wait_for_function("document.getElementById('radar-poll').textContent.startsWith('ERR 429')")
     assert "warn" in page.get_attribute(".lamp:has(.lamp-label:text-is('RADAR'))", "class")
+
+
+# -- opened from kcgx go -------------------------------------------------------------
+
+
+def test_a_link_to_airport_opens_the_search(browser, server):
+    page = browser.new_page()
+    page.goto(server + "/#airport")
+    page.wait_for_selector("#airport-sheet[open]")
+    assert page.input_value("#airport-query") == ""
+    assert page.evaluate("location.hash") == ""
+    page.close()
+
+
+def test_a_link_with_a_query_opens_the_search_with_it_typed(browser, server):
+    page = browser.new_page()
+    page.goto(server + "/#airport=san%20francisco")
+    page.wait_for_selector("#airport-sheet[open]")
+    assert page.input_value("#airport-query") == "san francisco"
+    page.wait_for_selector("#airport-results .choice:has-text('KSFO')")
+    page.close()

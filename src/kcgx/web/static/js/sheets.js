@@ -74,11 +74,13 @@ export function mountAirportSheet({ sheet, query, results }, store, log) {
 
   query.addEventListener("input", search);
   return {
-    open() {
-      query.value = "";
+    // `text` prefills the search: `kcgx go seattle` opens the page this way.
+    open(text = "") {
+      query.value = text;
       results.replaceChildren();
-      sheet.showModal();
+      if (!sheet.open) sheet.showModal();
       query.focus();
+      if (text) search();
     },
   };
 }

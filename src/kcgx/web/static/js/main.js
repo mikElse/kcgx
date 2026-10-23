@@ -67,6 +67,17 @@ $("next-palette").addEventListener("click", () => {
   send({ t: "prefs", palette: next });
 });
 $("recentre").addEventListener("click", () => radar.recentre());
+
+// `kcgx go` with no airport, or one that names several, opens the page at
+// #airport or #airport=<query>: the search opens with the query typed.
+function fromLink() {
+  const match = /^#airport(?:=(.*))?$/.exec(location.hash);
+  if (!match) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  airportSheet.open(match[1] ? decodeURIComponent(match[1]) : "");
+}
+window.addEventListener("hashchange", fromLink);
+fromLink();
 window.kcgx = { radar, store }; // for the browser tests
 
 function banner() {
