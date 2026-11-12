@@ -853,6 +853,8 @@ needs only Part 1's `main.js`, and Task 10 can start any time after 5.
   as one stroke, or a few, instead of a stroke and a shadow for every
   segment, or draw trails without the shadow; and skip aircraft and trail
   points that are off the screen.
+- Per-item box styles: one fill, padding and border for every boxed item.
+- A sticky header on the tracks table.
 
 ## Built
 
@@ -874,10 +876,9 @@ display CRT and OFF: eight walks, 320 checks, none failed, and no page or
 console error in any. Two more passes (a cockpit started with remembered
 settings, at 1440 by 900; tuning the boxes while zoomed in and an airport
 with a long name, at both sizes) made 29 checks, none failed. Glow was LOW
-in the eight.
-MATRIX with glow FULL and display VECTOR, and MONO with glow OFF, were
-each looked at once, at 1440 by 900. The 119 screenshots were read; they
-are not kept in the repo.
+in the eight. MATRIX with glow FULL and display VECTOR, and MONO with glow
+OFF, were each looked at once, at 1440 by 900. The 119 screenshots were
+read; they are not kept in the repo.
 
 What this cannot say, and step 3 of Task 9 is there to say: how the glow,
 the scanlines and the flicker look on a real display; how the wheel feels
@@ -948,5 +949,3 @@ with a busy picture, which is where problem 1 will show; the frame rate at
 250 nm with real traffic (Task 7 measured 34.7 ms a frame with 600
 injected aircraft); and the look of CRT, glow and scanlines on the real
 display.
-- Per-item box styles: one fill, padding and border for every boxed item.
-- A sticky header on the tracks table.
