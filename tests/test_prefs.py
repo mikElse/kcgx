@@ -17,6 +17,7 @@ from kcgx.prefs import (
     Number,
     Subset,
     clean,
+    defaults,
     prefs_path,
     read_prefs,
     write_prefs,
@@ -211,6 +212,18 @@ def test_reading_never_hands_out_the_defaults_own_lists(tmp_path):
     first["box_items"].append("HUD")
     assert DEFAULTS["tag_fields"] == ["CALLSIGN", "ALT"]
     assert read_prefs(path=tmp_path / "prefs.json")["box_items"] == []
+
+
+def test_defaults_are_a_copy_with_lists_of_its_own():
+    mine = defaults()
+    assert mine == DEFAULTS
+    mine["palette"] = "MONO"
+    mine["tag_fields"].append("DIST")
+    mine["box_items"].append("HUD")
+    assert DEFAULTS["palette"] == "WOPR"
+    assert DEFAULTS["tag_fields"] == ["CALLSIGN", "ALT"]
+    assert DEFAULTS["box_items"] == []
+    assert defaults() == DEFAULTS
 
 
 def test_a_broken_file_gives_the_defaults(tmp_path):

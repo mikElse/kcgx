@@ -131,6 +131,12 @@ def clean(values: dict) -> dict:
     return out
 
 
+def defaults() -> dict:
+    """DEFAULTS for a caller to keep and change: a dict and lists of its
+    own, so nothing done to it reaches the module's."""
+    return clean(DEFAULTS)
+
+
 def read_prefs(*, path: Path | None = None) -> dict:
     """The remembered prefs over the defaults. Anything unreadable, or any
     value its setting does not allow, quietly falls back to its default."""
@@ -141,8 +147,7 @@ def read_prefs(*, path: Path | None = None) -> dict:
         stored = {}
     if not isinstance(stored, dict):
         stored = {}
-    # clean(DEFAULTS) rather than DEFAULTS: the caller gets lists of its own.
-    return {**clean(DEFAULTS), **clean(stored)}
+    return {**defaults(), **clean(stored)}
 
 
 def write_prefs(prefs: dict, *, path: Path | None = None) -> None:

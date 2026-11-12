@@ -22,7 +22,7 @@ from typing import Any
 from kcgx import protocol
 from kcgx.airports import Airport, find
 from kcgx.hub import Hub
-from kcgx.prefs import DEFAULTS, write_prefs
+from kcgx.prefs import defaults, write_prefs
 from kcgx.radar import Fetch, Radar, fetch_adsb_lol
 from kcgx.state import write_airport
 from squelch.cockpit import ADDED, FEED, MESSAGE, ORDER, Cockpit
@@ -65,7 +65,7 @@ class Station:
         self._picker_loader = picker_loader
         self._remember = remember
         self._remember_prefs = remember_prefs
-        self.prefs = dict(prefs or DEFAULTS)
+        self.prefs = dict(prefs) if prefs else defaults()
         # Polled by the server's radar task (kcgx.server), retargeted here
         # on every airport change.
         self.radar = Radar(
@@ -191,8 +191,8 @@ class Station:
         self.hub.broadcast(protocol.volume_frame(self.mixer.volume))
 
     def set_prefs(self, changes: dict) -> None:
-        """Palette, glow or display, already validated by the protocol.
-        Remembered, and sent to every page so all tabs look the same."""
+        """Any settings from kcgx.prefs.SCHEMA, already validated by the
+        protocol. Remembered, and sent to every page so all tabs agree."""
         self.prefs = {**self.prefs, **changes}
         self._remember_prefs(self.prefs)
         self.hub.broadcast(protocol.prefs_frame(self.prefs))

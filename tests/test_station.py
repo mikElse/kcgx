@@ -341,6 +341,14 @@ async def test_without_prefs_the_station_uses_the_defaults():
     assert station.snapshot()["prefs"] == DEFAULTS
 
 
+async def test_without_prefs_the_station_has_lists_of_its_own():
+    station, *_ = make()
+    station.prefs["tag_fields"].append("DIST")
+    station.prefs["box_items"].append("HUD")
+    assert DEFAULTS["tag_fields"] == ["CALLSIGN", "ALT"]
+    assert DEFAULTS["box_items"] == []
+
+
 async def test_a_prefs_change_is_remembered_and_reaches_every_page():
     saved = []
     station, hub, *_ = make(remembered_prefs=saved)

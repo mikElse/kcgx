@@ -19,7 +19,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from kcgx.prefs import DEFAULTS, SCHEMA
+from kcgx.prefs import SCHEMA, defaults
 
 PROTOCOL = 1
 
@@ -92,7 +92,7 @@ def snapshot(
         "max_streams": int(max_streams),
         "audio_ok": bool(audio_ok),
         "log": list(log),
-        "prefs": dict(prefs or DEFAULTS),
+        "prefs": dict(prefs) if prefs else defaults(),
         "radar": radar,
     }
 
@@ -174,9 +174,14 @@ def parse_client(text: str) -> dict:
 
 
 def _prefs(data: dict) -> dict:
-    """At least one setting from kcgx.prefs.SCHEMA, each as its kind allows.
+    """At least one setting from kcgx.prefs.SCHEMA, each as its kind allows,
+    and nothing else: a name the schema does not have refuses the message
+    even beside ones it does, so a mistyped setting is not silently dropped.
     Names are exact: the page sends what the server sent it. What comes back
     is canonical (a subset in schema order, without repeats)."""
+    for key in data:
+        if key != "t" and key not in SCHEMA:
+            raise BadMessage(f"unknown setting: {key}")
     changes = {}
     for key, spec in SCHEMA.items():
         if key not in data:

@@ -95,6 +95,17 @@ def test_a_snapshot_has_the_feeds_in_stack_order_and_the_protocol_version():
     assert frame["prefs"] == DEFAULTS
 
 
+def test_a_snapshot_without_prefs_has_lists_of_its_own():
+    frame = snapshot(
+        airport=None, icao="KPDX", loading=False, sessions=[], volume=1,
+        max_streams=7, audio_ok=True, log=[],
+    )
+    frame["prefs"]["tag_fields"].append("DIST")
+    frame["prefs"]["box_items"].append("HUD")
+    assert DEFAULTS["tag_fields"] == ["CALLSIGN", "ALT"]
+    assert DEFAULTS["box_items"] == []
+
+
 def test_a_snapshot_carries_the_prefs_it_is_given():
     prefs = {**DEFAULTS, "palette": "MONO", "glow": "OFF", "display": "VECTOR", "range_nm": 120}
     frame = snapshot(
@@ -213,10 +224,30 @@ def test_one_bad_pref_refuses_the_whole_message():
         parse_client('{"t":"prefs","palette":"MONO","range_nm":1000}')
 
 
-@pytest.mark.parametrize("text", ['{"t": "prefs"}', '{"t": "prefs", "theme": "WOPR"}'])
-def test_prefs_with_no_known_setting_are_refused(text):
+def test_prefs_with_no_setting_are_refused():
     with pytest.raises(BadMessage, match="^prefs needs at least one setting$"):
+        parse_client('{"t": "prefs"}')
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"t": "prefs", "theme": "WOPR"}',  # alone
+        '{"t": "prefs", "palette": "MONO", "theme": "WOPR"}',  # after a known one
+        '{"t": "prefs", "theme": "WOPR", "range_nm": 120}',  # before one
+        '{"t": "prefs", "theme": "WOPR", "range_nm": 1000}',  # beside a bad one
+    ],
+)
+def test_an_unknown_setting_refuses_the_whole_message(text):
+    with pytest.raises(BadMessage, match="^unknown setting: theme$"):
         parse_client(text)
+
+
+def test_a_setting_is_named_exactly():
+    with pytest.raises(BadMessage, match="^unknown setting: rangenm$"):
+        parse_client('{"t": "prefs", "palette": "MONO", "rangenm": 5}')
+    with pytest.raises(BadMessage, match="^unknown setting: Palette$"):
+        parse_client('{"t": "prefs", "Palette": "MONO"}')
 
 
 @pytest.mark.parametrize(
