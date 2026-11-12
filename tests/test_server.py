@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from station_fakes import AIRPORTS, Builder, listing, picker
 
+from kcgx.prefs import DEFAULTS
 from kcgx.server import HOST, LocalOnly, create_app, main, parse_args
 from kcgx.station import Station
 from squelch.config import Config
@@ -249,7 +250,7 @@ def test_prefs_from_one_page_reach_another():
         ready(two)
         one.send_text(json.dumps({"t": "prefs", "palette": "AMBER"}))
         frame = until(two, lambda f: f["t"] == "prefs")
-        assert frame == {"t": "prefs", "palette": "AMBER", "glow": "LOW", "display": "CRT"}
+        assert frame == {"t": "prefs", **DEFAULTS, "palette": "AMBER"}
 
 
 def test_a_bad_prefs_message_gets_an_error():
@@ -396,13 +397,14 @@ def test_prefs_are_read_at_startup(monkeypatch, tmp_path):
     monkeypatch.setattr("squelch.config.DEFAULT_PATH", tmp_path / "missing.toml")
     from kcgx.prefs import prefs_path, write_prefs
 
-    write_prefs({"palette": "MATRIX", "glow": "OFF", "display": "VECTOR"})
+    chosen = {"palette": "MATRIX", "glow": "OFF", "display": "VECTOR", "teletype": True, "box_items": ["HUD"]}
+    write_prefs(chosen)
     assert prefs_path().exists()
     served = {}
     main(["--demo", "--icao", "KPDX"], which=lambda n: None,
          serve=lambda asgi, port, on_server: served.setdefault("app", asgi), out=lambda line: None)
     with TestClient(served["app"], base_url=BASE) as http, http.websocket_connect(WS) as ws:
-        assert ready(ws)["prefs"] == {"palette": "MATRIX", "glow": "OFF", "display": "VECTOR"}
+        assert ready(ws)["prefs"] == {**DEFAULTS, **chosen}
 
 
 # -- the radar -----------------------------------------------------------------

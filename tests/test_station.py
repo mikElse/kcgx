@@ -13,6 +13,7 @@ import threading
 import pytest
 
 from kcgx.hub import Client, Hub
+from kcgx.prefs import DEFAULTS
 from kcgx.station import Station, UnknownAirport
 from squelch.config import Config
 from squelch.mixer import Mixer
@@ -330,13 +331,14 @@ async def test_stop_stops_every_feed_and_releases_the_mixer_channels():
 
 
 async def test_the_snapshot_carries_the_prefs_the_station_was_given():
-    station, *_ = make(prefs={"palette": "AMBER", "glow": "FULL", "display": "OFF"})
-    assert station.snapshot()["prefs"] == {"palette": "AMBER", "glow": "FULL", "display": "OFF"}
+    prefs = {**DEFAULTS, "palette": "AMBER", "glow": "FULL", "display": "OFF", "lamps": True}
+    station, *_ = make(prefs=prefs)
+    assert station.snapshot()["prefs"] == prefs
 
 
 async def test_without_prefs_the_station_uses_the_defaults():
     station, *_ = make()
-    assert station.snapshot()["prefs"] == {"palette": "WOPR", "glow": "LOW", "display": "CRT"}
+    assert station.snapshot()["prefs"] == DEFAULTS
 
 
 async def test_a_prefs_change_is_remembered_and_reaches_every_page():
@@ -344,10 +346,12 @@ async def test_a_prefs_change_is_remembered_and_reaches_every_page():
     station, hub, *_ = make(remembered_prefs=saved)
     page = watch(hub)
     station.handle({"t": "prefs", "palette": "MATRIX"})
-    assert saved == [{"palette": "MATRIX", "glow": "LOW", "display": "CRT"}]
-    assert frames(page, "prefs") == [{"t": "prefs", "palette": "MATRIX", "glow": "LOW", "display": "CRT"}]
-    station.handle({"t": "prefs", "glow": "OFF"})
-    assert station.prefs == {"palette": "MATRIX", "glow": "OFF", "display": "CRT"}
+    assert saved == [{**DEFAULTS, "palette": "MATRIX"}]
+    assert frames(page, "prefs") == [{"t": "prefs", **DEFAULTS, "palette": "MATRIX"}]
+    station.handle({"t": "prefs", "glow": "OFF", "teletype": True, "box_items": ["HUD"]})
+    assert station.prefs == {
+        **DEFAULTS, "palette": "MATRIX", "glow": "OFF", "teletype": True, "box_items": ["HUD"],
+    }
 
 
 # -- the radar ---------------------------------------------------------------

@@ -96,7 +96,7 @@ def test_a_snapshot_has_the_feeds_in_stack_order_and_the_protocol_version():
 
 
 def test_a_snapshot_carries_the_prefs_it_is_given():
-    prefs = {"palette": "MONO", "glow": "OFF", "display": "VECTOR"}
+    prefs = {**DEFAULTS, "palette": "MONO", "glow": "OFF", "display": "VECTOR", "range_nm": 120}
     frame = snapshot(
         airport=None, icao="KPDX", loading=False, sessions=[], volume=1,
         max_streams=7, audio_ok=True, log=[], prefs=prefs,
@@ -105,9 +105,7 @@ def test_a_snapshot_carries_the_prefs_it_is_given():
 
 
 def test_a_prefs_frame_is_flat():
-    assert prefs_frame({"palette": "AMBER", "glow": "LOW", "display": "CRT"}) == {
-        "t": "prefs", "palette": "AMBER", "glow": "LOW", "display": "CRT",
-    }
+    assert prefs_frame({**DEFAULTS, "palette": "AMBER"}) == {"t": "prefs", **DEFAULTS, "palette": "AMBER"}
 
 
 def test_levels_are_keyed_by_ident_and_rounded():
@@ -155,6 +153,70 @@ def test_prefs_parse_one_or_more_known_names():
     assert parse_client('{"t":"prefs","glow":"OFF","display":"CRT"}') == {
         "t": "prefs", "glow": "OFF", "display": "CRT",
     }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"palette": "MONO"},  # a choice
+        {"lamps": True},  # a flag
+        {"teletype": False},
+        {"range_nm": 250},  # a number
+        {"scan_opacity": 0},
+        {"tag_fields": ["CALLSIGN", "TYPE", "DIST"]},  # a subset
+        {"box_items": []},
+        {"box_fill": 0, "box_pad": 12, "box_border": 100, "box_width": 5, "scan_size": 2},
+    ],
+)
+def test_prefs_parse_every_kind_of_setting(changes):
+    assert parse_client(json.dumps({"t": "prefs", **changes})) == {"t": "prefs", **changes}
+
+
+def test_a_subset_from_a_page_is_put_in_schema_order_without_repeats():
+    assert parse_client('{"t":"prefs","tag_fields":["DIST","ALT","DIST","CALLSIGN"]}') == {
+        "t": "prefs", "tag_fields": ["CALLSIGN", "ALT", "DIST"],
+    }
+
+
+@pytest.mark.parametrize(
+    "key, bad",
+    [
+        ("palette", "PLAID"),
+        ("palette", "amber"),
+        ("glow", 1),
+        ("display", None),
+        ("lamps", 1),
+        ("lamps", "true"),
+        ("teletype", None),
+        ("range_nm", 9),
+        ("range_nm", 251),
+        ("range_nm", 40.0),
+        ("range_nm", "40"),
+        ("scan_size", True),
+        ("box_width", 0),
+        ("tag_fields", ["CALLSIGN", "COLOUR"]),
+        ("tag_fields", "CALLSIGN"),
+        ("tag_fields", ["callsign"]),
+        ("box_items", {"HUD": True}),
+        ("box_items", [["HUD"]]),
+        ("box_items", None),
+    ],
+)
+def test_a_bad_pref_is_refused_by_name(key, bad):
+    with pytest.raises(BadMessage) as refused:
+        parse_client(json.dumps({"t": "prefs", key: bad}))
+    assert str(refused.value).startswith(key + " must be ")
+
+
+def test_one_bad_pref_refuses_the_whole_message():
+    with pytest.raises(BadMessage, match="^range_nm must be a whole number from 10 to 250$"):
+        parse_client('{"t":"prefs","palette":"MONO","range_nm":1000}')
+
+
+@pytest.mark.parametrize("text", ['{"t": "prefs"}', '{"t": "prefs", "theme": "WOPR"}'])
+def test_prefs_with_no_known_setting_are_refused(text):
+    with pytest.raises(BadMessage, match="^prefs needs at least one setting$"):
+        parse_client(text)
 
 
 @pytest.mark.parametrize(

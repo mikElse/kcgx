@@ -19,7 +19,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from kcgx.prefs import CHOICES, DEFAULTS
+from kcgx.prefs import DEFAULTS, SCHEMA
 
 PROTOCOL = 1
 
@@ -174,18 +174,19 @@ def parse_client(text: str) -> dict:
 
 
 def _prefs(data: dict) -> dict:
-    """At least one of palette, glow, display, each one of its known names.
-    Names are exact: the page sends what the server sent it."""
+    """At least one setting from kcgx.prefs.SCHEMA, each as its kind allows.
+    Names are exact: the page sends what the server sent it. What comes back
+    is canonical (a subset in schema order, without repeats)."""
     changes = {}
-    for key, allowed in CHOICES.items():
+    for key, spec in SCHEMA.items():
         if key not in data:
             continue
-        value = data[key]
-        if not isinstance(value, str) or value not in allowed:
-            raise BadMessage(f"{key} must be one of {', '.join(allowed)}")
-        changes[key] = value
+        try:
+            changes[key] = spec.check(data[key])
+        except ValueError as reason:
+            raise BadMessage(f"{key} {reason}") from None
     if not changes:
-        raise BadMessage("prefs needs palette, glow or display")
+        raise BadMessage("prefs needs at least one setting")
     return changes
 
 

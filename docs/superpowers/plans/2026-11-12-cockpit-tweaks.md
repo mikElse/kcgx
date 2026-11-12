@@ -203,7 +203,7 @@ box border, border width). LIMITS is gone.
 `tests/test_prefs.py`, `tests/test_protocol.py`, `tests/test_station.py`,
 `tests/test_server.py`
 
-- [ ] **Tests first.** In `test_prefs.py`: the defaults are the table
+- [x] **Tests first.** In `test_prefs.py`: the defaults are the table
   above; a stored flag, number and subset read back; a number out of range,
   a bool where a number is wanted (`true` is not `1`), a float, a subset
   with an unknown name, and a subset that is not a list each fall back to
@@ -214,7 +214,7 @@ box border, border width). LIMITS is gone.
   unknown key (`theme`) are still refused. Replace the exact three key
   dicts in `test_prefs.py`, `test_station.py:334-350` and
   `test_protocol.py:99-109` with `{**DEFAULTS, ...}`.
-- [ ] **The schema.** Four small frozen dataclasses, each with
+- [x] **The schema.** Four small frozen dataclasses, each with
   `check(value)` that returns the canonical value or raises `ValueError`:
 
   ```python
@@ -258,12 +258,12 @@ box border, border width). LIMITS is gone.
   `SCHEMA: dict[str, Choice | Flag | Number | Subset]` is the table above.
   `DEFAULTS` is derived from it (subset defaults as lists). `CHOICES` stays
   exported for anything that imports it.
-- [ ] **`clean()` stays lenient, `protocol._prefs` stays strict**, and both
+- [x] **`clean()` stays lenient, `protocol._prefs` stays strict**, and both
   call `check`. `clean` keeps its one kindness: a stored choice in lower
   case is upper cased before checking (`test_prefs.py:23`). `_prefs` turns
   `ValueError` into `BadMessage(f"{key} {reason}")`.
-- [ ] `store.js`: the default `prefs` object matches `DEFAULTS`.
-- [ ] Run the suite; commit `feat(prefs): one schema for every setting`.
+- [x] `store.js`: the default `prefs` object matches `DEFAULTS`.
+- [x] Run the suite; commit `feat(prefs): one schema for every setting`.
 
 ### Task 2: The range is live, up to 250 nm
 

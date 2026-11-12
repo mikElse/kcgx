@@ -17,7 +17,23 @@ export function createStore() {
     volume: 1,
     maxStreams: 7,
     audioOk: true,
-    prefs: { palette: "WOPR", glow: "LOW", display: "CRT" },
+    // kcgx.prefs.DEFAULTS, until the first snapshot brings the server's.
+    prefs: {
+      palette: "WOPR",
+      glow: "LOW",
+      display: "CRT",
+      scan_opacity: 34,
+      scan_size: 3,
+      lamps: false,
+      teletype: false,
+      range_nm: 40,
+      tag_fields: ["CALLSIGN", "ALT"],
+      box_items: [],
+      box_fill: 70,
+      box_pad: 4,
+      box_border: 50,
+      box_width: 1,
+    },
     log: [],
     history: new Map(), // ident -> { samples: Float32Array, next: number }
     radar: null, // the last aircraft frame
