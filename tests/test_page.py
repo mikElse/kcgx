@@ -553,6 +553,7 @@ def test_limits_and_the_stream_count_are_gone(page):
     assert page.eval_on_selector_all("#config-sheet h3", "hs => hs.map(h => h.textContent)") == [
         "OUTPUT", "LOOK", "LAYOUT", "RADAR",
     ]
+    assert page.evaluate("'maxStreams' in window.kcgx.store.state") is False, "the page keeps a limit it shows nowhere"
 
 
 def test_the_sheet_opens_showing_the_defaults(page):
@@ -641,6 +642,68 @@ def test_each_subset_button_reaches_a_second_tab(page, other):
     assert pressed(other, "tag_fields") == []
 
 
+def press_at_once(page, key, *names):
+    """Press subset buttons one after another in a single task, so that no
+    frame from the server can land between the presses."""
+    page.eval_on_selector(
+        f"#config-sheet [data-pref={key}]",
+        "(group, names) => { for (const name of names) [...group.children].find(b => b.textContent === name).click(); }",
+        list(names),
+    )
+
+
+def test_two_subset_buttons_pressed_before_the_server_answers_both_count(page, other):
+    """The store only holds what the server has said, so the second press
+    must build on what the first asked for, not on the list before it."""
+    spy_on_sends(page)
+    page.click("#open-config")
+    press_at_once(page, "tag_fields", "TYPE", "GS")
+    both = ["CALLSIGN", "TYPE", "ALT", "GS"]
+    pref_is(other, "tag_fields", both)
+    pref_is(page, "tag_fields", both)
+    assert page.evaluate("window.sent") == [
+        {"t": "prefs", "tag_fields": ["CALLSIGN", "TYPE", "ALT"]},
+        {"t": "prefs", "tag_fields": both},
+    ]
+    assert pressed(page, "tag_fields") == both and pressed(other, "tag_fields") == both
+    # Answered, the page works from the server's list again: a press here
+    # does not undo what another tab has chosen since.
+    set_prefs(other, tag_fields=["CALLSIGN"])
+    pref_is(page, "tag_fields", ["CALLSIGN"])
+    page.click("#config-sheet [data-pref=tag_fields] button:text-is('TRK')")
+    pref_is(other, "tag_fields", ["CALLSIGN", "TRK"])
+    assert pressed(page, "tag_fields") == ["CALLSIGN", "TRK"]
+
+
+def test_a_subset_button_pressed_twice_before_the_server_answers_ends_where_it_began(page, other):
+    spy_on_sends(page)
+    page.click("#open-config")
+    press_at_once(page, "box_items", "HUD", "RINGS", "HUD")
+    pref_is(other, "box_items", ["RINGS"])
+    pref_is(page, "box_items", ["RINGS"])
+    assert [message["box_items"] for message in page.evaluate("window.sent")] == [["HUD"], ["RINGS", "HUD"], ["RINGS"]]
+    assert pressed(page, "box_items") == ["RINGS"]
+
+
+def test_a_subset_press_the_server_never_got_is_forgotten_at_the_next_snapshot(page, other):
+    """A message sent as the socket dies is lost, and the snapshot after the
+    reconnect is the whole truth: the next press builds on that, not on a
+    list nobody was sent."""
+    page.click("#open-config")
+    # The next message goes nowhere, and its socket is dropped.
+    page.evaluate(
+        """() => { const send = WebSocket.prototype.send;
+                   WebSocket.prototype.send = function () { WebSocket.prototype.send = send; this.close(); };
+                   window.kcgx.store.subscribe(kind => { if (kind === "all") window.again = true; }); }"""
+    )
+    page.click("#config-sheet [data-pref=tag_fields] button:text-is('TYPE')")
+    page.wait_for_function("window.again === true")  # reconnected: the snapshot is in
+    assert pressed(page, "tag_fields") == DEFAULTS["tag_fields"]
+    page.click("#config-sheet [data-pref=tag_fields] button:text-is('GS')")
+    pref_is(other, "tag_fields", ["CALLSIGN", "ALT", "GS"])
+    pref_is(page, "tag_fields", ["CALLSIGN", "ALT", "GS"])
+
+
 @pytest.mark.parametrize("key", FLAGS)
 def test_a_flag_is_off_or_on_and_reaches_a_second_tab(page, other, key):
     page.click("#open-config")
@@ -678,6 +741,35 @@ def test_a_slider_in_hand_is_not_moved_by_another_tab(page, other):
     page.focus("#config-sheet input[data-pref=box_width]")
     assert page.input_value(held) == "9"
     assert readout(page, "box_pad") == "9 PX"
+
+
+def test_a_slider_with_a_send_still_to_go_is_not_moved_by_a_frame(page, other):
+    """In hand without the focus: between a drag's last step and the message
+    it sends 80 ms later, a frame must not move the slider, or the message
+    would carry the frame's value instead of the one dragged to. The frame is
+    handed to the store as the socket hands one over, in the task that drags,
+    because nothing from a real second tab can be timed to land in that wait."""
+    spy_on_sends(page)
+    page.click("#open-config")
+    held = "#config-sheet input[data-pref=box_pad]"
+    assert not page.evaluate("document.activeElement.matches('[data-pref=box_pad]')")
+    # Read back in the same task: the server's answer to the drag follows
+    # within moments and says box_width is 1 again.
+    dragged, shown, beside = page.eval_on_selector(
+        held,
+        """slider => { slider.value = "7";
+                       slider.dispatchEvent(new Event("input", { bubbles: true }));
+                       const { store } = window.kcgx;
+                       store.apply({ t: "prefs", ...store.state.prefs, box_pad: 9, box_width: 3 });
+                       return [slider.value, slider.parentElement.querySelector("[data-unit]").textContent,
+                               document.querySelector("#config-sheet input[data-pref=box_width]").value]; }""",
+    )
+    assert (dragged, shown) == ("7", "7 PX"), "the frame moved a slider that had not sent yet"
+    assert beside == "3", "a slider not in hand did not follow"
+    pref_is(other, "box_pad", 7)
+    pref_is(page, "box_pad", 7)
+    assert page.evaluate("window.sent") == [{"t": "prefs", "box_pad": 7}]
+    assert page.input_value(held) == "7" and readout(page, "box_pad") == "7 PX"
 
 
 def test_the_scanline_sliders_are_disabled_unless_the_display_is_crt(page):

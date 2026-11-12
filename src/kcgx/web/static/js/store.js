@@ -15,7 +15,6 @@ export function createStore() {
     feeds: new Map(), // ident -> feed view
     order: [], // idents, stack order
     volume: 1,
-    maxStreams: 7,
     audioOk: true,
     // kcgx.prefs.DEFAULTS, until the first snapshot brings the server's.
     prefs: {
@@ -79,7 +78,6 @@ export function createStore() {
         state.feeds = new Map(frame.feeds.map((f) => [f.ident, f]));
         state.order = frame.feeds.map((f) => f.ident);
         state.volume = frame.volume;
-        state.maxStreams = frame.max_streams;
         state.audioOk = frame.audio_ok;
         state.prefs = { ...state.prefs, ...(frame.prefs || {}) };
         state.log = frame.log.slice(-200);

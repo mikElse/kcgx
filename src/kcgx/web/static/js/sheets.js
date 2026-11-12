@@ -134,11 +134,23 @@ function bind(node, store, send, redraw) {
   switch (node.dataset.kind) {
     case "flag": // OFF or ON
       return bindSegments(node, [["OFF", false], ["ON", true]], set, (value, setting) => value === Boolean(setting));
-    case "subset": // each button is its own switch; the whole list is sent, in the declared order
+    case "subset": { // each button is its own switch; the whole list is sent, in the declared order
+      // The store holds only what the server has said, so a second press
+      // made before the first is answered would send a list without it. A
+      // press builds on the list last asked for until a frame shows that
+      // list. A snapshot is the server's whole word (the first frame after
+      // a reconnect is one), so nothing asked for outlives it.
+      let asked = null;
+      store.subscribe((kind) => {
+        const answered = kind === "prefs" && asked && String(store.state.prefs[key]) === String(asked);
+        if (kind === "all" || answered) asked = null;
+      });
       return bindSegments(node, names, (name) => {
-        const now = store.state.prefs[key] || [];
-        set(names.map(([n]) => n).filter((n) => (n === name) !== now.includes(n)));
+        const now = asked || store.state.prefs[key] || [];
+        asked = names.map(([n]) => n).filter((n) => (n === name) !== now.includes(n));
+        set(asked);
       }, (value, setting) => (setting || []).includes(value));
+    }
     default: // a choice: one pressed button
       return bindSegments(node, names, set, (value, setting) => value === setting);
   }
