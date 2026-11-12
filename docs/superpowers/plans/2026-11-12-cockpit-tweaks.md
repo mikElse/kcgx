@@ -652,14 +652,30 @@ is its own change.
 
 ### Task 9: Part 1 by hand
 
-- [ ] `uv run pytest` and the browser group, green.
-- [ ] `kcgx --demo`, then walk the [Coverage](#coverage) table line by
+- [x] `uv run pytest` and the browser group, green.
+- [x] `kcgx --demo`, then walk the [Coverage](#coverage) table line by
   line at 1440 by 900 and 1100 by 760, in WOPR and AMBER, with display
   CRT and OFF.
 - [ ] `kcgx` against real feeds and traffic at KPDX: range to 250 and
   back, a 2.5 nm zoom on the runways, boxes on with a busy picture.
-- [ ] Note what was seen in the plan's "Built" section, as phases C to E
+- [x] Note what was seen in the plan's "Built" section, as phases C to E
   did.
+
+  **As done, 2026-11-12.** What was seen is under [Built](#built), which
+  this task starts and Task 13 finishes. Two things differ from the steps
+  above.
+
+  The walk was not made by eye at a screen. A script drove the demo
+  through Playwright's headless Chromium, as a hand would (the sheet's own
+  controls, the wheel, a drag, a double click), and its screenshots were
+  read afterwards. So the second step is ticked for what a script and a
+  screenshot can show, and no further.
+
+  **The third step was not run, and is the owner's, on the Mac.** The
+  workflow that built this plan may not start the real server, contact
+  LiveATC or adsb.lol, or open an audio device, so nothing here has been
+  seen against real feeds or real traffic. It is the next thing to do by
+  hand, and [Built](#built) lists what to look at while doing it.
 
 ---
 
@@ -837,5 +853,100 @@ needs only Part 1's `main.js`, and Task 10 can start any time after 5.
   as one stroke, or a few, instead of a stroke and a shadow for every
   segment, or draw trails without the shadow; and skip aircraft and trail
   points that are off the screen.
+
+## Built
+
+Started by Task 9; Task 13 finishes it.
+
+### Part 1 by hand (Task 9, 2026-11-12)
+
+**The suite.** `uv run --quiet --group browser pytest -q`: 934 passed in
+366 s, none skipped. Playwright's Chromium was installed, so the browser
+tests ran. It was 650 before the plan.
+
+**How the walk was made.** By a script, not by eye. A `--demo` cockpit for
+KPDX on a free port, with `KCGX_STATE_PATH` and `HOME` in a temporary
+folder, driven through Playwright's headless Chromium: the THEME dropdown,
+the segment buttons, the sliders by the keyboard and by a dragged mouse,
+the wheel, a drag and a double click on the radar, a click on a callsign.
+It ran once for each of 1440 by 900 and 1100 by 760, WOPR and AMBER,
+display CRT and OFF: eight walks, 320 checks, none failed, and no page or
+console error in any. Two more passes (a cockpit started with remembered
+settings, at 1440 by 900; tuning the boxes while zoomed in and an airport
+with a long name, at both sizes) made 29 checks, none failed. Glow was LOW
+in the eight.
+MATRIX with glow FULL and display VECTOR, and MONO with glow OFF, were
+each looked at once, at 1440 by 900. The 119 screenshots were read; they
+are not kept in the repo.
+
+What this cannot say, and step 3 of Task 9 is there to say: how the glow,
+the scanlines and the flicker look on a real display; how the wheel feels
+on a trackpad; anything about real feeds or real traffic.
+
+**The two sizes are two layouts.** 1440 by 900 is the two column page and
+never scrolls (the document is 900 px high by default and with lamps and
+teletype on). 1100 by 760 sits on the `max-width: 1100px` break, so it is
+the one column page, and scrolls: 1452 px by default, 1601 px with lamps
+and teletype on, in the order radar, airport, frequencies, lamps, tracks,
+teletype.
+
+**Line by line.** The same in WOPR and AMBER, CRT and OFF, unless said.
+
+| The list | Seen |
+|---|---|
+| Tighten padding around all text | Nothing touches or is clipped at either size. At 1440 by 900 the tracks pane shows six rows and the top of a seventh, and scrolls; at 1100 all eleven show. |
+| Hide status indicators by default; setting to show | Hidden by default. STATUS LAMPS ON in the sheet: at 1440 the bar is under the radar at exactly its width (12 to 1038 px), above tracks; at 1100 it is between frequencies and tracks. Nine feed lamps, then RADAR, SERVER, AUDIO, EMERG. |
+| Radar: closer zoom, 2.5 nm | The wheel stops at 2.5 nm, at range 40 and at range 250. KPDX's three runways read as three white lines, the home ring holds at 64 px, the rings are 0.5 nm apart and numbered. Out, the wheel stops at 160 nm with range 40 and at 250 with range 250. The view holds while settings are changed in the sheet. |
+| Radar: remove RECENTRE | No button. After a zoom and a dragged pan, a double click returns the view to the range, centred. |
+| Radar: range setting, to the maximum | The slider goes 10 to 250 by the keys and by the mouse; the sheet reads "250 NM" and the HUD "RNG 250 NM". At 250 the rings are 50, 100, 150, 200 and 250, the last bright; back at 40 the view resets. At 10 (rings 2 to 10) every aircraft beyond it left the radar and the table at once, and two stayed; back at 40 the picture filled with the next scheduled poll, 2.2 s later in that run. A cockpit started with range 120 remembered opens at 120. A new airport keeps the range. On a wide radar the 250 nm view reaches further left and right than the map's 320 nm; east of about 350 nm the places stop and only the airways carry on. Nothing looks cut off. |
+| Radar: boxes | All nine items on at the defaults (fill 70, padding 4, border 50, width 1): places, ring numbers, the airport's name and the HUD each sit in a box in their own colour, and no box of those lies across another (flight tags do: problem 1 below). HOME, CITIES and RINGS alone: only those are boxed, and the 10 nm number is left off, as Task 8 records. At fill 100, padding 12, border 100, width 5 the HUD's spans measure 12 px of padding, a 5 px border, black behind. STATES could not be seen: the map names none. |
+| Radar: which flight info shows | Default, one line: `ASA412 3100`. All seven, two lines: `ASA412 B39M 4512` over `3100 230KT 270° 11.0NM`. TYPE, GS and DIST, two lines: `B39M` over `230KT 10.0NM`. None: chevrons only. |
+| Airport pane: search icon, bottom right, opposite the name | 13 px from the pane's right edge and 9 px from its bottom at both sizes, its bottom level with the name block's. At 1440 CYUL's name wraps to two lines, the pane grows from 127 to 144 px, the icon stays bottom right, and the page still does not scroll; at 1100 the name fits on one line. |
+| Airport pane: remove STATUS | No title bar: the ICAO, the clocks, the name, the place, the icon. |
+| Teletype: off by default, a setting, frequencies fills the space | Off: at 1440 frequencies runs to the bottom of the page, level with tracks. On: the teletype is under frequencies, level with tracks, and frequencies stops above it. With it off, a refused message showed in the banner: "ERROR: RANGE_NM MUST BE A WHOLE NUMBER FROM 10 TO 250". |
+| Frequencies: less padding in M and S | Each is 28 by 24 px. |
+| Frequencies: smaller chatter figure, with % | 18 px in the expanded row, 14 px in the compact ones; `27%`, `7%`, no leading zero, right aligned. |
+| Tracks: selected flight to the top, 20 % larger | A click on the fourth row's callsign: it is the first row, 15.6 px against 13 in all seven cells, outlined; the rest dim, on the radar as well. A second click lets it go. |
+| Header: remove FEEDS, remove PALETTE | Gone. The bar reads `KCGX  LOCAL COCKPIT 127.0.0.1:<port>` and two icons. |
+| Header: CONFIG and SHUT DOWN as icons, no border | A gear and a power symbol, 0 px border, each with a name for a screen reader and a tooltip. The power icon is red in WOPR and white in AMBER, whose alarm colour is white. It asks before it stops; CANCEL keeps the cockpit. |
+| Config: scanline opacity and size | Both sliders are greyed unless display is CRT. At 0 % no lines. At 100 % and 8 px a black 3 px line every 8 px cuts through every row of text on the page and it is hard to read: the far end of both sliders, as asked. |
+| Config: theme as a dropdown | A `<select>` of the four; the page changes at once. |
+| Config: remove LIMITS | Gone. OUTPUT, LOOK, LAYOUT, RADAR. |
+| Config: every setting above | All fourteen. The sheet is 420 px wide on the right edge, full height, and fits without scrolling at 900 and at 760 px. The radar beside it is not darkened and changes as each control moves. At 1100 the sheet covers the radar's right two fifths; the airport is still in view. Settings remembered in `prefs.json` come back on the page and in every control; `--demo` never writes the file. |
+| Its own window, not Chrome | Part 2; not walked here. |
+
+**Problems seen. None was fixed in Task 9; no code changed.**
+
+1. **Flight tags lie on one another where aircraft are close.** With the
+   default two fields at 40 nm, two or three tags by the airport overlap
+   and one crosses the airport's name. With all seven fields, the five or
+   six nearest the airport cannot be read, and boxes make it worse: each
+   opaque box hides the tag under it. At 250 nm the demo's aircraft, all
+   within 40 nm, are one block in the middle of the screen. At 2.5 nm the
+   same tags read well. This is the decluttering that is under
+   [Not in this plan](#not-in-this-plan), and what Task 8 left for this
+   look. Deferred. Real traffic at 250 nm will show how much it matters.
+2. **A long airport name runs off the radar.** CYUL's, "MONTREAL / PIERRE
+   ELLIOTT TRUDEAU INTERNATIONAL", is drawn in two lines at 30 px and the
+   second is cut by the radar's right edge at 1440 by 900. The split is
+   phase D's (`nameLines`), and the name is not on the 11/12 list.
+   Deferred.
+3. **A pressed button is hard to tell from one that is not, outside
+   WOPR.** Pressed is the palette's `--pink`: pink in WOPR, but in AMBER,
+   MATRIX and MONO within a shade of `--text` (AMBER's are `#ffd98a` and
+   `#ffd58a`), so the words hardly change and only the border brightens.
+   CONFIG now has 26 such buttons. Older than this plan, not on the list.
+   Deferred, for the owner's eye.
+4. **Escape in the airport search, with text typed, clears the text and
+   leaves the sheet open.** The field is `type="search"`, and that is what
+   Chromium does with one. Left as it is; Task 10 will show what WebKit
+   does.
+
+**For the owner, on the Mac (Task 9's third step, not run).** `kcgx` at
+KPDX: the range to 250 and back; a 2.5 nm zoom on the runways; boxes on
+with a busy picture, which is where problem 1 will show; the frame rate at
+250 nm with real traffic (Task 7 measured 34.7 ms a frame with 600
+injected aircraft); and the look of CRT, glow and scanlines on the real
+display.
 - Per-item box styles: one fill, padding and border for every boxed item.
 - A sticky header on the tracks table.
