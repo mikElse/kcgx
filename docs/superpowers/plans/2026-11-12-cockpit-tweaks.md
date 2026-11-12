@@ -354,7 +354,7 @@ is its own change.
 `stack.js`, `station.py`, `setup.sh`, `tests/test_page.py`,
 `tests/test_station.py`, `tests/test_setup.py`
 
-- [ ] **Tests first.** `#open-feeds`, `#next-palette`, `#feeds-sheet` and
+- [x] **Tests first.** `#open-feeds`, `#next-palette`, `#feeds-sheet` and
   `#recentre` are not in the page. `#open-config` and `#open-shutdown`
   have no visible text, a computed `border-top-width` of `0px`, and an
   accessible name ("Config", "Shut down"). The airport pane has no
@@ -363,7 +363,7 @@ is its own change.
   airport's name block (within 2 px). Delete
   `test_the_feed_picker_adds_a_feed`. `test_station`: the fallback note
   reads "choose the airport again to retry".
-- [ ] **Header:** remove FEEDS and PALETTE; CONFIG becomes the gear,
+- [x] **Header:** remove FEEDS and PALETTE; CONFIG becomes the gear,
   SHUT DOWN the power icon (in `--alarm`).
 
   ```css
@@ -376,7 +376,7 @@ is its own change.
   .icon-alarm { color: var(--alarm); }
   ```
 
-- [ ] **Airport pane:** ICAO and clocks on top as now; beneath, the name
+- [x] **Airport pane:** ICAO and clocks on top as now; beneath, the name
   and place on the left and the search icon bottom right. The STATUS title
   bar goes; the section's `aria-label` becomes "Airport".
 
@@ -391,12 +391,12 @@ is its own change.
   ```
 
   `.status-bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--gap); }`
-- [ ] Remove `mountFeedsSheet`, the feeds `<dialog>`, `stack.show`, the
+- [x] Remove `mountFeedsSheet`, the feeds `<dialog>`, `stack.show`, the
   `.feed.flash` rule and `.choice .tag`. Remove `$("palette-name")` from
   `applyPrefs`. The server's feeds endpoint and `open_feed` stay.
-- [ ] `station._for_the_page` (`station.py:292`) and `setup.sh:517` stop
+- [x] `station._for_the_page` (`station.py:292`) and `setup.sh:517` stop
   saying "open FEEDS".
-- [ ] Commit `feat(web): icons in the header; the airport pane loses its title`.
+- [x] Commit `feat(web): icons in the header; the airport pane loses its title`.
 
 ### Task 5: The config sheet
 

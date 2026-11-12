@@ -293,5 +293,5 @@ class Station:
 
 def _for_the_page(message: str) -> str:
     """squelch's listing warnings name the terminal's key; the page's retry
-    is the FEEDS button, whose list is fetched afresh on every open."""
-    return message.replace("press f to retry", "open FEEDS to retry")
+    is to choose the airport again, which fetches its list afresh."""
+    return message.replace("press f to retry", "choose the airport again to retry")

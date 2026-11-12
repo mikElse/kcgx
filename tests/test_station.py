@@ -109,14 +109,15 @@ async def test_listing_warnings_reach_the_log_after_the_feeds():
     assert "cached list" in hub.log[-1]["text"]
 
 
-async def test_a_retry_hint_names_the_pages_button_not_a_key():
+async def test_a_retry_hint_names_what_the_page_can_do_not_a_key():
     def refused(config, *, warn):
         warn("KPDX — LiveATC refused the feed list; press f to retry")
         return []
 
     station, hub, _, _ = make(refused)
     await station.open("KPDX")
-    assert hub.log[-1]["text"].endswith("refused the feed list; open FEEDS to retry")
+    assert hub.log[-1]["text"].endswith("refused the feed list; choose the airport again to retry")
+    assert "FEEDS" not in hub.log[-1]["text"]
 
 
 async def test_a_listing_that_raises_leaves_an_empty_stack_and_says_so():

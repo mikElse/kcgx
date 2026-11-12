@@ -274,6 +274,94 @@ def test_no_label_carries_a_key_hint(page):
     assert "AMBIENT" not in text.upper()
 
 
+# -- the header and the airport pane ---------------------------------------------
+
+
+@pytest.mark.parametrize("gone", ["#open-feeds", "#next-palette", "#feeds-sheet", "#recentre"])
+def test_feeds_palette_and_recentre_are_not_in_the_page(page, gone):
+    assert page.locator(gone).count() == 0
+
+
+def test_the_header_holds_two_buttons_and_no_words(page):
+    assert page.eval_on_selector_all(".bar-buttons button", "bs => bs.map(b => b.id)") == [
+        "open-config", "open-shutdown",
+    ]
+    assert page.inner_text(".bar-buttons").strip() == ""
+
+
+ICONS = [("#open-config", "Config"), ("#open-shutdown", "Shut down"), ("#open-airport", "Search airports")]
+
+
+@pytest.mark.parametrize("selector, name", ICONS)
+def test_an_icon_button_is_a_drawing_with_a_name_and_no_border(page, selector, name):
+    button = page.locator(selector)
+    assert button.inner_text().strip() == "", f"{selector} still shows text"
+    assert button.locator("svg").count() == 1
+    drawn = button.locator("svg").evaluate("e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }")
+    assert drawn[0] >= 16 and drawn[1] >= 16, f"{selector}'s icon is {drawn} px"
+    assert button.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px"
+    # the accessible name, as a screen reader is given it
+    named = page.get_by_role("button", name=name, exact=True)
+    assert named.count() == 1 and "#" + named.get_attribute("id") == selector
+    assert button.get_attribute("title") == name
+
+
+def test_shut_down_is_drawn_in_the_alarm_colour(page):
+    colours = page.evaluate(
+        """() => { const probe = document.createElement("span");
+                   probe.style.color = "var(--alarm)"; document.body.append(probe);
+                   const alarm = getComputedStyle(probe).color; probe.remove();
+                   const svg = document.querySelector("#open-shutdown svg");
+                   return [getComputedStyle(svg).stroke, alarm]; }"""
+    )
+    assert colours[0] == colours[1]
+
+
+@pytest.mark.parametrize("selector, sheet", [
+    ("#open-config", "#config-sheet"), ("#open-shutdown", "#shutdown-sheet"), ("#open-airport", "#airport-sheet"),
+])
+def test_an_icon_button_opens_its_sheet(page, selector, sheet):
+    page.click(selector)
+    page.wait_for_selector(f"{sheet}[open]")
+
+
+@pytest.mark.parametrize("width, height", [(1440, 900), (1280, 640), (390, 844)])
+def test_the_airport_pane_has_no_title_and_its_search_icon_sits_bottom_right(page, width, height):
+    page.set_viewport_size({"width": width, "height": height})
+    page.wait_for_function("document.getElementById('airport-where').textContent !== ''")
+    assert page.locator(".screen-status .screen-title").count() == 0
+    assert "STATUS" not in page.inner_text(".screen-status")
+    assert page.get_attribute(".screen-status", "aria-label") == "Airport"
+    at = page.evaluate(
+        """() => {
+            const box = (e) => e.getBoundingClientRect();
+            const pane = document.querySelector(".screen-status");
+            const body = document.querySelector(".status-body");
+            const names = box(document.getElementById("airport-where").parentElement);
+            return {
+                icon: box(document.getElementById("open-airport")).toJSON(),
+                inner: box(body).right - parseFloat(getComputedStyle(body).paddingRight),
+                pane: box(pane).toJSON(),
+                names: names.toJSON(),
+                name: box(document.getElementById("airport-name")).toJSON(),
+                icao: box(document.getElementById("icao")).toJSON(),
+                zulu: box(document.getElementById("zulu")).toJSON(),
+            };
+        }"""
+    )
+    icon, names = at["icon"], at["names"]
+    assert abs(icon["right"] - at["inner"]) <= 1, "the search icon is not at the pane's inner right edge"
+    assert abs(icon["bottom"] - names["bottom"]) <= 2, "the search icon is not level with the bottom of the names"
+    assert icon["bottom"] <= at["pane"]["bottom"] and icon["right"] <= at["pane"]["right"]
+    # the name and the place are one block, under the ICAO and left of the icon
+    assert at["name"]["top"] >= names["top"] and at["name"]["bottom"] <= names["bottom"]
+    assert names["top"] >= at["icao"]["bottom"] - 1 and abs(names["left"] - at["icao"]["left"]) <= 1
+    assert names["right"] <= icon["left"]
+    # ICAO and clocks on top, as before
+    assert abs(at["icao"]["top"] - at["zulu"]["top"]) <= 2 and at["zulu"]["left"] >= at["icao"]["right"]
+    assert icon["top"] >= at["zulu"]["bottom"]
+
+
 # -- the feed stack ------------------------------------------------------------
 
 
@@ -307,15 +395,6 @@ def test_the_trace_draws(page):
 # -- sheets --------------------------------------------------------------------
 
 
-def test_the_feed_picker_adds_a_feed(page):
-    page.click("#open-feeds")
-    page.wait_for_selector("#feeds-results .choice")
-    page.click("#feeds-results .choice:has-text('GUARD')")
-    page.wait_for_selector(".feed:has-text('Emergency Guard')")
-    page.click("#open-feeds")
-    page.wait_for_selector("#feeds-results .choice:has-text('GUARD') .tag.on")
-
-
 def test_changing_airport_redraws_everything(page):
     page.click("#open-airport")
     page.fill("#airport-query", "seattle")
@@ -333,9 +412,9 @@ def test_prefs_apply_to_every_tab(page, browser, server):
     other = browser.new_page()
     other.goto(server + "/")
     other.wait_for_selector(".feed.expanded")
-    page.click("#next-palette")
-    other.wait_for_function("document.documentElement.dataset.palette === 'AMBER'")
     page.click("#open-config")
+    page.click(".segments[data-pref=palette] button:text-is('AMBER')")
+    other.wait_for_function("document.documentElement.dataset.palette === 'AMBER'")
     page.click(".segments[data-pref=display] button:text-is('VECTOR')")
     other.wait_for_function("document.documentElement.dataset.display === 'VECTOR'")
     page.click(".segments[data-pref=display] button:text-is('CRT')")
@@ -504,7 +583,7 @@ def test_place_names_brighten_under_the_pointer(page):
     page.wait_for_function("window.kcgx.radar.debug().hovered === null")
 
 
-def test_the_wheel_zooms_dragging_pans_and_recentre_resets(page):
+def test_the_wheel_zooms_dragging_pans_and_a_double_click_recentres(page):
     wait_for_traffic(page)
     x, y = on_screen(page, 300, 300)
     page.mouse.move(x, y)
@@ -515,7 +594,7 @@ def test_the_wheel_zooms_dragging_pans_and_recentre_resets(page):
     page.mouse.up()
     view = radar_debug(page)["view"]
     assert view["panX"] != 0 and view["panY"] != 0
-    page.click("#recentre")
+    page.mouse.dblclick(x, y)
     assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
 
 

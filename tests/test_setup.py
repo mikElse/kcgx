@@ -1112,6 +1112,9 @@ exit 0
     assert result.returncode == 0, result.stdout + result.stderr
     assert "--refresh-feeds" not in log.read_text()
     assert "Skipped" in result.stdout, result.stdout
+    # The page has no FEEDS button to send anyone to: the retry is the airport.
+    assert "open FEEDS" not in result.stdout, result.stdout
+    assert "choose the airport again" in result.stdout, result.stdout
 
 
 def test_setup_and_the_radar_send_the_same_user_agent():

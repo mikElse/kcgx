@@ -111,6 +111,16 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .brand-sub { font-size: 12px; letter-spacing: 0.18em; color: var(--muted); }
 .bar-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* A button that is only a drawing: config and shut down in the header, the
+   airport search in the airport pane. No frame; the stroke is the colour. */
+.icon-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; flex: 0 0 auto;
+  background: none; border: 0; color: var(--text); cursor: pointer; }
+.icon-btn:hover { color: var(--white); }
+.icon-btn:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+.icon-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+.icon-alarm { color: var(--alarm); }
+
 .btn {
   min-height: 40px; padding: 0 14px; background: transparent; cursor: pointer;
   border: 1px solid var(--frame); color: var(--text); font-size: 13px; letter-spacing: 0.12em;
@@ -119,7 +129,6 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .btn:focus-visible, .feed:focus-visible, .choice:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
 .btn-small { min-height: 32px; padding: 0 10px; font-size: 12px; }
 .btn-alarm { border-color: var(--alarm); color: var(--alarm); }
-.btn-pink { border-color: var(--pink); color: var(--pink); }
 .btn[aria-pressed="true"] { border-color: var(--pink); color: var(--pink); }
 
 .banner { padding: 8px 14px; border: 1px solid var(--amber); color: var(--amber); font-size: 12px; letter-spacing: 0.16em; text-align: center; }
@@ -148,16 +157,17 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .hud-left { left: 18px; }
 .hud-right { right: 18px; align-items: flex-end; }
 
-/* status */
+/* the airport: ICAO and clocks on top; beneath, its name and place on the
+   left and the search icon bottom right. The pane has no title bar. */
 .status-body { padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 10px; }
 .status-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.status-airport { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.status-bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--gap); }
+.status-names { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .icao { font: 64px/1 "Share Tech Mono", monospace; letter-spacing: 0.12em; color: var(--white); text-shadow: var(--glow); }
 .airport-name { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; }
 .clocks { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
 .zulu { font: 40px/1 "Share Tech Mono", monospace; letter-spacing: 0.08em; color: var(--cyan); text-shadow: var(--glow); }
 .local { font: 20px "Share Tech Mono", monospace; letter-spacing: 0.1em; color: var(--muted); }
-#open-airport { align-self: flex-start; }
 
 /* frequencies */
 .freq-counts { display: flex; justify-content: space-between; gap: 8px; padding: 12px 16px 6px; }
@@ -192,8 +202,6 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .note { font-size: 12px; color: var(--muted); }
 .chatter-small { font: 18px "Share Tech Mono", monospace; min-width: 26px; text-align: right; color: var(--cyan); font-variant-numeric: tabular-nums; }
 .parked .chatter-small { color: var(--muted); }
-.feed.flash { animation: flash 1.2s ease-out; }
-@keyframes flash { from { border-color: var(--pink); box-shadow: 0 0 12px var(--pink); } }
 
 /* lamps */
 .lamps { flex-wrap: wrap; align-items: flex-end; gap: 14px 18px; padding: 10px 16px;
@@ -262,8 +270,6 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .choice:hover { border-color: var(--cyan); }
 .choice .code { font: 16px "Share Tech Mono", monospace; color: var(--cyan); min-width: 56px; }
 .choice .what { text-transform: uppercase; }
-.choice .tag { margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: 0.14em; }
-.choice .tag.on { color: var(--pink); }
 .choice.current { border-color: var(--pink); }
 
 .ended { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.88);
@@ -289,5 +295,5 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
   95% { transform: translate(-0.6px, 0.3px); } 96% { transform: translate(0.3px, 0.5px); } 97% { transform: translate(0, 0); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .screen, .jit, .feed.flash { animation: none !important; }
+  .screen, .jit { animation: none !important; }
 }

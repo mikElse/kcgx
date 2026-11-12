@@ -597,6 +597,10 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     return `${String(brg).padStart(3, "0")}° ${nm.toFixed(1)} NM`;
   }
 
+  function recentre() { view.zoom = 1; view.panX = 0; view.panY = 0; staticDirty = true; }
+  // With no button for it, a double click is the way back from a pan.
+  canvas.addEventListener("dblclick", recentre);
+
   new ResizeObserver(() => { staticDirty = true; }).observe(canvas);
   store.subscribe((kind) => {
     if (kind === "all") {
@@ -612,7 +616,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   });
 
   return {
-    recentre() { view.zoom = 1; view.panX = 0; view.panY = 0; staticDirty = true; },
+    recentre,
     redraw() { staticDirty = true; },
     // For tests: what is on screen, in screen pixels.
     debug() {

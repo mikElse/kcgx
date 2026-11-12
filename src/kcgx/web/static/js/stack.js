@@ -210,16 +210,4 @@ export function mountStack({ stack, counts }, store, send) {
   });
   window.addEventListener("resize", () => { levelsDirty = true; });
   render();
-
-  return {
-    // Bring an open feed into view and mark it, for the feed picker.
-    show(ident) {
-      const row = rows.get(ident);
-      if (!row) return;
-      row.node.scrollIntoView({ block: "nearest" });
-      row.node.classList.remove("flash");
-      void row.node.offsetWidth;
-      row.node.classList.add("flash");
-    },
-  };
 }

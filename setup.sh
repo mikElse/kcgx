@@ -514,7 +514,8 @@ print(current_icao(known=lambda icao: True, warn=lambda line: None))
     say ""
     if ! confirm "Fetch the feed list for $icao now?" y; then
         say "Skipped. Run \`uv run --project '$REPO' kcgx-web --refresh-feeds\`"
-        say "later, or just start kcgx and open FEEDS if it opens short."
+        say "later, or just start kcgx and choose the airport again if it"
+        say "opens short."
         return 0
     fi
 

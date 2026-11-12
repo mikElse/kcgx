@@ -8,6 +8,9 @@
 <script type="module" src="/static/js/main.js"></script>
 </head>
 <body>
+<!-- The icons are our own line drawings: no icon font, no licence to carry.
+     They are stroked in currentColor, so they take the palette. Each button
+     says what it is in aria-label and title. -->
 <div class="page">
 
   <header class="bar">
@@ -16,10 +19,12 @@
       <span class="brand-sub" id="where-served">LOCAL COCKPIT</span>
     </div>
     <nav class="bar-buttons" aria-label="Cockpit controls">
-      <button type="button" class="btn" id="open-feeds">FEEDS</button>
-      <button type="button" class="btn" id="open-config">CONFIG</button>
-      <button type="button" class="btn" id="next-palette" aria-label="Next palette">PALETTE <span id="palette-name">WOPR</span></button>
-      <button type="button" class="btn btn-alarm" id="open-shutdown">SHUT DOWN</button>
+      <button type="button" class="icon-btn" id="open-config" aria-label="Config" title="Config">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.19 5.24L10.51 2.62L13.49 2.62L13.81 5.24A7 7 0 0 1 15.5 5.94L17.58 4.31L19.69 6.42L18.06 8.50A7 7 0 0 1 18.76 10.19L21.38 10.51L21.38 13.49L18.76 13.81A7 7 0 0 1 18.06 15.50L19.69 17.58L17.58 19.69L15.5 18.06A7 7 0 0 1 13.81 18.76L13.49 21.38L10.51 21.38L10.19 18.76A7 7 0 0 1 8.5 18.06L6.42 19.69L4.31 17.58L5.94 15.50A7 7 0 0 1 5.24 13.81L2.62 13.49L2.62 10.51L5.24 10.19A7 7 0 0 1 5.94 8.50L4.31 6.42L6.42 4.31L8.5 5.94A7 7 0 0 1 10.19 5.24Z"/><circle cx="12" cy="12" r="2.8"/></svg>
+      </button>
+      <button type="button" class="icon-btn icon-alarm" id="open-shutdown" aria-label="Shut down" title="Shut down">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.41 6.45A8 8 0 1 0 16.59 6.45"/><path d="M12 3.5v8"/></svg>
+      </button>
     </nav>
   </header>
 
@@ -28,7 +33,7 @@
   <section class="screen screen-radar" aria-label="Radar">
     <div class="ovl" aria-hidden="true"></div>
     <div class="radar-wrap">
-      <canvas id="radar" class="radar jit" role="img" aria-label="Radar: the map and traffic around the airport. Drag to pan, scroll to zoom, click an aircraft to focus it; the tracks table lists the same aircraft."></canvas>
+      <canvas id="radar" class="radar jit" role="img" aria-label="Radar: the map and traffic around the airport. Drag to pan, scroll to zoom, double click to recentre, click an aircraft to focus it; the tracks table lists the same aircraft."></canvas>
       <div class="hud hud-left" aria-hidden="true"><span>RNG 40 NM</span><span id="radar-poll">RADAR WAITING</span></div>
       <div class="hud hud-right" aria-hidden="true"><span id="radar-tracks">0 TRACKS</span></div>
     </div>
@@ -36,28 +41,30 @@
       <span class="title-text">TRAFFIC</span>
       <div class="title-tools">
         <span class="muted small" id="radar-position"></span>
-        <button type="button" class="btn btn-small" id="recentre">RECENTRE</button>
       </div>
     </div>
   </section>
 
-  <section class="screen screen-status" aria-label="Status">
+  <section class="screen screen-status" aria-label="Airport">
     <div class="ovl" aria-hidden="true"></div>
     <div class="status-body">
       <div class="status-top">
-        <div class="status-airport">
-          <span class="icao" id="icao">····</span>
-          <span class="airport-name" id="airport-name"></span>
-          <span class="muted small" id="airport-where"></span>
-        </div>
+        <span class="icao" id="icao">····</span>
         <div class="clocks">
           <span class="zulu" id="zulu">0000Z</span>
           <span class="local" id="local">00:00</span>
         </div>
       </div>
-      <button type="button" class="btn btn-pink" id="open-airport">CHANGE AIRPORT</button>
+      <div class="status-bottom">
+        <div class="status-names">
+          <span class="airport-name" id="airport-name"></span>
+          <span class="muted small" id="airport-where"></span>
+        </div>
+        <button type="button" class="icon-btn" id="open-airport" aria-label="Search airports" title="Search airports">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/></svg>
+        </button>
+      </div>
     </div>
-    <div class="screen-title"><span class="title-text">STATUS</span></div>
   </section>
 
   <section class="screen screen-freq" aria-label="Frequencies">
@@ -99,18 +106,6 @@
     <input id="airport-query" type="search" autocomplete="off" spellcheck="false">
   </label>
   <div class="choices" id="airport-results"></div>
-</dialog>
-
-<dialog class="sheet" id="feeds-sheet" aria-labelledby="feeds-title">
-  <form method="dialog" class="sheet-head">
-    <h2 id="feeds-title">FEEDS</h2>
-    <button class="btn btn-small" value="close" aria-label="Close">CLOSE</button>
-  </form>
-  <label class="field"><span class="muted small">FILTER</span>
-    <input id="feeds-query" type="search" autocomplete="off" spellcheck="false">
-  </label>
-  <p class="muted small" id="feeds-status"></p>
-  <div class="choices" id="feeds-results"></div>
 </dialog>
 
 <dialog class="sheet" id="config-sheet" aria-labelledby="config-title">

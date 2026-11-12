@@ -10,9 +10,7 @@ import { mountLamps } from "./lamps.js";
 import { mountLog } from "./log.js";
 import { mountRadar } from "./radar.js";
 import { mountTracks } from "./tracks.js";
-import {
-  CHOICES, mountAirportSheet, mountConfigSheet, mountFeedsSheet, mountShutdownSheet,
-} from "./sheets.js";
+import { mountAirportSheet, mountConfigSheet, mountShutdownSheet } from "./sheets.js";
 
 const $ = (id) => document.getElementById(id);
 const store = createStore();
@@ -33,7 +31,6 @@ function applyPrefs() {
   // again, so the banner gives them up.
   if (opened) $("log").scrollTop = $("log").scrollHeight;
   if (prefs.teletype) raised.clear();
-  $("palette-name").textContent = prefs.palette;
   forget();
 }
 
@@ -63,7 +60,7 @@ const raised = {
 // The teletype is mounted whether or not it shows, so it is whole when it does.
 const teletype = mountLog($("log"), store);
 const log = { say(text) { teletype.say(text); raised.show(text); } };
-const stack = mountStack({ stack: $("stack"), counts: $("freq-counts") }, store, send);
+mountStack({ stack: $("stack"), counts: $("freq-counts") }, store, send);
 mountStatus({
   icao: $("icao"), name: $("airport-name"), where: $("airport-where"), zulu: $("zulu"), local: $("local"),
 }, store);
@@ -76,10 +73,6 @@ mountTracks({ head: $("tracks-head"), body: $("tracks-body"), empty: $("tracks-e
 const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,
 );
-const feedsSheet = mountFeedsSheet(
-  { sheet: $("feeds-sheet"), query: $("feeds-query"), status: $("feeds-status"), results: $("feeds-results") },
-  store, send, (ident) => setTimeout(() => stack.show(ident), 300),
-);
 const configSheet = mountConfigSheet(
   { sheet: $("config-sheet"), volume: $("volume"), volumeValue: $("volume-value"), maxStreams: $("max-streams") },
   store, send,
@@ -91,15 +84,8 @@ const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, 
 }, log);
 
 $("open-airport").addEventListener("click", () => airportSheet.open());
-$("open-feeds").addEventListener("click", () => feedsSheet.open());
 $("open-config").addEventListener("click", () => configSheet.open());
 $("open-shutdown").addEventListener("click", () => shutdownSheet.open());
-$("next-palette").addEventListener("click", () => {
-  const all = CHOICES.palette;
-  const next = all[(all.indexOf(store.state.prefs.palette) + 1) % all.length];
-  send({ t: "prefs", palette: next });
-});
-$("recentre").addEventListener("click", () => radar.recentre());
 
 // `kcgx go` with no airport, or one that names several, opens the page at
 // #airport or #airport=<query>: the search opens with the query typed.

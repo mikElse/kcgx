@@ -1,4 +1,4 @@
-// The four sheets: change airport, feeds, config and shut down. Each is a
+// The three sheets: change airport, config and shut down. Each is a
 // <dialog>, so focus, Escape and the backdrop come from the browser.
 
 const CHOICES = {
@@ -85,50 +85,6 @@ export function mountAirportSheet({ sheet, query, results }, store, log) {
   };
 }
 
-export function mountFeedsSheet({ sheet, query, status, results }, store, send, onOpened) {
-  let feeds = [];
-
-  function draw() {
-    const filter = query.value.trim().toLowerCase();
-    const shown = feeds.filter((f) => !filter || f.label.toLowerCase().includes(filter) || f.ident.includes(filter));
-    status.textContent = `${feeds.length} FEEDS AT ${store.state.airport ? store.state.airport.icao : ""}, ${feeds.filter((f) => f.open).length} OPEN`;
-    results.replaceChildren(...shown.map((feed) => {
-      const node = button("choice", "", () => {
-        if (!feed.open) send({ t: "open_feed", ident: feed.ident });
-        sheet.close();
-        onOpened(feed.ident);
-      });
-      const name = document.createElement("span");
-      name.className = "what";
-      name.textContent = feed.label.toUpperCase();
-      const tag = document.createElement("span");
-      tag.className = feed.open ? "tag on" : "tag";
-      tag.textContent = feed.open ? "OPEN" : "ADD";
-      node.append(name, tag);
-      return node;
-    }));
-  }
-
-  query.addEventListener("input", draw);
-  return {
-    async open() {
-      query.value = "";
-      feeds = [];
-      results.replaceChildren();
-      status.textContent = "LOADING THE FEED LIST";
-      sheet.showModal();
-      query.focus();
-      try {
-        feeds = await json("/api/feeds/available");
-      } catch {
-        status.textContent = "COULD NOT LOAD THE FEED LIST";
-        return;
-      }
-      draw();
-    },
-  };
-}
-
 export function mountConfigSheet({ sheet, volume, volumeValue, maxStreams }, store, send) {
   const groups = [...sheet.querySelectorAll(".segments")];
   for (const group of groups) {
@@ -176,5 +132,3 @@ export function mountShutdownSheet({ sheet }, store, onEnded, log) {
   });
   return { open() { sheet.returnValue = ""; sheet.showModal(); } };
 }
-
-export { CHOICES };
