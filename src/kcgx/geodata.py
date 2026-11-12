@@ -23,9 +23,9 @@ from pathlib import Path
 
 DATA = Path(__file__).resolve().parent / "data" / "geo.json.gz"
 NM_PER_DEGREE = 60.0
-# The radar shows 40 nm and can zoom out to 160; send a margin past that so
-# panning at full zoom out never runs off the map.
-DEFAULT_RADIUS_NM = 200.0
+# The radar's range goes to 250 nm (kcgx.prefs, `range_nm`); send a margin
+# past that so panning at full range does not run straight off the map.
+DEFAULT_RADIUS_NM = 320.0
 
 _lock = threading.Lock()
 _world: dict | None = None

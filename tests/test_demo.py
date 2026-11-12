@@ -127,6 +127,24 @@ def test_demo_traffic_is_shaped_like_adsb_lol_and_stays_near_the_field():
     assert "UNK1" in labels  # the one with no callsign
 
 
+def test_a_shorter_range_thins_the_demo_traffic():
+    """adsb.lol sends only what is inside the circle asked for. The demo
+    drops the legs that start beyond it, so the range can be seen working."""
+    def flights(range_nm, t):
+        reply = demo.traffic(45.5887, -122.5975, range_nm, clock=lambda: t)
+        return {ac["hex"] for ac in reply["ac"]}
+
+    starts = {f"de{index:04x}": leg[3] for index, leg in enumerate(demo.LEGS)}
+    thinned = False
+    for t in range(1_000_000, 1_000_600, 30):
+        at_40, at_10 = flights(40, t), flights(10, t)
+        assert at_10 == {h for h in at_40 if starts[h] <= 10}
+        assert flights(20, t) == {h for h in at_40 if starts[h] <= 20}
+        assert flights(250, t) == at_40, "nothing in the demo starts beyond 40 nm"
+        thinned = thinned or len(at_10) < len(at_40)
+    assert thinned
+
+
 def test_demo_traffic_moves():
     a = demo.traffic(45.5887, -122.5975, 40, clock=lambda: 1_000_000.0)
     b = demo.traffic(45.5887, -122.5975, 40, clock=lambda: 1_000_015.0)

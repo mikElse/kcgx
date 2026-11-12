@@ -185,8 +185,10 @@ class DemoMixer:
 # like adsb.lol's reply so the real poller handles them. Each flies a
 # straight leg (start bearing and distance from the field, heading, length)
 # at constant speed, climbing or descending linearly, and starts again when
-# the leg ends. N52RT squawks 7600 for the middle minute of every five, so
-# the emergency lamp and the log can be seen working.
+# the leg ends. A leg that starts beyond the range asked for is left out, so
+# a shorter range visibly thins the picture. N52RT squawks 7600 for the
+# middle minute of every five, so the emergency lamp and the log can be
+# seen working.
 
 NM_PER_DEG_LAT = 60.0
 
@@ -218,6 +220,8 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
     now = clock()
     aircraft = []
     for index, (callsign, kind, bearing, start, heading, leg, kt, alt0, alt1, squawk) in enumerate(LEGS):
+        if start > range_nm:
+            continue  # the whole leg, not the moment: an aircraft does not blink at the edge
         period = leg / kt * 3600 + 20
         phase = (now + index * 97) % period
         flown = min(leg, phase / 3600 * kt)

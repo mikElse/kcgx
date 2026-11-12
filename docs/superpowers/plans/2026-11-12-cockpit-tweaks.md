@@ -272,7 +272,7 @@ box border, border width). LIMITS is gone.
 `tests/test_radar.py`, `tests/test_station.py`, `tests/test_config.py`,
 `tests/test_geodata.py`
 
-- [ ] **Tests first.** `Radar.set_range(20)` sets `range_nm`, drops tracks
+- [x] **Tests first.** `Radar.set_range(20)` sets `range_nm`, drops tracks
   whose distance is over 20, sends one frame whose `range` is 20, and does
   not set the wake event (assert `fetch` is not called again before the
   delay). The next `poll` asks `fetch` for 20. A station built with
@@ -280,14 +280,14 @@ box border, border width). LIMITS is gone.
   "range_nm": 250})` retunes it; a prefs change that does not touch
   `range_nm` sends no aircraft frame. `Config()` has no `radar_range_nm`,
   and a TOML file that sets it still loads. `geodata.clip` defaults to 320.
-- [ ] `Radar.set_range`; `Station.__init__` reads `self.prefs["range_nm"]`;
+- [x] `Radar.set_range`; `Station.__init__` reads `self.prefs["range_nm"]`;
   `Station.set_prefs` calls `set_range` when the value changed.
-- [ ] Remove `radar_range_nm` from `Config` and its comment; fix the
+- [x] Remove `radar_range_nm` from `Config` and its comment; fix the
   comment on `DEFAULT_RADIUS_NM` (250 nm range, with margin to pan).
-- [ ] `demo.traffic` ignores its `range_nm` today, so the demo shows the
+- [x] `demo.traffic` ignores its `range_nm` today, so the demo shows the
   same eleven aircraft at any range. Have it drop legs that start beyond
   the range, so shrinking the range visibly thins the demo.
-- [ ] Commit `feat(radar): the range is a setting, 10 to 250 nm`.
+- [x] Commit `feat(radar): the range is a setting, 10 to 250 nm`.
 
 **Risk to watch, not solve here:** 250 nm around a busy field can be
 several hundred aircraft. The page redraws every one each frame and

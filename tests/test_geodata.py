@@ -57,6 +57,19 @@ def test_points_and_labels_are_clipped_the_same_way():
     assert [p[2] for p in out["labels"]["state"]] == ["OREGON"]
 
 
+def test_by_default_the_map_reaches_320_nm():
+    """The range goes to 250 nm; the map goes past it so a pan at full range
+    does not run off the edge."""
+    assert geodata.DEFAULT_RADIUS_NM == 320
+    data = world(points={"city": [
+        [-1226000, 507000, "INSIDE", 3],  # 5.11 deg N of the field: 307 nm
+        [-1226000, 512000, "OUTSIDE", 3],  # 5.61 deg N: 337 nm
+    ]})
+    out = geodata.clip(45.59, -122.60, data=data)
+    assert out["radius_nm"] == 320
+    assert [p[2] for p in out["points"]["city"]] == ["INSIDE"]
+
+
 def test_only_the_home_airports_runways_are_sent():
     data = world(runways={"KPDX": [[1, 2, 3, 4]], "KSEA": [[5, 6, 7, 8]]})
     assert geodata.clip(45.59, -122.60, icao="kpdx", data=data)["runways"] == [[1, 2, 3, 4]]
@@ -98,7 +111,8 @@ def test_portland_has_its_coast_rivers_and_landmarks():
 
 
 def test_an_airports_map_is_small_and_cached():
+    # 320 nm around a busy field: 0.22 MB of JSON, sent once per airport.
     first = geodata.clipped_json("KJFK", 40.6398, -73.7789)
-    assert len(first) < 150_000
+    assert len(first) < 300_000
     assert geodata.clipped_json("KJFK", 40.6398, -73.7789) is first
     assert json.loads(first)["center"] == [-737789, 406398]

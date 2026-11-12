@@ -192,7 +192,7 @@ def create_app(
         return JSONResponse({"icao": airport.icao}, status_code=202)
 
     async def geo(request: Request):
-        """The radar's map for one airport: everything within 200 nm. Asked
+        """The radar's map for one airport: everything within 320 nm. Asked
         for by ICAO so a page never draws one field's map around another."""
         station = request.app.state.station
         try:

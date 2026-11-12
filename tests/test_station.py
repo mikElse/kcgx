@@ -391,10 +391,10 @@ async def test_radar_frames_and_emergencies_reach_every_page():
     assert hub.log[-1]["text"].startswith("N52RT squawking 7700 (emergency), 19 nm N")
 
 
-async def test_the_radar_takes_its_settings_from_the_config():
+async def test_the_radar_takes_its_pace_from_the_config_and_its_range_from_the_prefs():
     loop = asyncio.get_running_loop()
     station = Station(
-        Config(radar_refresh_secs=30, radar_range_nm=25, radar_stale_secs=90),
+        Config(radar_refresh_secs=30, radar_stale_secs=90),
         Hub(),
         post=lambda fn, *args: loop.call_soon_threadsafe(fn, *args),
         airports=AIRPORTS,
@@ -403,6 +403,52 @@ async def test_the_radar_takes_its_settings_from_the_config():
         sessions_builder=Builder(),
         picker_loader=picker,
         remember=lambda icao: None,
+        prefs={"range_nm": 120},
         remember_prefs=lambda prefs: None,
     )
-    assert (station.radar.refresh_secs, station.radar.range_nm, station.radar.stale_secs) == (30, 25, 90)
+    assert (station.radar.refresh_secs, station.radar.range_nm, station.radar.stale_secs) == (30, 120, 90)
+
+
+async def test_without_prefs_the_radar_has_the_default_range():
+    station, *_ = make()
+    assert station.radar.range_nm == DEFAULTS["range_nm"] == 40
+
+
+async def test_prefs_that_leave_settings_out_are_filled_from_the_defaults():
+    station, *_ = make(prefs={"palette": "AMBER"})
+    assert station.prefs == {**DEFAULTS, "palette": "AMBER"}
+    assert station.radar.range_nm == 40
+
+
+NEAR = {"hex": "near", "flight": "ASA1", "lat": 45.6, "lon": -122.3}  # 12 nm E of KPDX
+FAR = {"hex": "far", "flight": "DAL2", "lat": 46.6, "lon": -122.6}  # 61 nm N
+
+
+async def test_a_range_change_retunes_the_radar_and_tells_every_page():
+    saved = []
+    station, hub, *_ = make(prefs={**DEFAULTS, "range_nm": 120}, remembered_prefs=saved)
+    await station.open("KPDX")
+    station.radar.merge({"ac": [NEAR, FAR]})
+    page = watch(hub)
+
+    station.handle({"t": "prefs", "range_nm": 250})
+    assert station.radar.range_nm == 250 and saved[-1]["range_nm"] == 250
+    sent = frames(page)
+    assert [f["t"] for f in sent] == ["prefs", "aircraft"]
+    assert sent[0]["range_nm"] == 250 and sent[1]["range"] == 250
+    assert [ac["hex"] for ac in sent[1]["ac"]] == ["far", "near"]
+
+    station.handle({"t": "prefs", "range_nm": 20})
+    aircraft = frames(page, "aircraft")
+    assert len(aircraft) == 1 and aircraft[0]["range"] == 20
+    assert [ac["hex"] for ac in aircraft[0]["ac"]] == ["near"], "beyond the new range: gone at once"
+
+
+async def test_a_prefs_change_that_leaves_the_range_alone_sends_no_aircraft_frame():
+    station, hub, *_ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.handle({"t": "prefs", "palette": "MONO", "lamps": True})
+    station.handle({"t": "prefs", "range_nm": 40})  # the range it already has
+    assert [f["t"] for f in frames(page)] == ["prefs", "prefs"]
+    assert station.radar.range_nm == 40

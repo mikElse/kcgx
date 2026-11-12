@@ -168,18 +168,28 @@ def test_the_buffer_can_be_tuned(tmp_path):
 
 def test_the_radar_keys_default_to_adsb_lols_pace():
     cfg = Config()
-    assert (cfg.radar_refresh_secs, cfg.radar_range_nm, cfg.radar_stale_secs) == (15, 40, 60)
+    assert (cfg.radar_refresh_secs, cfg.radar_stale_secs) == (15, 60)
 
 
 def test_the_radar_keys_can_be_configured(tmp_path):
     path = tmp_path / "squelch.toml"
-    path.write_text("radar_refresh_secs = 30\nradar_range_nm = 25\nradar_stale_secs = 90\n")
+    path.write_text("radar_refresh_secs = 30\nradar_stale_secs = 90\n")
     cfg = load_config(path)
-    assert (cfg.radar_refresh_secs, cfg.radar_range_nm, cfg.radar_stale_secs) == (30, 25, 90)
+    assert (cfg.radar_refresh_secs, cfg.radar_stale_secs) == (30, 90)
 
 
-def test_a_fractional_radar_range_is_rejected(tmp_path):
+def test_the_radar_range_is_gone_rather_than_ignored():
+    """The range became a setting of the page on 2026-11-12 (kcgx.prefs,
+    `range_nm`), changed live from CONFIG. Pinned as an absence: a key that
+    still parses but drives nothing is worse than no key."""
+    assert "radar_range_nm" not in {field.name for field in fields(Config)}
+    assert not hasattr(Config(), "radar_range_nm")
+
+
+@pytest.mark.parametrize("value", ["25", "40.5", '"far"'])
+def test_a_file_that_still_sets_the_radar_range_loads(tmp_path, value):
+    """Unknown keys are ignored, whatever they hold: a squelch.toml written
+    before the range moved starts as it always did."""
     path = tmp_path / "squelch.toml"
-    path.write_text("radar_range_nm = 40.5\n")
-    with pytest.raises(ConfigError, match="radar_range_nm"):
-        load_config(path)
+    path.write_text(f"radar_refresh_secs = 30\nradar_range_nm = {value}\nradar_stale_secs = 90\n")
+    assert load_config(path) == Config(radar_refresh_secs=30, radar_stale_secs=90)

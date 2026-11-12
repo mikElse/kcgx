@@ -11,6 +11,10 @@ which emergency squawks have been announced. A refused poll keeps the last
 good picture and backs off: 15, 30, 60, then 120 s, reset by the first
 success. Aircraft not seen for `stale_secs` drop out.
 
+The range is a setting (kcgx.prefs, `range_nm`), changed while running by
+`set_range`. A new airport is polled at once; a new range waits for the
+next scheduled poll, so a dragged slider is never a burst of requests.
+
 Everything but the fetch runs on the event loop. The fetch is a plain
 blocking function, run in a worker thread, so tests and the demo can hand
 in their own.
@@ -113,7 +117,8 @@ class Track:
 @dataclass
 class Radar:
     """The current airport's picture. Call `retarget` on an airport change,
-    `poll` to take one picture (or let `run` do it on its schedule)."""
+    `set_range` on a range change, `poll` to take one picture (or let `run`
+    do it on its schedule)."""
 
     on_frame: Callable[[dict], None]
     on_note: Callable[[str], None]
@@ -149,6 +154,30 @@ class Radar:
         if self._wake is not None:
             self._wake.set()
 
+    # -- the range ---------------------------------------------------------------
+
+    def set_range(self, range_nm: int) -> None:
+        """A new range, asked for from the next scheduled poll on. It never
+        triggers one: adsb.lol asks for no more than a request every 15 s,
+        and a slider being dragged sends a change per step. What is beyond
+        a shorter range goes at once; what a longer one adds arrives with
+        the next poll."""
+        if range_nm == self.range_nm:
+            return
+        self.range_nm = range_nm
+        self._trim()
+        self.on_frame(self.frame())
+
+    def _trim(self) -> None:
+        """Drop every aircraft beyond the range."""
+        if self.lat is None or self.lon is None:
+            return
+        for hex_ in [
+            h for h, t in self.tracks.items()
+            if distance_bearing(self.lat, self.lon, t.lat, t.lon)[0] > self.range_nm
+        ]:
+            del self.tracks[hex_]
+
     # -- polling -----------------------------------------------------------------
 
     def delay(self) -> float:
@@ -162,9 +191,9 @@ class Radar:
     async def poll(self) -> None:
         if self.lat is None or self.lon is None:
             return
-        generation, lat, lon = self._generation, self.lat, self.lon
+        generation, lat, lon, asked_nm = self._generation, self.lat, self.lon, self.range_nm
         try:
-            data = await asyncio.to_thread(self.fetch, lat, lon, self.range_nm)
+            data = await asyncio.to_thread(self.fetch, lat, lon, asked_nm)
         except RadarRefused as refused:
             if generation == self._generation:
                 self.failures += 1
@@ -177,6 +206,8 @@ class Radar:
         self.failures, self.error = 0, ""
         self.last_good = self.clock()
         self.merge(data)
+        if self.range_nm < asked_nm:
+            self._trim()  # the range shrank while we were asking
         self.on_frame(self.frame())
 
     async def run(self) -> None:

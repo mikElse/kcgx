@@ -65,15 +65,17 @@ class Station:
         self._picker_loader = picker_loader
         self._remember = remember
         self._remember_prefs = remember_prefs
-        self.prefs = dict(prefs) if prefs else defaults()
+        # Always every setting: what `prefs` leaves out is the default.
+        self.prefs = {**defaults(), **(prefs or {})}
         # Polled by the server's radar task (kcgx.server), retargeted here
-        # on every airport change.
+        # on every airport change and retuned by set_prefs. Its pace comes
+        # from the config file; its range is a setting.
         self.radar = Radar(
             on_frame=self.hub.broadcast,
             on_note=self.hub.note,
             fetch=radar_fetch,
             refresh_secs=config.radar_refresh_secs,
-            range_nm=config.radar_range_nm,
+            range_nm=self.prefs["range_nm"],
             stale_secs=config.radar_stale_secs,
         )
         self._events = SessionEvents(
@@ -192,10 +194,13 @@ class Station:
 
     def set_prefs(self, changes: dict) -> None:
         """Any settings from kcgx.prefs.SCHEMA, already validated by the
-        protocol. Remembered, and sent to every page so all tabs agree."""
+        protocol. Remembered, and sent to every page so all tabs agree. A
+        new range also reaches the radar, which sends its own frame."""
         self.prefs = {**self.prefs, **changes}
         self._remember_prefs(self.prefs)
         self.hub.broadcast(protocol.prefs_frame(self.prefs))
+        if self.prefs["range_nm"] != self.radar.range_nm:
+            self.radar.set_range(self.prefs["range_nm"])
 
     def open_feed(self, ident: str) -> None:
         if self.cockpit.session(ident) is not None:

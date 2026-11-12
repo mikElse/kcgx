@@ -219,6 +219,87 @@ async def test_run_polls_again_at_once_after_a_retarget():
     assert polled[:2] == [PDX[0], 47.45]
 
 
+# -- the range -----------------------------------------------------------------
+
+FAR = {"lat": 45.9, "lon": -123.0}  # 25 nm NW; plane() itself is 12 nm E
+
+
+def test_a_new_range_drops_what_is_beyond_it_and_tells_pages_once():
+    radar, frames, *_ = make()
+    radar.merge({"ac": [plane("near"), plane("far", **FAR)]})
+    radar.set_range(20)
+    assert radar.range_nm == 20
+    assert set(radar.tracks) == {"near"}
+    assert len(frames) == 1 and frames[0]["range"] == 20
+    assert [ac["hex"] for ac in frames[0]["ac"]] == ["near"]
+
+
+def test_a_wider_range_keeps_every_aircraft():
+    radar, frames, *_ = make()
+    radar.merge({"ac": [plane("near"), plane("far", **FAR)]})
+    radar.set_range(250)
+    assert len(frames) == 1 and frames[0]["range"] == 250
+    assert [ac["hex"] for ac in frames[0]["ac"]] == ["far", "near"]
+
+
+def test_the_range_it_already_has_sends_nothing():
+    radar, frames, *_ = make()
+    radar.set_range(40)
+    assert frames == []
+
+
+def test_a_new_range_before_there_is_an_airport_is_only_remembered():
+    frames = []
+    radar = Radar(on_frame=frames.append, on_note=lambda note: None)
+    radar.set_range(120)
+    assert radar.range_nm == 120 and frames[-1]["range"] == 120 and frames[-1]["ac"] == []
+
+
+async def test_the_next_poll_asks_for_the_new_range():
+    asked = []
+    radar, frames, *_ = make(lambda lat, lon, range_nm: asked.append(range_nm) or {"ac": []})
+    await radar.poll()
+    radar.set_range(20)
+    await radar.poll()
+    assert asked == [40, 20] and frames[-1]["range"] == 20
+
+
+async def test_a_new_range_waits_for_the_next_scheduled_poll():
+    """A dragged slider must not become a burst against adsb.lol's 15 s ask:
+    unlike a new airport, a new range never wakes the poller."""
+    asked = []
+    radar, *_ = make(lambda lat, lon, range_nm: asked.append(range_nm) or {"ac": []})
+    task = asyncio.create_task(radar.run())
+    for _ in range(100):
+        if asked:
+            break
+        await asyncio.sleep(0.01)
+    for range_nm in (30, 20, 250, 20):
+        radar.set_range(range_nm)
+        await asyncio.sleep(0.05)
+    task.cancel()
+    assert asked == [40]
+    assert radar.delay() == 15, "and it is still waiting out the full refresh"
+
+
+async def test_a_reply_asked_for_at_a_wider_range_is_cut_to_the_new_one():
+    started, release = threading.Event(), threading.Event()
+
+    def fetch(*args):
+        started.set()
+        release.wait(5)
+        return {"ac": [plane("near"), plane("far", **FAR)]}
+
+    radar, frames, *_ = make(fetch)
+    task = asyncio.create_task(radar.poll())
+    await asyncio.to_thread(started.wait, 5)
+    radar.set_range(20)
+    release.set()
+    await task
+    assert [ac["hex"] for ac in frames[-1]["ac"]] == ["near"]
+    assert set(radar.tracks) == {"near"}
+
+
 # -- the real fetch, with urllib stood in for -------------------------------------
 
 
