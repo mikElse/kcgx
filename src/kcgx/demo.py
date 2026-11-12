@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 
+from kcgx.radar import distance_bearing
 from squelch.config import Config
 from squelch.feeds import Feed
 
@@ -185,10 +186,10 @@ class DemoMixer:
 # like adsb.lol's reply so the real poller handles them. Each flies a
 # straight leg (start bearing and distance from the field, heading, length)
 # at constant speed, climbing or descending linearly, and starts again when
-# the leg ends. A leg that starts beyond the range asked for is left out, so
-# a shorter range visibly thins the picture. N52RT squawks 7600 for the
-# middle minute of every five, so the emergency lamp and the log can be
-# seen working.
+# the leg ends. As adsb.lol does, it sends only the aircraft inside the
+# range asked for at that moment, so a shorter range visibly thins the
+# picture. N52RT squawks 7600 for the middle minute of every five, so the
+# emergency lamp and the log can be seen working.
 
 NM_PER_DEG_LAT = 60.0
 
@@ -220,8 +221,6 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
     now = clock()
     aircraft = []
     for index, (callsign, kind, bearing, start, heading, leg, kt, alt0, alt1, squawk) in enumerate(LEGS):
-        if start > range_nm:
-            continue  # the whole leg, not the moment: an aircraft does not blink at the edge
         period = leg / kt * 3600 + 20
         phase = (now + index * 97) % period
         flown = min(leg, phase / 3600 * kt)
@@ -229,6 +228,11 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
             continue  # between legs: off the screen for a moment, as aircraft are
         x_lat, x_lon = _offset(lat, lon, bearing, start)
         a_lat, a_lon = _offset(x_lat, x_lon, heading, flown)
+        a_lat, a_lon = round(a_lat, 5), round(a_lon, 5)
+        # Measured as the radar measures it, on the position as sent, so the
+        # two never disagree about an aircraft at the edge.
+        if distance_bearing(lat, lon, a_lat, a_lon)[0] > range_nm:
+            continue
         alt = round((alt0 + (alt1 - alt0) * flown / leg) / 100) * 100
         if callsign == "N52RT" and 120 <= now % 300 < 180:
             squawk = "7600"
@@ -239,8 +243,8 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
             "alt_baro": alt,
             "gs": kt,
             "track": heading,
-            "lat": round(a_lat, 5),
-            "lon": round(a_lon, 5),
+            "lat": a_lat,
+            "lon": a_lon,
             "squawk": squawk,
             "seen_pos": 0.4,
         })

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import threading
 import urllib.error
@@ -274,10 +275,13 @@ async def test_a_new_range_waits_for_the_next_scheduled_poll():
         if asked:
             break
         await asyncio.sleep(0.01)
+    assert asked, "the first poll never ran"
     for range_nm in (30, 20, 250, 20):
         radar.set_range(range_nm)
         await asyncio.sleep(0.05)
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
     assert asked == [40]
     assert radar.delay() == 15, "and it is still waiting out the full refresh"
 
@@ -298,6 +302,48 @@ async def test_a_reply_asked_for_at_a_wider_range_is_cut_to_the_new_one():
     await task
     assert [ac["hex"] for ac in frames[-1]["ac"]] == ["near"]
     assert set(radar.tracks) == {"near"}
+
+
+def test_an_emergency_beyond_a_shorter_range_is_not_said_to_have_stopped():
+    """It is still squawking, only out of range. Brought back by a wider
+    range, it is new to the picture and is announced as any arrival is."""
+    radar, _, notes, _ = make()
+    radar.merge({"ac": [plane("near"), plane("far", flight="N52RT", squawk="7700", **FAR)]})
+    assert len(notes) == 1 and notes[0].startswith("N52RT squawking 7700")
+    radar.set_range(20)
+    radar.merge({"ac": [plane("near")]})
+    assert len(notes) == 1, notes
+    radar.set_range(40)
+    radar.merge({"ac": [plane("near"), plane("far", flight="N52RT", squawk="7700", **FAR)]})
+    assert len(notes) == 2 and notes[1].startswith("N52RT squawking 7700")
+    radar.merge({"ac": [plane("near"), plane("far", flight="N52RT", squawk="1200", **FAR)]})
+    assert notes[2:] == ["N52RT no longer squawking 7700"]
+
+
+async def test_a_reply_cut_to_a_new_range_announces_and_numbers_only_what_is_kept():
+    """Asked for at 40 nm, landed at 20: the emergency 25 nm out never was in
+    the picture, so it is not announced and takes no UNK number, and an
+    aircraft that has flown beyond 20 nm does not stay where it was last seen."""
+    started, release = threading.Event(), threading.Event()
+
+    def fetch(*args):
+        started.set()
+        release.wait(5)
+        return {"ac": [
+            plane("far", flight=None, squawk="7700", **FAR),
+            plane("left", **FAR),
+            plane("near", flight=None),
+        ]}
+
+    radar, frames, notes, _ = make(fetch)
+    radar.merge({"ac": [plane("left")]})  # 12 nm E, before it flew out
+    task = asyncio.create_task(radar.poll())
+    await asyncio.to_thread(started.wait, 5)
+    radar.set_range(20)
+    release.set()
+    await task
+    assert notes == []
+    assert [(ac["hex"], ac["label"]) for ac in frames[-1]["ac"]] == [("near", "UNK1")]
 
 
 # -- the real fetch, with urllib stood in for -------------------------------------

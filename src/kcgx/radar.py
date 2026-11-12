@@ -168,15 +168,22 @@ class Radar:
         self._trim()
         self.on_frame(self.frame())
 
+    def _beyond(self, lat: float, lon: float) -> bool:
+        return distance_bearing(self.lat, self.lon, lat, lon)[0] > self.range_nm
+
     def _trim(self) -> None:
         """Drop every aircraft beyond the range."""
         if self.lat is None or self.lon is None:
             return
-        for hex_ in [
-            h for h, t in self.tracks.items()
-            if distance_bearing(self.lat, self.lon, t.lat, t.lon)[0] > self.range_nm
-        ]:
-            del self.tracks[hex_]
+        for hex_ in [h for h, t in self.tracks.items() if self._beyond(t.lat, t.lon)]:
+            self._drop(hex_)
+
+    def _drop(self, hex_: str) -> None:
+        """Out of range, and out of the picture. Its emergency squawk, if it
+        has one, is forgotten without a word: it has not stopped squawking,
+        and it is announced afresh if a wider range brings it back."""
+        self.tracks.pop(hex_, None)
+        self._announced.pop(hex_, None)
 
     # -- polling -----------------------------------------------------------------
 
@@ -205,9 +212,7 @@ class Radar:
             return  # the airport changed while we were asking
         self.failures, self.error = 0, ""
         self.last_good = self.clock()
-        self.merge(data)
-        if self.range_nm < asked_nm:
-            self._trim()  # the range shrank while we were asking
+        self.merge(data, cut=self.range_nm < asked_nm)  # the range shrank while we were asking
         self.on_frame(self.frame())
 
     async def run(self) -> None:
@@ -223,12 +228,18 @@ class Radar:
 
     # -- the picture -------------------------------------------------------------
 
-    def merge(self, data: dict) -> None:
+    def merge(self, data: dict, *, cut: bool = False) -> None:
+        """Take a reply into the picture. `cut` is for a reply asked for at a
+        wider range than the one set since: what it holds beyond the range
+        is left out before it can be numbered or announced."""
         now = self.clock()
         for raw in data.get("ac") or []:
             hex_ = str(raw.get("hex") or "").lower().strip()
             lat, lon = _number(raw.get("lat")), _number(raw.get("lon"))
             if not hex_ or lat is None or lon is None:
+                continue
+            if cut and self._beyond(lat, lon):
+                self._drop(hex_)  # and not left where it was last seen
                 continue
             seen_pos = _number(raw.get("seen_pos")) or 0.0
             track = self.tracks.get(hex_) or Track(hex=hex_, lat=lat, lon=lon, seen_at=0.0)

@@ -128,21 +128,53 @@ def test_demo_traffic_is_shaped_like_adsb_lol_and_stays_near_the_field():
 
 
 def test_a_shorter_range_thins_the_demo_traffic():
-    """adsb.lol sends only what is inside the circle asked for. The demo
-    drops the legs that start beyond it, so the range can be seen working."""
-    def flights(range_nm, t):
-        reply = demo.traffic(45.5887, -122.5975, range_nm, clock=lambda: t)
-        return {ac["hex"] for ac in reply["ac"]}
+    """adsb.lol sends only what is inside the circle asked for, by where each
+    aircraft is now. The demo does the same, so the range can be seen
+    working: a departure leaves the picture as it flies out, an arrival
+    joins it as it flies in."""
+    from kcgx.radar import distance_bearing
+
+    field = (45.5887, -122.5975)
+
+    def distances(range_nm, t):
+        reply = demo.traffic(*field, range_nm, clock=lambda: t)
+        return {ac["hex"]: distance_bearing(*field, ac["lat"], ac["lon"])[0] for ac in reply["ac"]}
 
     starts = {f"de{index:04x}": leg[3] for index, leg in enumerate(demo.LEGS)}
-    thinned = False
-    for t in range(1_000_000, 1_000_600, 30):
-        at_40, at_10 = flights(40, t), flights(10, t)
-        assert at_10 == {h for h in at_40 if starts[h] <= 10}
-        assert flights(20, t) == {h for h in at_40 if starts[h] <= 20}
-        assert flights(250, t) == at_40, "nothing in the demo starts beyond 40 nm"
-        thinned = thinned or len(at_10) < len(at_40)
-    assert thinned
+    thinned = flown_out = flown_in = False
+    for t in range(1_000_000, 1_001_200, 15):
+        everything = distances(250, t)  # no leg in the demo reaches 80 nm
+        for range_nm in (10, 20, 40):
+            shown = distances(range_nm, t)
+            assert set(shown) == {h for h, nm in everything.items() if nm <= range_nm}
+            thinned = thinned or len(shown) < len(everything)
+        at_10 = distances(10, t)
+        flown_out = flown_out or any(starts[h] <= 10 and h not in at_10 for h in everything)
+        flown_in = flown_in or any(starts[h] > 10 for h in at_10)
+    assert thinned and flown_out and flown_in
+
+
+async def test_what_the_radar_drops_at_a_shorter_range_stays_dropped_in_the_demo():
+    """The demo and Radar.set_range agree on what is in range: an aircraft
+    dropped by a shorter range does not come back with the next poll."""
+    from kcgx.radar import Radar
+
+    now = [1_000_000.0]
+    clock = lambda: now[0]
+    radar = Radar(on_frame=lambda f: None, on_note=lambda n: None, clock=clock,
+                  fetch=lambda lat, lon, nm: demo.traffic(lat, lon, nm, clock=clock))
+    radar.retarget(45.5887, -122.5975)
+    seen_far = False
+    for _ in range(40):
+        radar.set_range(40)
+        await radar.poll()
+        seen_far = seen_far or any(ac["dist"] > 10 for ac in radar.frame()["ac"])
+        radar.set_range(10)
+        now[0] += 15
+        await radar.poll()
+        assert all(ac["dist"] <= 10 for ac in radar.frame()["ac"]), radar.frame()["ac"]
+        now[0] += 15
+    assert seen_far
 
 
 def test_demo_traffic_moves():

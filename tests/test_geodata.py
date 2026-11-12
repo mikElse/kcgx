@@ -113,6 +113,6 @@ def test_portland_has_its_coast_rivers_and_landmarks():
 def test_an_airports_map_is_small_and_cached():
     # 320 nm around a busy field: 0.22 MB of JSON, sent once per airport.
     first = geodata.clipped_json("KJFK", 40.6398, -73.7789)
-    assert len(first) < 300_000
+    assert len(first) < 250_000
     assert geodata.clipped_json("KJFK", 40.6398, -73.7789) is first
     assert json.loads(first)["center"] == [-737789, 406398]
