@@ -58,13 +58,16 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
    The status row is min-content, not auto: a screen clips what overflows
    it, so an auto row would let a short window squeeze the airport out of
    sight, where min-content keeps it whole and lets the page scroll.
+   The radar has the status row as well as its own, so its own row's floor
+   is low: with it the rows' floors come to no more than the page's least
+   height, lamps and all, and the page fits any window at least that high.
    The gap and the padding are tokens, so the density is set in one place. */
 :root { --gap: 14px; --page-pad: 16px 20px 20px; }
 .page {
   height: 100vh; min-height: 640px; padding: var(--page-pad);
   display: grid; column-gap: var(--gap);
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
-  grid-template-rows: auto auto min-content minmax(240px, 1fr) auto minmax(160px, 24vh);
+  grid-template-rows: auto auto min-content minmax(48px, 1fr) auto minmax(160px, 24vh);
   grid-template-areas:
     "bar bar" "banner banner"
     "radar status" "radar freq" "lamps freq" "tracks freq";
@@ -275,8 +278,9 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
   radial-gradient(ellipse at center, transparent 52%, rgba(0, 0, 0, 0.42) 100%); }
 [data-display="CRT"] .screen { border-radius: 16px; }
 [data-display="VECTOR"] .screen, [data-display="CRT"] .screen { animation: flicker 7.3s infinite; }
-.screen-tracks { animation-delay: -2.1s; }
-.screen-freq { animation-delay: -4.6s; }
+/* As specific as the rule above, whose shorthand would otherwise reset the delay. */
+.screen.screen-tracks { animation-delay: -2.1s; }
+.screen.screen-freq { animation-delay: -4.6s; }
 [data-display="VECTOR"] .jit, [data-display="CRT"] .jit { animation: jitter 5.1s infinite; }
 [data-display="CRT"] .jit { filter: drop-shadow(1px 0 0 rgba(255, 40, 90, 0.35)) drop-shadow(-1px 0 0 rgba(0, 210, 255, 0.35)); }
 @keyframes flicker { 0%, 100% { opacity: 1; } 31% { opacity: 1; } 31.6% { opacity: 0.93; } 32.2% { opacity: 1; }

@@ -120,11 +120,13 @@ def parts(page):
 
 
 WIDE = [size for size in SIZES if size[0] > 1100]  # two columns
+LEAST = (1280, 640)  # two columns, at the page's least height
+SHORT = (1280, 600)  # two columns, and less high than that: the page scrolls
 LAYOUTS = [(lamps, teletype) for lamps in (False, True) for teletype in (False, True)]
 
 
 @pytest.mark.parametrize("lamps, teletype", LAYOUTS)
-@pytest.mark.parametrize("width, height", SIZES)
+@pytest.mark.parametrize("width, height", SIZES + [LEAST])
 def test_no_two_screens_overlap_and_none_spills_out(page, width, height, lamps, teletype):
     page.set_viewport_size({"width": width, "height": height})
     set_prefs(page, lamps=lamps, teletype=teletype)
@@ -140,8 +142,15 @@ def test_no_two_screens_overlap_and_none_spills_out(page, width, height, lamps, 
         for other, (l2, t2, r2, b2) in boxes[i + 1:]:
             apart = right <= l2 + 0.5 or r2 <= left + 0.5 or bottom <= t2 + 0.5 or b2 <= top + 0.5
             assert apart, f"{name} overlaps {other} {where}"
-    scroll_width = page.evaluate("document.documentElement.scrollWidth")
+    scroll_width, scroll_height = page.evaluate(
+        "[document.documentElement.scrollWidth, document.documentElement.scrollHeight]"
+    )
     assert scroll_width <= width, f"the page scrolls sideways {where}"
+    if width > 1100:  # two columns fill the window; one column is read by scrolling
+        assert scroll_height <= height, f"the page is {scroll_height} px high {where}"
+        padding = page.eval_on_selector(".page", "e => parseFloat(getComputedStyle(e).paddingBottom)")
+        lowest = max(bottom for _, _, _, bottom in shown.values())
+        assert lowest <= height - padding + 0.5, f"the screens run {lowest - height + padding} px into the margin {where}"
 
 
 def test_by_default_four_screens_show_and_no_lamps_or_teletype(page):
@@ -177,10 +186,11 @@ def test_frequencies_runs_down_to_the_bottom_of_tracks(page, width, height, lamp
 
 
 @pytest.mark.parametrize("lamps", [False, True])
-@pytest.mark.parametrize("width, height", WIDE)
+@pytest.mark.parametrize("width, height", WIDE + [SHORT])
 def test_a_short_window_never_squeezes_the_airport_pane(page, width, height, lamps):
     """Its row is sized by what is in it: a screen clips what overflows it,
-    so a squeezed pane would cut off the button that changes the airport."""
+    so a squeezed pane would cut off the button that changes the airport.
+    At SHORT the page is taller than the window and scrolls instead."""
     page.set_viewport_size({"width": width, "height": height})
     set_prefs(page, lamps=lamps)
     page.wait_for_timeout(200)
@@ -238,6 +248,24 @@ def test_the_forty_mile_ring_fits_the_shorter_side_of_the_radar(page, width, hei
     box = page.eval_on_selector("#radar", "e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }")
     size = page.eval_on_selector("#radar", "e => [e.width / devicePixelRatio, e.height / devicePixelRatio]")
     assert abs(box[0] - size[0]) <= 1 and abs(box[1] - size[1]) <= 1, "the canvas does not fill its pane"
+
+
+@pytest.mark.parametrize("display", ["CRT", "VECTOR"])
+def test_the_screens_do_not_flicker_in_step(page, display):
+    """Frequencies and tracks start partway through the flicker, so the wall
+    never blinks as one."""
+    try:
+        set_prefs(page, display=display)
+        flicker = page.evaluate(
+            """() => Object.fromEntries(["radar", "status", "freq", "tracks"].map(name => {
+                const style = getComputedStyle(document.querySelector(`.screen-${name}`));
+                return [name, `${style.animationName} ${style.animationDelay}`]; }))"""
+        )
+    finally:
+        set_prefs(page, display="CRT")
+    assert flicker == {
+        "radar": "flicker 0s", "status": "flicker 0s", "freq": "flicker -4.6s", "tracks": "flicker -2.1s",
+    }
 
 
 def test_no_label_carries_a_key_hint(page):
@@ -332,7 +360,11 @@ def test_the_volume_slider_reaches_the_server(page):
 
 def test_a_page_error_shows_in_the_banner_while_the_teletype_is_hidden(page):
     assert not page.is_visible("#banner")
+    # The page's clock is paused, so only the two jumps below move it. Left
+    # running, a jump can be lost and the 8 s never come due. pause_at takes
+    # seconds.
     page.clock.install()
+    page.clock.pause_at(page.evaluate("Date.now()") / 1000 + 1)
     page.evaluate('window.kcgx.store.apply({t: "error", text: "x"})')
     assert page.is_visible("#banner")
     assert page.inner_text("#banner") == "ERROR: X"
@@ -341,6 +373,7 @@ def test_a_page_error_shows_in_the_banner_while_the_teletype_is_hidden(page):
     assert page.is_visible("#banner")
     page.clock.fast_forward(1500)
     assert not page.is_visible("#banner")
+    page.clock.resume()  # the waits below poll on the page's timers
     # it was typed on the hidden teletype all the same
     set_prefs(page, teletype=True)
     page.wait_for_function("document.getElementById('log').textContent.includes('ERROR: X')")
@@ -357,14 +390,16 @@ def test_a_failed_request_shows_in_the_banner_while_the_teletype_is_hidden(brows
     # Its own page: the browser reports the failed request on the console,
     # which the `page` fixture would count as an error.
     page = browser.new_page()
-    page.goto(server + "/")
-    page.wait_for_selector(".feed.expanded")
-    set_prefs(page, teletype=False)
-    page.route("**/api/airports?*", lambda route: route.fulfill(status=500, json={"error": "no such luck"}))
-    page.click("#open-airport")
-    page.fill("#airport-query", "seattle")
-    page.wait_for_selector("#banner.bad:text-is('AIRPORT SEARCH FAILED: NO SUCH LUCK')")
-    page.close()
+    try:
+        page.goto(server + "/")
+        page.wait_for_selector(".feed.expanded")
+        set_prefs(page, teletype=False)
+        page.route("**/api/airports?*", lambda route: route.fulfill(status=500, json={"error": "no such luck"}))
+        page.click("#open-airport")
+        page.fill("#airport-query", "seattle")
+        page.wait_for_selector("#banner.bad:text-is('AIRPORT SEARCH FAILED: NO SUCH LUCK')")
+    finally:
+        page.close()
 
 
 def test_turning_the_teletype_on_clears_a_page_error_from_the_banner(page):
