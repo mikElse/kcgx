@@ -789,5 +789,12 @@ needs only Part 1's `main.js`, and Task 10 can start any time after 5.
 - An icon for KCGX.app (it gets the generic one).
 - A window on Linux.
 - Decluttering tags when 250 nm fills the screen (Task 7 measures first).
+- **Follow up from Task 7's measurement: the radar's frame time with a
+  full 250 nm picture.** 600 aircraft with full trails took 34.7 ms a
+  frame (the numbers and how they were taken are under Task 7), against a
+  16 ms budget. The work, none of it done in this plan: draw each trail
+  as one stroke, or a few, instead of a stroke and a shadow for every
+  segment, or draw trails without the shadow; and skip aircraft and trail
+  points that are off the screen.
 - Per-item box styles: one fill, padding and border for every boxed item.
 - A sticky header on the tracks table.

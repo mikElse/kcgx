@@ -106,12 +106,16 @@ def other(browser, server, page):
     tab.close()
 
 
+# Whether the radar's last frame was of the view it holds and the range that is set.
+RADAR_DRAWN = """() => { const d = window.kcgx.radar.debug();
+                         const now = { ...d.view, range: window.kcgx.store.state.prefs.range_nm };
+                         return JSON.stringify(d.shown) === JSON.stringify(now); }"""
+
+
 def radar_drawn(page):
-    """Wait until the radar has drawn the view it holds; returns what it drew."""
-    page.wait_for_function(
-        """() => { const d = window.kcgx.radar.debug();
-                   return JSON.stringify(d.shown) === JSON.stringify(d.view); }"""
-    )
+    """Wait until the radar has drawn the view it holds, at the range that is
+    set; returns what it drew."""
+    page.wait_for_function(RADAR_DRAWN)
     return page.evaluate("window.kcgx.radar.debug()")
 
 
@@ -1323,6 +1327,147 @@ def test_a_new_range_resets_the_view_and_draws_its_ring(page):
     home = debug["home"]
     for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
         assert lit(page, home["x"] + dx * r, home["y"] + dy * r) > 60, (dx, dy)
+
+
+def test_a_new_range_under_a_held_drag_leaves_the_drag_going_from_the_new_view(page):
+    """Another tab, or the keyboard on the slider, can change the range while
+    the radar is held: the drag carries on from the reset view, not from the
+    pan it began with."""
+    wait_for_traffic(page)
+    x, y = on_screen(page, 300, 300)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 120, y + 60, steps=6)
+    held = radar_debug(page)["view"]
+    assert held["panX"] != 0 and held["panY"] != 0
+    set_prefs(page, range_nm=120)
+    assert radar_debug(page)["view"] == {"nm": 120, "panX": 0, "panY": 0}
+    page.mouse.move(x + 150, y + 80)
+    page.mouse.up()
+    per_nm = fit(page) / 120
+    ratio = page.evaluate("devicePixelRatio")
+    view = radar_debug(page)["view"]
+    assert view["nm"] == 120
+    assert view["panX"] == pytest.approx(-30 * ratio / per_nm)
+    assert view["panY"] == pytest.approx(-20 * ratio / per_nm)
+    # and the press that ends it is still the end of a drag, not a click
+    page.mouse.dblclick(x, y)
+    assert radar_debug(page)["view"] == {"nm": 120, "panX": 0, "panY": 0}
+
+
+def test_a_new_range_that_is_the_view_already_held_is_not_drawn_until_the_next_frame(page):
+    """Zoomed out to 160 about the airport and then given a range of 160, the
+    view does not change but the rings do: radar_drawn must wait for them."""
+    wait_for_traffic(page)
+    page.mouse.move(*centre_of_the_radar(page))
+    for _ in range(4):
+        turn_wheel(page, 600)
+    assert radar_drawn(page)["view"] == {"nm": 160, "panX": 0, "panY": 0}
+    page.evaluate(
+        """drawn => window.kcgx.store.subscribe((kind) => {
+               if (kind === "prefs") window.drawnAtPrefs = new Function("return (" + drawn + ")()")(); })""",
+        RADAR_DRAWN,
+    )
+    set_prefs(page, range_nm=160)
+    assert page.evaluate("window.drawnAtPrefs") is False
+    debug = radar_drawn(page)
+    assert debug["view"] == {"nm": 160, "panX": 0, "panY": 0}
+    assert [(ring["nm"], ring["bright"]) for ring in debug["rings"]] == [
+        (50, False), (100, False), (150, False), (160, True),
+    ]
+
+
+def overlap(a, b, gap=0):
+    return (
+        a["x"] < b["x"] + b["w"] + gap and b["x"] < a["x"] + a["w"] + gap
+        and a["y"] < b["y"] + b["h"] + gap and b["y"] < a["y"] + a["h"] + gap
+    )
+
+
+def nearest(box, x, y):
+    """How far (x, y) is from the nearest point of `box`."""
+    dx = max(box["x"] - x, 0, x - box["x"] - box["w"])
+    dy = max(box["y"] - y, 0, y - box["y"] - box["h"])
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def test_ring_numbers_sit_on_the_north_east_diagonal_just_outside_their_rings(page):
+    wait_for_traffic(page)
+    debug = radar_drawn(page)
+    ratio = page.evaluate("devicePixelRatio")
+    home = debug["home"]
+    assert [ring["text"] for ring in debug["rings"] if ring["label"]] == ["10", "20", "30", "40"]
+    for ring in debug["rings"]:
+        d = ring["r"] * 0.5**0.5
+        label = ring["label"]
+        assert label["x"] == pytest.approx(home["x"] + d + 4 * ratio)
+        assert label["y"] + label["h"] == pytest.approx(home["y"] - d - 4 * ratio)
+        assert label["w"] > 0 and label["h"] == 12 * ratio
+
+
+@pytest.mark.parametrize("range_nm, dim, unnumbered", [(210, [50, 100, 150, 200], [200]), (120, [50, 100], [])])
+def test_a_ring_number_that_would_touch_the_ranges_is_left_off(page, range_nm, dim, unnumbered):
+    """Ten miles past a multiple of a 50 nm step, the last dim ring is a few
+    pixels inside the range's: its number gives way, the ring stays."""
+    wait_for_traffic(page)
+    set_prefs(page, range_nm=range_nm)
+    debug = radar_drawn(page)
+    rings = debug["rings"]
+    assert [ring["nm"] for ring in rings] == [*dim, range_nm]
+    assert rings[-1]["bright"] and rings[-1]["label"]
+    assert [ring["nm"] for ring in rings if not ring["label"]] == unnumbered
+    ratio = page.evaluate("devicePixelRatio")
+    labels = [ring["label"] for ring in rings if ring["label"]]
+    for i, a in enumerate(labels):
+        assert not any(overlap(a, b, 2 * ratio) for b in labels[i + 1:]), a
+
+
+@pytest.mark.parametrize("side", ["above", "below"])
+def test_ring_numbers_follow_the_rings_when_the_airport_is_off_the_screen(page, side):
+    """Panned so the airport is off the screen, every number goes where its
+    ring passes nearest the middle: above, the north east diagonal is off the
+    screen too, and below, it is still on it for some rings and is not used."""
+    wait_for_traffic(page)
+    width, height = canvas_size(page)
+    ratio = page.evaluate("devicePixelRatio")
+    x, top = on_screen(page, width / 2, 0)
+    near, far = top + 40 / ratio, top + (height - 100) / ratio
+    start, end = (far, near) if side == "above" else (near, far)
+    page.mouse.move(x, start)
+    page.mouse.down()
+    page.mouse.move(x, end, steps=8)
+    page.mouse.up()
+    debug = radar_drawn(page)
+    home = debug["home"]
+    off = home["y"] + home["r"] < 0 if side == "above" else home["y"] - home["r"] > height
+    assert off, "the test wants the airport and its ring off the screen"
+    assert len(debug["rings"]) >= 2
+    for ring in debug["rings"]:
+        label = ring["label"]
+        assert label, ring
+        assert label["x"] >= 0 and label["y"] >= 0, ring
+        assert label["x"] + label["w"] <= width and label["y"] + label["h"] <= height, ring
+        # beside its own ring, outside it
+        assert ring["r"] <= nearest(label, home["x"], home["y"]) <= ring["r"] + 8 * ratio, ring
+        # and in line with the airport and the middle of the screen
+        assert abs(label["x"] - home["x"]) <= 8 * ratio, ring
+
+
+def test_a_ring_number_that_would_sit_on_the_home_ring_is_left_off(page):
+    """At the closest view the half mile ring is inside the home ring, and
+    its number would land on it."""
+    wait_for_traffic(page)
+    zoom_right_in(page)
+    debug = radar_drawn(page)
+    ratio = page.evaluate("devicePixelRatio")
+    home = debug["home"]
+    by_nm = {ring["nm"]: ring for ring in debug["rings"]}
+    assert by_nm[0.5]["r"] < home["r"], "the test wants a ring inside the home ring"
+    assert by_nm[0.5]["label"] is None
+    assert [nm for nm in (1, 1.5, 2, 2.5) if by_nm[nm]["label"]] == [1, 1.5, 2, 2.5]
+    for ring in debug["rings"]:
+        if ring["label"]:
+            assert nearest(ring["label"], home["x"], home["y"]) >= home["r"] + 4 * ratio, ring
 
 
 def test_a_setting_other_than_the_range_leaves_the_view_alone(page):

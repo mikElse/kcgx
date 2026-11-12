@@ -24,6 +24,9 @@ const HOME_NM = 2.5; // the home ring's true size,
 const HOME_MIN_PX = 24; // and what it is held between on screen
 const HOME_MAX_PX = 64;
 const EDGE_PX = 18; // kept clear between the view's distance and the nearer edge
+const RING_TEXT_PX = 12; // a ring's number,
+const RING_GAP_PX = 4; // how far it stands off its ring and clear of the home ring,
+const RING_APART_PX = 2; // and of another ring's number
 const DRAW_ON_MS = 2000;
 const LABEL_ALPHA = 0.4;
 const DIM_ALPHA = 0.15;
@@ -109,11 +112,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   let staticDirty = true;
   let hovered = null; // a placed label's key
   let placed = []; // [{ key, x, y, w, h }]
-  let rings = []; // [{ nm, r, bright, text }], as last drawn
+  let rings = []; // [{ nm, r, bright, text, label: {x, y, w, h} or null }], as last drawn
   let home = { x: 0, y: 0, r: 0 }; // the airport and its ring, as last drawn
   let symbols = {}; // kind -> how many are on screen, as last drawn
-  let shown = null; // the view as the last frame drew it
+  let shown = null; // the view and the range, as the last frame drew them
   let hits = []; // [{ hex, x, y, label: {x, y, w, h}, trail: [[x, y]] }]
+  // moved: the press now down, or the last one, became a drag. before: the
+  // press ahead of it did. at: where the pointer last was.
+  const pointer = { down: null, moved: false, before: false, at: [0, 0] };
   const still = document.createElement("canvas");
   const trace = document.createElement("canvas"); // the moving layer, for persistence
 
@@ -135,12 +141,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     return Math.max(0, Math.min(width, height) / 2 - EDGE_PX * ratio) / view.nm;
   }
 
-  // Back to the whole range, about the airport.
+  // Back to the whole range, about the airport. A drag that is under way
+  // (the range or the airport can change beneath one) carries on from here.
   function recentre() {
     view.nm = range();
     view.panX = 0;
     view.panY = 0;
     viewFor = view.nm;
+    if (pointer.down) pointer.down = { at: pointer.at, panX: 0, panY: 0 };
     staticDirty = true;
   }
 
@@ -165,13 +173,47 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const limit = range();
     const step = RING_STEPS_NM.find((nm) => view.nm / nm <= RINGS_IN_VIEW) || RING_STEPS_NM[RING_STEPS_NM.length - 1];
     const out = [];
-    const ring = (nm, bright) => out.push({ nm, r: nm * s, bright, text: `${Number(nm.toFixed(2))}` });
+    const ring = (nm, bright) => out.push({ nm, r: nm * s, bright, text: `${Number(nm.toFixed(2))}`, label: null });
     const last = Math.floor(Math.min(limit, farthest) / step);
     for (let i = Math.max(1, Math.ceil(nearest / step)); i <= last; i += 1) {
       if (i * step < limit) ring(i * step, false);
     }
     if (limit >= nearest && limit <= farthest) ring(limit, true);
     return out;
+  }
+
+  // Where a ring's number goes: just outside the ring, on the north east
+  // diagonal while the airport is on the screen and, once it is panned off,
+  // where the ring passes nearest the middle of the screen. Either gives way
+  // to the other when it is off the screen or on the home ring. null when
+  // neither has room, or when the number would touch one of `numbered`,
+  // those already placed.
+  function ringLabel(ctx, ring, centre, width, height, ratio, clear, numbered) {
+    const w = ctx.measureText(ring.text).width;
+    const h = RING_TEXT_PX * ratio;
+    const gap = RING_GAP_PX * ratio;
+    const apart = RING_APART_PX * ratio;
+    const ways = [[Math.SQRT1_2, -Math.SQRT1_2]];
+    const dx = width / 2 - centre[0];
+    const dy = height / 2 - centre[1];
+    const far = Math.hypot(dx, dy);
+    if (far > 1) ways.push([dx / far, dy / far]);
+    if (centre[0] < 0 || centre[1] < 0 || centre[0] > width || centre[1] > height) ways.reverse();
+    for (const [ux, uy] of ways) {
+      const x = centre[0] + ring.r * ux;
+      const y = centre[1] + ring.r * uy;
+      // In the quarter that faces away from the airport, so never across the ring.
+      const box = { x: ux >= 0 ? x + gap : x - gap - w, y: uy <= 0 ? y - gap - h : y + gap, w, h };
+      if (box.x < 0 || box.y < 0 || box.x + w > width || box.y + h > height) continue;
+      const nearX = Math.max(box.x - centre[0], 0, centre[0] - box.x - w);
+      const nearY = Math.max(box.y - centre[1], 0, centre[1] - box.y - h);
+      if (Math.hypot(nearX, nearY) < clear) continue;
+      const touches = numbered.some((n) => (
+        box.x < n.x + n.w + apart && n.x < box.x + w + apart && box.y < n.y + n.h + apart && n.y < box.y + h + apart
+      ));
+      return touches ? null : box;
+    }
+    return null;
   }
 
   function toScreen(xy, s, width, height) {
@@ -257,8 +299,9 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       }
     }
 
-    // Range rings, dim, and the range itself, bright; labelled along the
-    // north east diagonal.
+    // Range rings, dim, and the range itself, bright. Each is numbered where
+    // there is room; the range's number is placed first, so a dim ring's
+    // that would touch it is the one left off.
     rings = ringsOn(centre, s, width, height);
     ctx.save();
     ctx.strokeStyle = c.cyan;
@@ -273,10 +316,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.restore();
     ctx.save();
     ctx.fillStyle = c.dim;
-    ctx.font = `${12 * ratio}px ${FONT}`;
-    for (const ring of rings) {
-      const d = ring.r * Math.SQRT1_2;
-      ctx.fillText(ring.text, centre[0] + d + 4 * ratio, centre[1] - d - 4 * ratio);
+    ctx.font = `${RING_TEXT_PX * ratio}px ${FONT}`;
+    const clear = homeRing(s, ratio) + RING_GAP_PX * ratio;
+    const numbered = [];
+    for (const ring of [...rings.filter((r) => r.bright), ...rings.filter((r) => !r.bright)]) {
+      ring.label = ringLabel(ctx, ring, centre, width, height, ratio, clear, numbered);
+      if (!ring.label) continue;
+      numbered.push(ring.label);
+      ctx.fillText(ring.text, ring.label.x, ring.label.y + ring.label.h);
     }
     ctx.restore();
 
@@ -548,7 +595,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.globalCompositeOperation = "lighter";
     ctx.drawImage(trace, 0, 0);
     ctx.globalCompositeOperation = "source-over";
-    shown = { ...view };
+    shown = { ...view, range: range() };
 
     if (now - lastHud > 500) { lastHud = now; drawHud(list); }
     requestAnimationFrame(frame);
@@ -568,10 +615,6 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   }
 
   // -- pointing, panning, zooming, focusing --
-
-  // moved: the press now down, or the last one, became a drag. before: the
-  // press ahead of it did.
-  const pointer = { down: null, moved: false, before: false };
 
   function local(event) {
     const ratio = window.devicePixelRatio || 1;
@@ -593,7 +636,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   }
 
   canvas.addEventListener("pointerdown", (event) => {
-    pointer.down = { at: local(event), panX: view.panX, panY: view.panY };
+    pointer.at = local(event);
+    pointer.down = { at: pointer.at, panX: view.panX, panY: view.panY };
     pointer.before = pointer.moved;
     pointer.moved = false;
     canvas.setPointerCapture(event.pointerId);
@@ -601,6 +645,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
   canvas.addEventListener("pointermove", (event) => {
     const at = local(event);
+    pointer.at = at;
     if (pointer.down) {
       const { ratio, width, height } = size();
       const s = scale(width, height, ratio);
@@ -691,9 +736,9 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   return {
     recentre,
     redraw() { staticDirty = true; },
-    // For tests: what is on screen, in screen pixels. `view` changes with
-    // the event that changes it and `shown` with the next frame, so the
-    // rest describes the view once the two agree.
+    // For tests: what is on screen, in screen pixels. `view` and the range
+    // change with the event that changes them and `shown` with the next
+    // frame, so the rest describes them once `shown` agrees with both.
     debug() {
       return {
         hits: hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y })),
