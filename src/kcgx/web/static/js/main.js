@@ -28,6 +28,13 @@ function applyPrefs() {
   root.style.setProperty("--scan-size", `${prefs.scan_size}px`);
   root.style.setProperty("--scan-line", `${Math.max(1, Math.round(prefs.scan_size / 3))}px`);
   $("radar-range").textContent = `RNG ${prefs.range_nm} NM`;
+  // The label boxes. The radar paints its own; the readouts over it are
+  // boxed by the stylesheet, from the same four settings.
+  root.dataset.boxHud = prefs.box_items.includes("HUD") ? "ON" : "OFF";
+  root.style.setProperty("--box-fill", `${prefs.box_fill}%`);
+  root.style.setProperty("--box-pad", `${prefs.box_pad}px`);
+  root.style.setProperty("--box-border", `${prefs.box_border}%`);
+  root.style.setProperty("--box-width", `${prefs.box_width}px`);
   root.dataset.lamps = prefs.lamps ? "ON" : "OFF";
   const opened = prefs.teletype && root.dataset.teletype !== "ON";
   root.dataset.teletype = prefs.teletype ? "ON" : "OFF";

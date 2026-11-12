@@ -549,7 +549,7 @@ is its own change.
 
 **Files:** `radar.js`, `cockpit.css`, `main.js`, `tests/test_page.py`
 
-- [ ] **Tests first.** Expose each tag's lines and box in `debug()`
+- [x] **Tests first.** Expose each tag's lines and box in `debug()`
   (`hits[].tag = { lines, x, y, w, h }`) and each placed label's `boxed`
   flag. With the default prefs a tag is one line, `LABEL ALT`. With all
   seven fields it is two lines in the fixed order. With none, `tag` is
@@ -561,12 +561,12 @@ is its own change.
   and `box_border: 0` the canvas is pixel-identical to boxes off. No two
   `placed` rectangles overlap with `box_pad: 12`. `HUD` in `box_items`
   gives `.hud span` a non-transparent background.
-- [ ] **Tags.** Formats: `CALLSIGN` the label; `TYPE`; `SQWK`; `ALT` feet
+- [x] **Tags.** Formats: `CALLSIGN` the label; `TYPE`; `SQWK`; `ALT` feet
   or `GND` as now; `GS` `230KT`; `TRK` `270°`; `DIST` `12.4NM`. Empty
   values are skipped. Two or fewer chosen fields join on one line;
   otherwise identity over numbers. The click rectangle
   (`radar.js:452`) covers every line.
-- [ ] **One helper paints every box**, always `source-over`:
+- [x] **One helper paints every box**, always `source-over`:
 
   ```js
   function box(ctx, rect, colour, ratio, prefs, alpha = 1) {
@@ -591,23 +591,43 @@ is its own change.
   }
   ```
 
-- [ ] **Static labels** (home name, airports, navaids, cities, peaks,
+- [x] **Static labels** (home name, airports, navaids, cities, peaks,
   state names, ring numbers): call `box` on the still layer just before
   the text, when the label's kind is in `box_items`. The collision
   rectangle pushed to `taken` and `placed` is the box, not the text, so
   boxes never overlap and hover covers the box. The box's own alpha does
   not follow the label's hover brightening.
-- [ ] **Aircraft tags** cannot be boxed on the moving layer: it reaches
+- [x] **Aircraft tags** cannot be boxed on the moving layer: it reaches
   the screen by addition, and adding black changes nothing. In `frame()`,
   after `drawImage(still)` and before the moving layer is added, paint
   each tag's box straight onto the visible canvas, at the aircraft's own
   alpha (so a dimmed or stale aircraft's box dims with it). `drawMoving`
   returns the rectangles.
-- [ ] **HUD.** `applyPrefs` sets `data-box-hud` on `<html>` and four
+- [x] **HUD.** `applyPrefs` sets `data-box-hud` on `<html>` and four
   custom properties (`--box-fill`, `--box-pad`, `--box-border`,
   `--box-width`); CSS boxes `.hud span` from them, border in
   `color-mix(in srgb, currentColor var(--box-border), transparent)`.
-- [ ] Commit `feat(radar): chosen flight tags; boxes behind labels`.
+- [x] Commit `feat(radar): chosen flight tags; boxes behind labels`.
+
+  **As built, where it differs from the above.** A label's text never
+  moves when its box is turned on or resized. The box is the capitals the
+  label inks (0.7 of the text's size above the baseline), then the padding,
+  then the border outside the padding as CSS has it for the HUD, on whole
+  pixels; a place's box takes in its symbol. What a label reserves (`x, y,
+  w, h` in `placed`, a ring's `label` and `hits[].tag`) is its old text
+  rectangle grown to hold that box, and the painted rectangle is reported
+  beside the flag as `box`. So the helper is two, `boxAbout` (the
+  rectangle) and `paintBox` (the paint). On the still layer every place is
+  given its room first, then the boxes are painted, then symbols and names,
+  so a box hides map lines and never a symbol; the home name's box goes
+  down before the home ring. A boxed ring number is room taken, which a
+  bare one still is not. `TRK` reads `030°`, as the table pads it. "Fill 0
+  and border 0 is pixel-identical" holds for AIRCRAFT and HUD at any
+  padding. A boxed still label reserves more room than a bare one, so
+  fewer may fit; at padding 0 the demo's picture keeps them all and is
+  identical. The map that ships names no states
+  (`labels.state` is empty), so STATES has nothing to box until one does;
+  its test gives the page a map with one.
 
 ### Task 9: Part 1 by hand
 

@@ -1627,6 +1627,460 @@ def test_a_refused_radar_says_so_and_dims_its_lamp(page):
     assert "warn" in page.get_attribute(".lamp:has(.lamp-label:text-is('RADAR'))", "class")
 
 
+# -- flight tags and label boxes ----------------------------------------------------
+
+FIELDS = list(SCHEMA["tag_fields"].names)
+ITEMS = list(SCHEMA["box_items"].names)
+BLACK = (0, 0, 0, 255)
+EVERY_FIELD = {"label": "DAL1388", "type": "A321", "sq": "2251", "alt": 5900, "gs": 310, "trk": 30, "dist": 14.3}
+
+
+def plane(hex_, east=0.0, north=0.0, **over):
+    """An aircraft for `hold_traffic`: `east` and `north` of the airport in
+    nm, and standing still unless it is given a ground speed."""
+    return {
+        "hex": hex_, "label": hex_.upper(), "type": "B738", "east": east, "north": north, "alt": 12000,
+        "gs": 0, "trk": 270, "sq": "4512", "age": 0, "dist": 12.4, "brg": 270, **over,
+    }
+
+
+def frames(page, count=2):
+    """Let the radar draw: returns `count` animation frames from now."""
+    page.evaluate(
+        """count => new Promise(done => {
+            const step = n => (n ? requestAnimationFrame(() => step(n - 1)) : done()); step(count); })""",
+        count,
+    )
+
+
+def tags(page):
+    """Each aircraft's tag as the radar last drew it, by hex."""
+    return {hit["hex"]: hit["tag"] for hit in radar_debug(page)["hits"]}
+
+
+def hold_traffic(page, *aircraft):
+    """Put these aircraft on the radar, and no others, for the rest of the
+    test: the demo's own polls are dropped from here on. Returns their tags."""
+    page.evaluate(
+        """planes => {
+            const store = window.kcgx.store;
+            if (!window.heard) {
+                window.heard = store.apply;
+                store.apply = frame => { if (frame.t !== "aircraft") window.heard(frame); };
+            }
+            const { lat, lon } = store.state.airport;
+            const ac = planes.map(({ east, north, ...rest }) => ({
+                ...rest, lat: lat + north / 60, lon: lon + east / (60 * Math.cos(lat * Math.PI / 180)) }));
+            window.heard({t: "aircraft", ok: true, error: "", age: 0, refresh: 15, range: 40, ac});
+        }""",
+        list(aircraft),
+    )
+    page.wait_for_function(
+        "hexes => window.kcgx.radar.debug().hits.map(h => h.hex).join() === hexes.join()",
+        arg=[a["hex"] for a in aircraft],
+    )
+    return tags(page)
+
+
+def draw(page, **prefs):
+    """Change settings and let the radar draw with them; returns what it drew."""
+    set_prefs(page, **prefs)
+    frames(page)
+    return radar_drawn(page)
+
+
+def canvas_pixels(page, *points):
+    """The radar canvas's own pixels at these points, each (r, g, b, a). The
+    canvas, not the page: no scanlines, no jitter."""
+    found = page.evaluate(
+        """points => { const ctx = document.getElementById("radar").getContext("2d");
+                       return points.map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data]); }""",
+        [[round(x), round(y)] for x, y in points],
+    )
+    return [tuple(p) for p in found]
+
+
+def inside_corners(box):
+    """The pixels just inside a box's corners, within a 1 px border."""
+    left, top, right, bottom = box["x"] + 1, box["y"] + 1, box["x"] + box["w"] - 2, box["y"] + box["h"] - 2
+    return [(left, top), (right, top), (left, bottom), (right, bottom)]
+
+
+def edge_middles(box):
+    """The pixels at the middle of each of a box's edges: top, bottom, left, right."""
+    x, y = box["x"] + box["w"] // 2, box["y"] + box["h"] // 2
+    return [(x, box["y"]), (x, box["y"] + box["h"] - 1), (box["x"], y), (box["x"] + box["w"] - 1, y)]
+
+
+def holds(outer, inner):
+    return (
+        outer["x"] <= inner["x"] and outer["y"] <= inner["y"]
+        and outer["x"] + outer["w"] >= inner["x"] + inner["w"] and outer["y"] + outer["h"] >= inner["y"] + inner["h"]
+    )
+
+
+def picture(page):
+    """The radar canvas, once two looks at it two frames apart agree: the map
+    draws itself on over two seconds, and a setting takes a frame to show.
+    For a picture that holds still: aircraft with no ground speed."""
+    return page.evaluate(
+        """async () => { const canvas = document.getElementById("radar");
+                         const frame = () => new Promise(requestAnimationFrame);
+                         let last = "";
+                         for (let tries = 0; tries < 400; tries += 1) {
+                             await frame(); await frame();
+                             const now = canvas.toDataURL();
+                             if (now === last) return now;
+                             last = now;
+                         }
+                         throw new Error("the radar never held still"); }"""
+    )
+
+
+def test_by_default_a_tag_is_one_line_the_callsign_and_the_altitude(page):
+    wait_for_traffic(page)
+    drawn = hold_traffic(
+        page, plane("a1", -10, 5, label="DAL1388", alt=5900), plane("a2", 10, 5, label="N52RT", alt="GND"),
+        plane("a3", 0, -10, label="UNK1", alt=None), plane("a4", 0, 12, label="N7243K", alt=0),
+    )
+    assert {hex_: tag["lines"] for hex_, tag in drawn.items()} == {
+        "a1": ["DAL1388 5900"], "a2": ["N52RT GND"], "a3": ["UNK1"], "a4": ["N7243K 0"],
+    }
+    assert all(tag["w"] > 0 and tag["h"] > 0 and not tag["boxed"] and tag["box"] is None for tag in drawn.values())
+
+
+def test_the_demos_own_traffic_is_tagged_with_callsign_and_altitude(page):
+    wait_for_traffic(page)
+    # Compared inside one evaluation, and retried: a poll can land between two.
+    page.wait_for_function(
+        """() => { const ac = window.kcgx.store.state.radar.ac;
+                   const hits = window.kcgx.radar.debug().hits;
+                   return ac.length >= 5 && hits.length === ac.length && hits.every((hit, i) =>
+                       hit.tag && hit.tag.lines.join("|") === `${ac[i].label} ${ac[i].alt ?? ""}`.trim()); }"""
+    )
+
+
+@pytest.mark.parametrize("fields, lines", [
+    (FIELDS, ["DAL1388 A321 2251", "5900 310KT 030° 14.3NM"]),
+    (["CALLSIGN", "ALT", "GS"], ["DAL1388", "5900 310KT"]),
+    (["CALLSIGN", "TYPE", "SQWK"], ["DAL1388 A321 2251"]),
+    (["ALT", "GS", "TRK", "DIST"], ["5900 310KT 030° 14.3NM"]),
+    (["TYPE", "GS"], ["A321 310KT"]),
+    (["SQWK", "CALLSIGN"], ["DAL1388 2251"]),
+    (["TRK"], ["030°"]),
+])
+def test_a_tag_is_the_chosen_fields_identity_over_numbers_once_there_are_more_than_two(page, fields, lines):
+    wait_for_traffic(page)
+    set_prefs(page, tag_fields=[f for f in FIELDS if f in fields])
+    assert hold_traffic(page, plane("a1", -10, 5, **EVERY_FIELD))["a1"]["lines"] == lines
+
+
+def test_a_tag_leaves_out_what_the_aircraft_does_not_report(page):
+    wait_for_traffic(page)
+    set_prefs(page, tag_fields=FIELDS)
+    bare = {"type": None, "sq": None, "alt": None, "gs": None, "trk": None, "dist": 22}
+    drawn = hold_traffic(
+        page, plane("a1", -10, 5, label="N1", **bare), plane("a2", 10, 5, label="N2", **{**bare, "alt": "GND", "sq": ""}),
+        plane("a3", 0, -10, label="N3", **{**bare, "trk": 0, "gs": 0}),
+    )
+    assert drawn["a1"]["lines"] == ["N1", "22.0NM"]
+    assert drawn["a2"]["lines"] == ["N2", "GND 22.0NM"]
+    assert drawn["a3"]["lines"] == ["N3", "0KT 000° 22.0NM"]
+    set_prefs(page, tag_fields=["TYPE", "SQWK", "ALT"])
+    frames(page)
+    assert tags(page) == {"a1": None, "a2": {**tags(page)["a2"], "lines": ["GND"]}, "a3": None}
+
+
+def test_with_no_fields_there_is_no_tag_and_the_chevron_still_focuses(page):
+    wait_for_traffic(page)
+    tag = hold_traffic(page, plane("a1", -10, 5), plane("a2", 10, -5))["a1"]
+    where = on_screen(page, tag["x"] + tag["w"] - 3, tag["y"] + 3)
+    set_prefs(page, tag_fields=[])
+    frames(page)
+    assert tags(page) == {"a1": None, "a2": None}
+    page.mouse.click(*where)  # where its tag was
+    frames(page)
+    assert page.locator("#tracks-body tr.focused").count() == 0
+    hit = radar_debug(page)["hits"][0]
+    page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+
+
+def test_a_click_on_either_line_of_a_tag_focuses_its_aircraft(page):
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    one = hold_traffic(page, plane("a1", -10, 5, **{**EVERY_FIELD, "gs": 0}), plane("a2", 10, -5))["a1"]
+    set_prefs(page, tag_fields=FIELDS)
+    frames(page)
+    two = tags(page)["a1"]
+    assert len(two["lines"]) == 2
+    # The second line is where the one line was; the first stands 18 px above it.
+    assert two["h"] == pytest.approx(one["h"] + 18 * ratio)
+    assert two["y"] == pytest.approx(one["y"] - 18 * ratio)
+    assert (two["x"], two["y"] + two["h"]) == pytest.approx((one["x"], one["y"] + one["h"]))
+    assert two["w"] > one["w"]
+    for y in (two["y"] + 3, two["y"] + two["h"] - 3):  # far right, well clear of the chevron
+        page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
+        page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+        page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
+        page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
+
+
+def test_a_tags_box_blacks_out_the_map_under_it_and_is_edged_in_the_tags_colour(page):
+    wait_for_traffic(page)
+    debug = draw(page, glow="OFF", display="OFF", box_items=["AIRCRAFT"], box_fill=0, box_border=0, box_pad=12)
+    ring = next(r for r in debug["rings"] if r["nm"] == 20)
+    home = debug["home"]
+    # West of the airport and outside the 20 nm ring by 60 px, so that the
+    # ring runs up through the tag, which begins 14 px right of the aircraft.
+    tag = hold_traffic(page, plane("a1", east=-(20 + 60 * 20 / ring["r"])))["a1"]
+    box = tag["box"]
+    assert tag["boxed"] and holds(tag, box)
+    assert all(float(n).is_integer() for n in box.values()), "a box is drawn on whole pixels"
+    # Where the ring crosses the padding above the text: lit while the box is clear.
+    y = box["y"] + 6
+    x = round(home["x"] - (ring["r"] ** 2 - (y - home["y"]) ** 2) ** 0.5)
+    assert box["x"] + 14 < x < box["x"] + box["w"] - 2
+    under = [(x - 1, y), (x, y), (x + 1, y)]
+    assert any(p[3] > 0 and max(p[:3]) > 100 for p in canvas_pixels(page, *under))
+    draw(page, box_fill=100)
+    assert canvas_pixels(page, *under) == [BLACK] * 3
+    # The corners away from the chevron, and the edges away from it.
+    top_right, bottom_right = inside_corners(box)[1], inside_corners(box)[3]
+    top, _, _, right = edge_middles(box)
+    assert canvas_pixels(page, top_right, bottom_right, top, right) == [BLACK] * 4
+    draw(page, box_border=100)
+    cyan = (*css_colour(page, "--cyan"), 255)
+    assert canvas_pixels(page, top_right, bottom_right, top, right) == [BLACK, BLACK, cyan, cyan]
+    # Just outside it nothing is painted.
+    assert canvas_pixels(page, (box["x"] + box["w"] // 2, box["y"] - 2)) == [(0, 0, 0, 0)]
+
+
+def test_a_tags_box_is_the_padding_and_the_border_about_the_text(page):
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    plain = hold_traffic(page, plane("a1", -10, 5))["a1"]
+    sizes = {}
+    for pad, width in [(0, 1), (4, 1), (12, 1), (12, 5)]:
+        draw(page, box_items=["AIRCRAFT"], box_pad=pad, box_width=width)
+        tag = tags(page)["a1"]
+        sizes[pad, width] = tag["box"]
+        assert tag["lines"] == plain["lines"] and tag["boxed"] and holds(tag, tag["box"]) and holds(tag, plain)
+    for (pad, width), box in sizes.items():
+        grown = 2 * (pad + width - 1) * ratio
+        assert box["w"] == pytest.approx(sizes[0, 1]["w"] + grown, abs=1)
+        assert box["h"] == pytest.approx(sizes[0, 1]["h"] + grown, abs=1)
+    # Tight about the capitals: 0.7 of the 16 px text high, and no wider than the text.
+    assert sizes[0, 1]["h"] == pytest.approx(0.7 * 16 * ratio + 2, abs=1)
+    assert sizes[0, 1]["w"] <= plain["w"] + 2
+
+
+def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
+    wait_for_traffic(page)
+    set_prefs(page, glow="OFF", display="OFF", box_items=["AIRCRAFT"], box_fill=100, box_border=100, box_pad=12)
+    drawn = hold_traffic(page, plane("a1", -12, 12), plane("a2", 12, -12))
+    edges = {hex_: edge_middles(tag["box"]) for hex_, tag in drawn.items()}
+    cyan = (*css_colour(page, "--cyan"), 255)
+    assert canvas_pixels(page, edges["a1"][0], edges["a2"][0]) == [cyan, cyan]
+    # In the padding, top right: no text there, and nowhere near the chevron.
+    page.mouse.click(*on_screen(page, *inside_corners(drawn["a1"]["box"])[1]))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+    frames(page)
+    pink = (*css_colour(page, "--pink"), 255)
+    focused, dimmed = canvas_pixels(page, edges["a1"][0], edges["a2"][0])
+    assert focused == pink
+    assert 0 < dimmed[3] < 110, "the other aircraft's box is as dim as the aircraft"
+
+
+STILL = [
+    ("HOME", "home", "--pink"), ("AIRPORTS", "airport:", "--cyan"), ("NAVAIDS", "navaid:", "--cyan"),
+    ("CITIES", "city:", "--amber"), ("PEAKS", "peak:", "--amber"), ("STATES", "state:", "--dim"),
+    ("RINGS", "ring:", "--dim"),
+]
+
+
+def name_a_state(page):
+    """The map that ships names no states, though the radar draws them where
+    a map does. Give this page's map one, south west of the airport."""
+    def named(route):
+        response = route.fetch()
+        geo = response.json()
+        geo["labels"]["state"] = [[round(-123.4 * geo["q"]), round(45.2 * geo["q"]), "OREGON"]]
+        route.fulfill(response=response, json=geo)
+
+    page.route("**/api/geo*", named)
+    page.reload()
+    page.wait_for_selector(".feed.expanded")
+
+
+def still_labels(debug):
+    """Every label on the still layer, as {key: rectangle}: the placed ones and the ring numbers."""
+    found = {p["key"]: p for p in debug["placed"]}
+    found.update({f"ring:{r['text']}": r["label"] for r in debug["rings"] if r["label"]})
+    return found
+
+
+@pytest.mark.parametrize("item, prefix, colour", STILL)
+def test_a_boxed_kind_of_label_is_filled_black_and_edged_in_its_own_colour(page, item, prefix, colour):
+    if item == "STATES":
+        name_a_state(page)
+    wait_for_traffic(page)
+    hold_traffic(page)  # nothing flying over the labels
+    plain = still_labels(draw(page, glow="OFF", display="OFF"))
+    assert not any(label["boxed"] or label["box"] for label in plain.values())
+    debug = draw(page, box_items=[item], box_fill=100, box_border=100)
+    width, height = canvas_size(page)
+    labels = still_labels(debug)
+    mine = {key: label for key, label in labels.items() if key.startswith(prefix)}
+    assert mine and all(label["boxed"] and holds(label, label["box"]) for label in mine.values())
+    assert not any(label["boxed"] or label["box"] for key, label in labels.items() if key not in mine)
+    # The text is where it was: a box is put behind a label, it does not move it.
+    assert all(holds(label, plain[key]) for key, label in mine.items() if key in plain)
+    whole = [
+        label["box"] for label in mine.values()
+        if label["box"]["x"] >= 0 and label["box"]["y"] >= 0
+        and label["box"]["x"] + label["box"]["w"] <= width and label["box"]["y"] + label["box"]["h"] <= height
+    ]
+    if item == "RINGS":
+        # The airport's name is written across the ring numbers nearest it, as it always was.
+        whole = [box for box in whole if not overlap(box, labels["home"])]
+    assert whole
+    edge = (*css_colour(page, colour), 255)
+    for box in whole:
+        # A symbol or a runway may be drawn over one corner or one edge of a
+        # box (they go on top, so a box hides none of them), never over most.
+        assert canvas_pixels(page, *inside_corners(box)).count(BLACK) >= 3, box
+        assert canvas_pixels(page, *edge_middles(box)).count(edge) >= 3, box
+
+
+def test_a_box_on_the_still_layer_blacks_out_the_ring_it_lies_across(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    # At the widest padding a ring number's box reaches back over its own ring.
+    debug = draw(page, glow="OFF", display="OFF", box_items=["RINGS"], box_fill=0, box_border=0, box_pad=12)
+    ring, home = debug["rings"][-1], debug["home"]
+    assert ring["bright"] and ring["label"]["boxed"]
+    d = ring["r"] * 0.5**0.5
+    x, y = round(home["x"] + d), round(home["y"] - d)  # the ring, where its number stands off it
+    assert nearest(ring["label"]["box"], x, y) == 0
+    on_the_ring = [(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)]
+    assert any(p[3] > 0 and max(p[:3]) > 100 for p in canvas_pixels(page, *on_the_ring))
+    draw(page, box_fill=100)
+    assert canvas_pixels(page, *on_the_ring) == [BLACK] * 9
+
+
+def test_a_box_does_not_brighten_with_its_label_under_the_pointer(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    debug = draw(page, glow="OFF", display="OFF", box_items=["CITIES"], box_fill=100, box_border=50)
+    width, height = canvas_size(page)
+    label = next(
+        p for p in debug["placed"]
+        if p["key"].startswith("city:") and p["box"]["x"] > 0 and p["box"]["y"] > 0
+        and p["box"]["x"] + p["box"]["w"] < width and p["box"]["y"] + p["box"]["h"] < height
+    )
+    top, bottom, _, right = edge_middles(label["box"])
+    before = canvas_pixels(page, top, bottom, right)
+    assert sum(max(p[:3]) > 60 for p in before) >= 2, "the border is drawn"
+    # Over the box's padding, not the text: the pointer on a box is on its label.
+    page.mouse.move(*on_screen(page, label["box"]["x"] + label["box"]["w"] - 2, label["box"]["y"] + 2))
+    page.wait_for_function(f"window.kcgx.radar.debug().hovered === {label['key']!r}")
+    frames(page)
+    assert canvas_pixels(page, top, bottom, right) == before
+
+
+def test_boxes_with_no_fill_and_no_border_leave_the_picture_as_it_was(page):
+    wait_for_traffic(page)
+    hold_traffic(
+        page, plane("a1", -12, 5, **{**EVERY_FIELD, "gs": 0}), plane("a2", 9, -7, sq="7700"), plane("a3", 3, 14),
+    )
+    set_prefs(page, display="OFF", tag_fields=FIELDS)
+    before = picture(page)
+    kept = [p["key"] for p in radar_debug(page)["placed"]]
+    # Tags are not placed around one another, so a box reserves nothing for them.
+    set_prefs(page, box_items=["AIRCRAFT", "HUD"], box_fill=0, box_border=0, box_pad=12, box_width=5)
+    assert picture(page) == before
+    assert all(tag["boxed"] for tag in tags(page).values())
+    # Every kind, with no padding. A box still reserves a little more than
+    # its text did (its border, and a place's symbol), but here no label
+    # loses its place for that: the same labels, so the same picture.
+    debug = draw(page, box_items=ITEMS, box_pad=0, box_width=1)
+    assert [p["key"] for p in debug["placed"]] == kept
+    assert all(p["boxed"] for p in debug["placed"]) and all(r["label"]["boxed"] for r in debug["rings"])
+    assert picture(page) == before
+    set_prefs(page, box_fill=100)
+    assert picture(page) != before
+
+
+@pytest.mark.parametrize("view", ["whole", "close"])
+def test_no_two_boxes_overlap_even_at_the_widest_padding(page, view):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    if view == "close":
+        page.mouse.move(*centre_of_the_radar(page))
+        turn_wheel(page, -900)  # small airports too
+    plain = draw(page, box_items=[])["placed"]
+    debug = draw(page, box_items=ITEMS, box_pad=12, box_width=5)
+    placed = debug["placed"]
+    assert len(placed) >= 4 and placed[0]["key"] == "home"
+    assert all(p["boxed"] and holds(p, p["box"]) for p in placed)
+    assert not [(a["key"], b["key"]) for i, a in enumerate(placed) for b in placed[i + 1:] if overlap(a, b)]
+    # A box takes more room than its text, so fewer labels fit; none is new.
+    assert len(placed) <= len(plain) and {p["key"] for p in placed} <= {p["key"] for p in plain}
+    # A boxed ring number is room taken too.
+    numbers = [r["label"] for r in debug["rings"] if r["label"]]
+    assert numbers and all(n["boxed"] for n in numbers)
+    assert not [(p["key"], n) for p in placed[1:] for n in numbers if overlap(p, n)]
+
+
+def hud_style(page, selector, name):
+    return page.eval_on_selector(selector, "(e, name) => getComputedStyle(e)[name]", name)
+
+
+def bounds(page, selector):
+    """An element's box on the page: (left, top, right, bottom)."""
+    return tuple(page.eval_on_selector(
+        selector, "e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; }"
+    ))
+
+
+def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
+    spans = ["#radar-range", "#radar-poll", "#radar-tracks"]
+    assert page.eval_on_selector_all(".hud span", "els => els.map(e => '#' + e.id)") == spans
+    set_prefs(page, glow="OFF", display="OFF")  # nothing over the readouts but themselves
+    for span in spans:
+        assert hud_style(page, span, "backgroundColor") == "rgba(0, 0, 0, 0)"
+        assert hud_style(page, span, "borderLeftWidth") == "0px" and hud_style(page, span, "paddingLeft") == "0px"
+    set_prefs(page, box_items=["HUD"])
+    page.wait_for_function("document.documentElement.dataset.boxHud === 'ON'")
+    for span in spans:
+        assert hud_style(page, span, "backgroundColor") == "rgba(0, 0, 0, 0.7)"
+        assert hud_style(page, span, "borderLeftWidth") == "1px" and hud_style(page, span, "borderLeftStyle") == "solid"
+        assert hud_style(page, span, "paddingLeft") == "4px" and hud_style(page, span, "paddingTop") == "4px"
+    set_prefs(page, box_fill=100, box_pad=12, box_border=100, box_width=3)
+    page.wait_for_function("getComputedStyle(document.getElementById('radar-range')).paddingLeft === '12px'")
+    muted = css_colour(page, "--muted")
+    boxes = [bounds(page, span) for span in spans]
+    for span, (left, top, right, bottom) in zip(spans, boxes):
+        assert hud_style(page, span, "backgroundColor") == "rgb(0, 0, 0)"
+        assert hud_style(page, span, "borderLeftWidth") == "3px"
+        # As painted: the border in the text's colour, black inside it.
+        assert pixel(page, left + 1, (top + bottom) // 2) == muted
+        assert pixel(page, left + 6, top + 6) == (0, 0, 0)
+    # Each box is about its own text, the two on the left one under the
+    # other, and all three inside the radar.
+    assert boxes[0][3] <= boxes[1][1] and boxes[0][2] != boxes[1][2]
+    wrap = bounds(page, ".radar-wrap")
+    assert all(wrap[0] <= b[0] and wrap[1] <= b[1] and b[2] <= wrap[2] and b[3] <= wrap[3] for b in boxes)
+    set_prefs(page, box_border=0)
+    page.wait_for_function("getComputedStyle(document.documentElement).getPropertyValue('--box-border') === '0%'")
+    assert pixel(page, boxes[0][0] + 1, (boxes[0][1] + boxes[0][3]) // 2) == (0, 0, 0)
+    set_prefs(page, box_items=["AIRCRAFT"])
+    page.wait_for_function("document.documentElement.dataset.boxHud === 'OFF'")
+    assert hud_style(page, "#radar-range", "backgroundColor") == "rgba(0, 0, 0, 0)"
+    assert hud_style(page, "#radar-range", "paddingLeft") == "0px"
+
+
 # -- opened from kcgx go -------------------------------------------------------------
 
 

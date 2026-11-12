@@ -1,7 +1,8 @@
 /* KCGX cockpit. The look is the NORAD wall in WarGames: line art on black,
    framed screens with their names along the bottom, lamps between them.
    Everything visual hangs off attributes on <html>, set from the server's
-   prefs: data-palette, data-glow, data-display, data-lamps, data-teletype. */
+   prefs: data-palette, data-glow, data-display, data-lamps, data-teletype,
+   data-box-hud. */
 
 @font-face { font-family: "Share Tech Mono"; src: url("fonts/share-tech-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "B612 Mono"; src: url("fonts/b612-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
@@ -159,8 +160,16 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .radar { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hud { position: absolute; top: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none;
   font: 13px "Share Tech Mono", monospace; letter-spacing: 0.14em; color: var(--muted); white-space: pre; }
-.hud-left { left: var(--pad-x); }
+.hud-left { left: var(--pad-x); align-items: flex-start; }
 .hud-right { right: var(--pad-x); align-items: flex-end; }
+/* The readouts can be boxed as the radar's labels are (prefs box_items has
+   HUD): black behind, edged in the text's colour. main.js writes the four
+   properties from the box settings; these are the defaults. */
+:root { --box-fill: 70%; --box-pad: 4px; --box-border: 50%; --box-width: 1px; }
+[data-box-hud="ON"] .hud span {
+  padding: var(--box-pad); background: rgb(0 0 0 / var(--box-fill));
+  border: var(--box-width) solid color-mix(in srgb, currentColor var(--box-border), transparent);
+}
 
 /* the airport: ICAO and clocks on top; beneath, its name and place on the
    left and the search icon bottom right. The pane has no title bar. */
