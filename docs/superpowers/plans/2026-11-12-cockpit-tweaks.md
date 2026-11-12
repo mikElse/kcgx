@@ -620,14 +620,35 @@ is its own change.
   rectangle) and `paintBox` (the paint). On the still layer every place is
   given its room first, then the boxes are painted, then symbols and names,
   so a box hides map lines and never a symbol; the home name's box goes
-  down before the home ring. A boxed ring number is room taken, which a
-  bare one still is not. `TRK` reads `030°`, as the table pads it. "Fill 0
-  and border 0 is pixel-identical" holds for AIRCRAFT and HUD at any
-  padding. A boxed still label reserves more room than a bare one, so
-  fewer may fit; at padding 0 the demo's picture keeps them all and is
-  identical. The map that ships names no states
-  (`labels.state` is empty), so STATES has nothing to box until one does;
-  its test gives the page a map with one.
+  down before the home ring. `TRK` reads `030°`, as the table pads it. The
+  map that ships names no states (`labels.state` is empty), so STATES has
+  nothing to box until one does; its test gives the page a map with one.
+  State names are always drawn without glow; before, one could take the
+  glow left by a place whose label did not fit.
+
+  **No box lies across another still label** (added in review; the first
+  build let a box paint over a ring number). Bare labels cross as they
+  always have, light on light: the airport's name over the ring number
+  nearest it, a place's name over a number. Once either of two is boxed
+  they are kept apart, and the one placed later gives way. The airport's
+  name has its place first, so with HOME or RINGS boxed a ring number that
+  would meet it takes its other place (there is one only when the airport
+  is off the middle of the screen) or is left off: the demo's default view
+  loses its 10 nm number, and range 250 its 50 and 100. The numbers come
+  next, so a boxed place or state keeps off every one of them, and every
+  place does once RINGS is boxed. So "fill 0 and border 0 is
+  pixel-identical" holds for AIRCRAFT and HUD at any padding and, in the
+  demo's picture, for the places at padding 0; not for HOME or RINGS, and
+  at a wider padding a boxed label reserves more room, so fewer may fit.
+
+  Flight tags are not placed around one another, boxed or not: two boxed
+  tags that overlap are both painted and neither reads well (left for Task
+  9's look). A click tries every chevron before any tag, so an aircraft
+  under another's tag or its box is still the one focused.
+
+  The tag test shows lit then black where the 20 nm range ring, not a
+  coastline, crosses the box's padding; it checks the corners black
+  separately and the edge's colour with the border at 100.
 
 ### Task 9: Part 1 by hand
 

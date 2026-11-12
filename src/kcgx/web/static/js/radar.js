@@ -14,7 +14,9 @@
 // Both layers are light added to light, so black over them changes
 // nothing. A label's box (prefs.box_items) is therefore painted on its own,
 // replacing what is under it: a still label's on the static layer before
-// its text, a flight tag's on the screen between the two layers.
+// its text, a flight tag's on the screen between the two layers. Two bare
+// labels may cross, and both read; a box would hide the other label, so on
+// the static layer a boxed label is given room that no other label is in.
 
 import { colours, glowBlur, reducedMotion } from "./theme.js";
 import { focus } from "./focus.js";
@@ -127,6 +129,11 @@ function around(a, b) {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+}
+
+// Whether two rectangles meet; touching is meeting.
+function meets(a, b) {
+  return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
 }
 
 function borderWidth(ratio, prefs) {
@@ -292,10 +299,12 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   // Where a ring's number goes: just outside the ring, on the north east
   // diagonal while the airport is on the screen and, once it is panned off,
   // where the ring passes nearest the middle of the screen. Either gives way
-  // to the other when it is off the screen or on the home ring. null when
-  // neither has room, or when the number would touch one of `numbered`,
-  // those already placed. A boxed number needs the room for its box.
-  function ringLabel(ctx, ring, centre, width, height, ratio, clear, numbered) {
+  // to the other when it is off the screen, on the home ring or on `name`,
+  // the airport's name, which is given only when it or the numbers are
+  // boxed: bare, the two cross as they always have. null when neither has
+  // room, or when the number would touch one of `numbered`, those already
+  // placed. A boxed number needs the room for its box.
+  function ringLabel(ctx, ring, centre, width, height, ratio, clear, numbered, name) {
     const w = ctx.measureText(ring.text).width;
     const h = RING_TEXT_PX * ratio;
     const gap = RING_GAP_PX * ratio;
@@ -317,6 +326,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       const nearX = Math.max(l.x - centre[0], 0, centre[0] - l.x - l.w);
       const nearY = Math.max(l.y - centre[1], 0, centre[1] - l.y - l.h);
       if (Math.hypot(nearX, nearY) < clear) continue;
+      if (name && meets(l, name)) continue;
       const touches = numbered.some((n) => (
         l.x < n.x + n.w + apart && n.x < l.x + l.w + apart && l.y < n.y + n.h + apart && n.y < l.y + l.h + apart
       ));
@@ -411,8 +421,12 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
     // Range rings, dim, and the range itself, bright. Each is numbered where
     // there is room; the range's number is placed first, so a dim ring's
-    // that would touch it is the one left off.
+    // that would touch it is the one left off. The airport's name has its
+    // place before any of them: a box under it, or under a number, is not to
+    // be drawn across the other.
     rings = ringsOn(centre, s, width, height);
+    const name = homeName(ctx, centre, s, ratio, prefs);
+    const keepOff = name && (boxed("HOME") || boxed("RINGS")) ? name.label : null;
     ctx.save();
     ctx.strokeStyle = c.cyan;
     ctx.lineWidth = ratio;
@@ -430,7 +444,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const clear = homeRing(s, ratio) + RING_GAP_PX * ratio;
     const numbered = [];
     for (const ring of [...rings.filter((r) => r.bright), ...rings.filter((r) => !r.bright)]) {
-      ring.label = ringLabel(ctx, ring, centre, width, height, ratio, clear, numbered);
+      ring.label = ringLabel(ctx, ring, centre, width, height, ratio, clear, numbered, keepOff);
       if (!ring.label) continue;
       numbered.push(ring.label);
       if (ring.label.box) paintBox(ctx, ring.label.box, c.dim, ratio, prefs);
@@ -438,12 +452,12 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     }
     ctx.restore();
 
-    // The home airport first, so its name is reserved before anything else
+    // The home airport first, so its name is reserved before any place
     // looks for room.
     placed = [];
     symbols = {};
     home = { x: centre[0], y: centre[1], r: homeRing(s, ratio) };
-    drawHome(ctx, centre, s, ratio, c, prefs);
+    if (name) drawHome(ctx, centre, s, ratio, c, prefs, name);
     if (map) drawPlaces(ctx, s, width, height, ratio, c, prefs);
     staticDirty = progress < 1;
   }
@@ -471,13 +485,18 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     }
     items.sort((a, b) => a.priority - b.priority);
 
-    // The home airport's own name and ring are reserved first, and the
-    // rings' numbers where they are boxed: a box is not to be drawn across.
+    // The home airport's own name and ring are reserved first. So are the
+    // rings' numbers, from a label that is boxed and from every label once
+    // the numbers are: a box is not to be drawn across a number, nor a
+    // number's across a name. Bare, the two cross as they always have.
     const home = toScreen([0, 0], s, width, height);
     const clear = homeRing(s, ratio) + 2 * ratio;
     const taken = [{ x: home[0] - clear, y: home[1] - clear, w: 2 * clear, h: 2 * clear }, ...placed];
-    if (boxed("RINGS")) taken.push(...rings.filter((ring) => ring.label).map((ring) => ring.label));
-    const free = (r) => taken.every((t) => r.x + r.w < t.x || t.x + t.w < r.x || r.y + r.h < t.y || t.y + t.h < r.y);
+    const numbers = rings.filter((ring) => ring.label).map((ring) => ring.label);
+    const numbersBoxed = boxed("RINGS");
+    const free = (r) => (
+      !taken.some((t) => meets(r, t)) && !((r.boxed || numbersBoxed) && numbers.some((n) => meets(r, n)))
+    );
     // The label's place if there is room for it, which is then taken.
     const place = (key, label) => {
       if (!free(label)) return null;
@@ -572,9 +591,37 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.stroke();
   }
 
-  function drawHome(ctx, centre, s, ratio, c, prefs) {
+  // Where the home airport's name goes: large, above and right of the ring
+  // on a short leader, as the film labels its bases. Worked out before
+  // anything of it is drawn, for the ring numbers that have to keep off it.
+  // null while there is no airport.
+  function homeName(ctx, centre, s, ratio, prefs) {
     const airport = store.state.airport;
-    if (!airport) return;
+    if (!airport) return null;
+    const ring = homeRing(s, ratio);
+    const lines = nameLines(airport);
+    const size = 30 * ratio;
+    const step = size + 2 * ratio;
+    const foot = [centre[0] + ring * 0.7, centre[1] - ring * 0.7];
+    const x = foot[0] + 12 * ratio;
+    const last = foot[1] - 14 * ratio; // the bottom line's baseline
+    const top = last - (lines.length - 1) * step;
+    const font = `${size}px ${FONT}`;
+    const spacing = 3 * ratio;
+    ctx.save();
+    ctx.font = font;
+    ctx.letterSpacing = `${spacing}px`;
+    let widest = 0;
+    for (const line of lines) widest = Math.max(widest, ctx.measureText(line).width);
+    ctx.restore();
+    const text = { x, y: top - size, w: widest, h: lines.length * step };
+    const ink = inked(x, top, widest - trailing(spacing), size, lines.length, step);
+    const label = claim(text, ink, boxed("HOME"), ratio, prefs);
+    return { lines, font, spacing, step, ring, foot, x, last, top, label };
+  }
+
+  function drawHome(ctx, centre, s, ratio, c, prefs, name) {
+    const { lines, step, ring, foot, x, last, top, label } = name;
     ctx.save();
     // Runways in white inside the ring, at their true size.
     if (map && map.runways.length) {
@@ -590,23 +637,6 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       }
       ctx.stroke();
     }
-    // The name, large, above and right of the ring on a short leader, as
-    // the film labels its bases.
-    const ring = homeRing(s, ratio);
-    const lines = nameLines(airport);
-    const size = 30 * ratio;
-    const step = size + 2 * ratio;
-    const foot = [centre[0] + ring * 0.7, centre[1] - ring * 0.7];
-    const x = foot[0] + 12 * ratio;
-    const last = foot[1] - 14 * ratio; // the bottom line's baseline
-    const top = last - (lines.length - 1) * step;
-    ctx.font = `${size}px ${FONT}`;
-    ctx.letterSpacing = `${3 * ratio}px`;
-    let widest = 0;
-    for (const line of lines) widest = Math.max(widest, ctx.measureText(line).width);
-    const text = { x, y: top - size, w: widest, h: lines.length * step };
-    const ink = inked(x, top, widest - trailing(3 * ratio), size, lines.length, step);
-    const label = claim(text, ink, boxed("HOME"), ratio, prefs);
     placed.push({ key: "home", ...label });
     // Its box goes down before the ring and the leader, and hides neither;
     // a runway that runs out under the name, it does.
@@ -622,6 +652,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.moveTo(foot[0], foot[1]);
     ctx.lineTo(x - 4 * ratio, last + 6 * ratio);
     ctx.stroke();
+    ctx.font = name.font;
+    ctx.letterSpacing = `${name.spacing}px`;
     ctx.fillStyle = c.pink;
     ctx.shadowBlur = 0;
     ctx.globalAlpha = hovered === "home" ? 1 : LABEL_ALPHA;
@@ -795,10 +827,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     return [(event.clientX - box.left) * ratio, (event.clientY - box.top) * ratio];
   }
 
+  // An aircraft is its chevron before it is anything else: one that lies
+  // under another's tag or trail is still the one pointed at.
   function hitAircraft([x, y]) {
     const ratio = window.devicePixelRatio || 1;
     for (const hit of hits) {
       if (Math.hypot(hit.x - x, hit.y - y) < 14 * ratio) return hit.hex;
+    }
+    for (const hit of hits) {
       const l = hit.tag;
       if (l && x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h) return hit.hex;
       for (let i = 1; i < hit.trail.length; i += 1) {

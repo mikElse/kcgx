@@ -1712,6 +1712,22 @@ def edge_middles(box):
     return [(x, box["y"]), (x, box["y"] + box["h"] - 1), (box["x"], y), (box["x"] + box["w"] - 1, y)]
 
 
+def canvas_block(page, rect):
+    """Every pixel of the radar canvas that a rectangle touches, as one flat
+    list of r, g, b, a."""
+    left, top = int(rect["x"]), int(rect["y"])
+    right, bottom = -int(-(rect["x"] + rect["w"])), -int(-(rect["y"] + rect["h"]))
+    return page.evaluate(
+        """([x, y, w, h]) => [...document.getElementById("radar").getContext("2d").getImageData(x, y, w, h).data]""",
+        [left, top, right - left, bottom - top],
+    )
+
+
+def ink(block):
+    """How many of a block's pixels are lit."""
+    return sum(max(block[i:i + 3]) > 100 for i in range(0, len(block), 4))
+
+
 def holds(outer, inner):
     return (
         outer["x"] <= inner["x"] and outer["y"] <= inner["y"]
@@ -1824,6 +1840,31 @@ def test_a_click_on_either_line_of_a_tag_focuses_its_aircraft(page):
         page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
         page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
         page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
+
+
+@pytest.mark.parametrize("items", [[], ["AIRCRAFT"]])
+def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(page, items):
+    """A tag's rectangle, and all the more its box at the widest padding, can
+    lie over another aircraft's chevron. The chevron is the aircraft."""
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    ring = draw(page, box_items=items, box_pad=12)["rings"][0]
+    per_nm = ring["r"] / ring["nm"]
+    tag = hold_traffic(page, plane("a1", -10, 5))["a1"]
+    first = radar_debug(page)["hits"][0]
+    # A second aircraft in the top right corner of the first one's tag.
+    x, y = tag["x"] + tag["w"] - 6 * ratio, tag["y"] + 6 * ratio
+    east, north = -10 + (x - first["x"]) / per_nm, 5 - (y - first["y"]) / per_nm
+    hold_traffic(page, plane("a1", -10, 5), plane("a2", east, north))
+    first, second = radar_debug(page)["hits"]
+    assert (first["hex"], second["hex"]) == ("a1", "a2")
+    assert nearest(first["tag"], second["x"], second["y"]) == 0, "the test wants a chevron under the other's tag"
+    assert nearest({"x": first["x"], "y": first["y"], "w": 0, "h": 0}, second["x"], second["y"]) > 30 * ratio
+    page.mouse.click(*on_screen(page, second["x"], second["y"]))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
+    # The rest of the tag is still its own aircraft's.
+    page.mouse.click(*on_screen(page, first["tag"]["x"] + first["tag"]["w"] / 2, first["tag"]["y"] + first["tag"]["h"] / 2))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
 
 
 def test_a_tags_box_blacks_out_the_map_under_it_and_is_edged_in_the_tags_colour(page):
@@ -1941,10 +1982,9 @@ def test_a_boxed_kind_of_label_is_filled_black_and_edged_in_its_own_colour(page,
         if label["box"]["x"] >= 0 and label["box"]["y"] >= 0
         and label["box"]["x"] + label["box"]["w"] <= width and label["box"]["y"] + label["box"]["h"] <= height
     ]
-    if item == "RINGS":
-        # The airport's name is written across the ring numbers nearest it, as it always was.
-        whole = [box for box in whole if not overlap(box, labels["home"])]
     assert whole
+    # A box lies across no other label, boxed or bare: it would hide it.
+    assert not [(key, other) for key in mine for other in labels if other != key and overlap(mine[key], labels[other])]
     edge = (*css_colour(page, colour), 255)
     for box in whole:
         # A symbol or a runway may be drawn over one corner or one edge of a
@@ -1967,6 +2007,103 @@ def test_a_box_on_the_still_layer_blacks_out_the_ring_it_lies_across(page):
     assert any(p[3] > 0 and max(p[:3]) > 100 for p in canvas_pixels(page, *on_the_ring))
     draw(page, box_fill=100)
     assert canvas_pixels(page, *on_the_ring) == [BLACK] * 9
+
+
+@pytest.mark.parametrize("items", [["HOME"], ["RINGS"], ["HOME", "RINGS"]])
+def test_a_ring_number_on_the_airports_name_is_left_off_once_either_is_boxed(page, items):
+    """Bare, the airport's name is written across the ring number nearest
+    it: light on light, and both read. A box under either would hide the
+    other, so the number, placed after the name, is the one to give way."""
+    wait_for_traffic(page)
+    hold_traffic(page)
+    plain = draw(page, glow="OFF", display="OFF")
+    assert plain["placed"][0]["key"] == "home"
+    bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
+    assert [text for text, label in bare.items() if overlap(label, plain["placed"][0])] == ["10"]
+    picture(page)
+    lit = {text: canvas_block(page, label) for text, label in bare.items()}
+    assert all(ink(block) > 10 for block in lit.values())
+
+    debug = draw(page, box_items=items, box_fill=100, box_border=100)
+    name = debug["placed"][0]
+    assert name["key"] == "home" and name["boxed"] == ("HOME" in items)
+    numbers = {ring["text"]: ring["label"] for ring in debug["rings"]}
+    assert list(numbers) == list(bare), "every ring is still drawn"
+    assert [text for text, label in numbers.items() if not label] == ["10"]
+    kept = {text: label for text, label in numbers.items() if label}
+    assert not [text for text, label in kept.items() if overlap(label, name)]
+    # The others have not moved, and each still reads.
+    assert all(holds(label, bare[text]) for text, label in kept.items())
+    picture(page)
+    now = {text: canvas_block(page, bare[text]) for text in kept}
+    assert all(ink(block) > 10 for block in now.values())
+    if "RINGS" not in items:  # with no box of their own, they are just as they were
+        assert now == {text: lit[text] for text in kept}
+
+
+def test_a_ring_number_takes_its_other_place_when_a_boxed_name_has_its_first(page):
+    """With the airport dragged off the middle of the screen a ring's number
+    has two places to go: the north east diagonal, and where the ring passes
+    nearest the middle."""
+    wait_for_traffic(page)
+    hold_traffic(page)
+    draw(page, glow="OFF", display="OFF")
+    x, y = centre_of_the_radar(page)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 150, y - 100, steps=6)  # the airport goes up and to the left
+    page.mouse.up()
+    page.mouse.move(5, 5)
+    page.wait_for_function("window.kcgx.radar.debug().hovered === null")
+    plain = radar_drawn(page)
+    home = plain["home"]
+    bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
+    assert overlap(bare["10"], plain["placed"][0]) and bare["10"]["y"] < home["y"]
+
+    debug = draw(page, box_items=["HOME"], box_fill=100, box_border=100)
+    name = debug["placed"][0]
+    numbers = {ring["text"]: ring["label"] for ring in debug["rings"]}
+    assert all(numbers.values()), numbers
+    assert not [text for text, label in numbers.items() if overlap(label, name)]
+    # South east of the airport now, towards the middle, and still beside its ring.
+    ten = numbers["10"]
+    ratio = page.evaluate("devicePixelRatio")
+    ring = next(ring for ring in debug["rings"] if ring["text"] == "10")
+    assert ten["x"] > home["x"] and ten["y"] > home["y"]
+    assert ring["r"] <= nearest(ten, home["x"], home["y"]) <= ring["r"] + 8 * ratio
+    picture(page)
+    assert ink(canvas_block(page, ten)) > 10
+    assert all(label == bare[text] for text, label in numbers.items() if text != "10")
+
+
+@pytest.mark.parametrize("range_nm", [120, 250])
+def test_a_boxed_place_keeps_off_a_bare_ring_number(page, range_nm):
+    """At these ranges a place's name is written across a ring number while
+    both are bare. Boxed, the place is the one left off: the numbers were
+    there first."""
+    wait_for_traffic(page)
+    hold_traffic(page)
+    places = ["AIRPORTS", "NAVAIDS", "CITIES", "PEAKS"]
+    plain = draw(page, glow="OFF", display="OFF", range_nm=range_nm)
+    numbers = [ring["label"] for ring in plain["rings"]]
+    assert all(numbers)
+    across = {p["key"] for p in plain["placed"][1:] for n in numbers if overlap(p, n)}
+    assert across, "the test wants a place's name on a ring number"
+    # First with boxes that cannot be seen: the places as they will be, the
+    # numbers as nothing but themselves and the map.
+    unseen = draw(page, box_items=places, box_fill=0, box_border=0)
+    assert [ring["label"] for ring in unseen["rings"]] == numbers
+    placed = unseen["placed"][1:]
+    assert len(placed) >= 10 and all(p["boxed"] for p in placed)
+    assert not [(p["key"], n) for p in placed for n in numbers if overlap(p, n)]
+    assert across.isdisjoint(p["key"] for p in placed)
+    picture(page)
+    before = [canvas_block(page, n) for n in numbers]
+    assert all(ink(block) > 10 for block in before)
+    seen = draw(page, box_fill=100, box_border=100)
+    assert seen["placed"] == unseen["placed"]
+    picture(page)
+    assert [canvas_block(page, n) for n in numbers] == before, "no box is painted on a ring number"
 
 
 def test_a_box_does_not_brighten_with_its_label_under_the_pointer(page):
@@ -2001,14 +2138,21 @@ def test_boxes_with_no_fill_and_no_border_leave_the_picture_as_it_was(page):
     set_prefs(page, box_items=["AIRCRAFT", "HUD"], box_fill=0, box_border=0, box_pad=12, box_width=5)
     assert picture(page) == before
     assert all(tag["boxed"] for tag in tags(page).values())
-    # Every kind, with no padding. A box still reserves a little more than
-    # its text did (its border, and a place's symbol), but here no label
-    # loses its place for that: the same labels, so the same picture.
-    debug = draw(page, box_items=ITEMS, box_pad=0, box_width=1)
+    # Every kind of place, with no padding. A box still reserves a little
+    # more than its text did (its border, and a place's symbol), but here no
+    # label loses its place for that: the same labels, so the same picture.
+    debug = draw(page, box_items=[i for i in ITEMS if i not in ("HOME", "RINGS")], box_pad=0, box_width=1)
     assert [p["key"] for p in debug["placed"]] == kept
-    assert all(p["boxed"] for p in debug["placed"]) and all(r["label"]["boxed"] for r in debug["rings"])
+    assert all(p["boxed"] for p in debug["placed"][1:]) and all(r["label"] for r in debug["rings"])
     assert picture(page) == before
-    set_prefs(page, box_fill=100)
+    # The airport's name and the ring numbers too: the number that the name
+    # is written across is left off, and nothing else changes place.
+    debug = draw(page, box_items=ITEMS)
+    assert [p["key"] for p in debug["placed"]] == kept and all(p["boxed"] for p in debug["placed"])
+    assert [r["text"] for r in debug["rings"] if not r["label"]] == ["10"]
+    assert all(r["label"]["boxed"] for r in debug["rings"] if r["label"])
+    assert picture(page) != before
+    set_prefs(page, box_items=[i for i in ITEMS if i not in ("HOME", "RINGS")], box_fill=100)
     assert picture(page) != before
 
 
@@ -2027,10 +2171,11 @@ def test_no_two_boxes_overlap_even_at_the_widest_padding(page, view):
     assert not [(a["key"], b["key"]) for i, a in enumerate(placed) for b in placed[i + 1:] if overlap(a, b)]
     # A box takes more room than its text, so fewer labels fit; none is new.
     assert len(placed) <= len(plain) and {p["key"] for p in placed} <= {p["key"] for p in plain}
-    # A boxed ring number is room taken too.
+    # A boxed ring number is room taken too, and takes none of the airport's name.
     numbers = [r["label"] for r in debug["rings"] if r["label"]]
     assert numbers and all(n["boxed"] for n in numbers)
-    assert not [(p["key"], n) for p in placed[1:] for n in numbers if overlap(p, n)]
+    assert not [(p["key"], n) for p in placed for n in numbers if overlap(p, n)]
+    assert not [(a, b) for i, a in enumerate(numbers) for b in numbers[i + 1:] if overlap(a, b)]
 
 
 def hud_style(page, selector, name):
