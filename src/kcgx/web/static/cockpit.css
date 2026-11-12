@@ -239,10 +239,9 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .tracks .callsign:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
 .tracks tr.emergency td, .tracks tr.emergency .callsign { color: var(--alarm); }
 .tracks tr.dimmed { opacity: 0.35; }
-.tracks tr.focused td { outline: 1px solid var(--pink); outline-offset: -1px; }
-.tracks tr.focused td, .tracks tr.focused .callsign { color: var(--pink); }
 /* The focused row leads the table (tracks.js) a fifth larger; its callsign button inherits the size. */
-.tracks tr.focused td { font-size: 1.2em; }
+.tracks tr.focused td { outline: 1px solid var(--pink); outline-offset: -1px; font-size: 1.2em; }
+.tracks tr.focused td, .tracks tr.focused .callsign { color: var(--pink); }
 .radar { cursor: crosshair; touch-action: none; }
 
 /* teletype */

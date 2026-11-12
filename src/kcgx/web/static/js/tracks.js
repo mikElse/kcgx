@@ -20,6 +20,7 @@ const COLUMNS = [
 export function mountTracks({ head, body, empty }, store) {
   let sortKey = "dist";
   let ascending = true;
+  let pressedHere = false;  // true while a callsign in this table is being pressed
 
   head.replaceChildren(...COLUMNS.map((column) => {
     const th = document.createElement("th");
@@ -72,7 +73,10 @@ export function mountTracks({ head, body, empty }, store) {
           button.textContent = c.text(ac);
           button.setAttribute("aria-pressed", String(ac.hex === focused));
           button.setAttribute("aria-label", `Focus ${c.text(ac)} on the radar`);
-          button.addEventListener("click", () => focus.toggle(ac.hex));
+          button.addEventListener("click", () => {
+            pressedHere = true;
+            try { focus.toggle(ac.hex); } finally { pressedHere = false; }
+          });
           td.append(button);
         } else {
           td.textContent = c.text(ac);
@@ -89,10 +93,15 @@ export function mountTracks({ head, body, empty }, store) {
 
   store.subscribe((kind) => { if (kind === "all" || kind === "aircraft") render(); });
   // The focused row is the first, so showing it is scrolling to the top.
+  // In one column the table does not scroll, the page does, and its top may
+  // be off the page: a callsign pressed here takes the page to its row. A
+  // click on the radar does not, or the radar would be scrolled out of sight.
   const scroller = body.closest(".tracks-body");
   focus.subscribe((hex) => {
     render();
-    if (hex && scroller) scroller.scrollTop = 0;
+    if (!hex) return;
+    if (scroller) scroller.scrollTop = 0;
+    if (pressedHere && body.firstElementChild) body.firstElementChild.scrollIntoView({ block: "nearest" });
   });
   render();
 }

@@ -1050,6 +1050,13 @@ def focus_on_the_radar(page):
     first, and that has no other within 40 px; returns its hex."""
     wait_for_traffic(page)
     page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")
+    # A window just resized is drawn at its new size on the next frame, and
+    # until then the radar's positions are the old size's.
+    page.wait_for_function(
+        """() => { const c = document.getElementById("radar"); const box = c.getBoundingClientRect();
+                   return c.width === Math.round(box.width * devicePixelRatio)
+                       && c.height === Math.round(box.height * devicePixelRatio); }"""
+    )
     leading = {row["hex"] for row in rows(page)[:2]}
     hits = radar_debug(page)["hits"]
     hit = next(
@@ -1121,6 +1128,44 @@ def test_focusing_scrolls_the_table_back_to_its_top(page):
     hex_ = focus_on_the_radar(page)
     assert page.eval_on_selector(".tracks-body", "e => e.scrollTop") == 0
     assert rows(page)[0]["hex"] == hex_
+
+
+def first_row_in_the_window(page):
+    """Where the table's first row is against the window: (top, bottom, window height)."""
+    return page.eval_on_selector(
+        "#tracks-body tr", "tr => { const r = tr.getBoundingClientRect(); return [r.top, r.bottom, innerHeight]; }"
+    )
+
+
+def test_a_callsign_pressed_far_down_a_one_column_page_brings_its_row_back_into_view(page):
+    # In one column the table does not scroll, the page does: a window too
+    # short to hold the table has its first row off the top when its last
+    # row is in view.
+    page.set_viewport_size({"width": 390, "height": 180})
+    wait_for_traffic(page)
+    page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")
+    assert page.eval_on_selector(".tracks-body", "e => e.scrollHeight - e.clientHeight") == 0
+    hex_ = rows(page)[-1]["hex"]
+    callsign = page.locator(f'#tracks-body tr[data-hex="{hex_}"] .callsign')
+    callsign.scroll_into_view_if_needed()
+    top, _, _ = first_row_in_the_window(page)
+    assert top < 0, "the first row is in view already, so the test shows nothing"
+    callsign.click()
+    page.wait_for_selector(f'#tracks-body tr.focused[data-hex="{hex_}"]')
+    assert rows(page)[0]["hex"] == hex_
+    top, bottom, window = first_row_in_the_window(page)
+    # to the pixel: the page scrolls by whole pixels and the row sits on a fraction of one
+    assert top > -1 and bottom < window + 1, f"the focused row is at {top} to {bottom} in a window {window} high"
+
+
+def test_focusing_on_the_radar_leaves_a_one_column_page_where_it_is(page):
+    # The table is below the radar there, and following the row would take
+    # the radar, and the aircraft just clicked, out of sight.
+    page.set_viewport_size({"width": 390, "height": 844})
+    focus_on_the_radar(page)
+    top, _, window = first_row_in_the_window(page)
+    assert top > window, "the table is in view at this size, so the test shows nothing"
+    assert page.evaluate("scrollY") == 0
 
 
 def test_place_names_brighten_under_the_pointer(page):
