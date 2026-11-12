@@ -457,14 +457,14 @@ is its own change.
 
 **Files:** `cockpit.css`, `stack.js`, `tracks.js`, `tests/test_page.py`
 
-- [ ] **Tests first.** Chatter reads `NN%` in an expanded and a compact
+- [x] **Tests first.** Chatter reads `NN%` in an expanded and a compact
   row; `.chatter-big`'s computed font size is under 20 px; an M button is
   no taller than 26 px. Focusing an aircraft on the radar makes its row
   the first in `#tracks-body`, with every cell's computed font size 1.2
   times a neighbour's (within 0.1 px); clicking a sort header leaves it
   first and sorts the rest; unfocusing returns it to its sorted place.
   `test_no_two_screens_overlap` still passes at every size.
-- [ ] **Spacing tokens**, used everywhere a literal is today:
+- [x] **Spacing tokens**, used everywhere a literal is today:
 
   ```css
   :root { --gap: 10px; --page-pad: 10px 12px 12px; --pad-x: 10px; --pad-y: 6px; }
@@ -490,15 +490,15 @@ is its own change.
   These are starting values. Finish by eye: screenshot the demo at each
   size in `SIZES`, with the teletype and lamps on and off, and adjust.
   Font sizes do not change here except the two chatter figures.
-- [ ] **Chatter:** `.chatter-big` 30 px to 18 px, `.chatter-small` 18 to
+- [x] **Chatter:** `.chatter-big` 30 px to 18 px, `.chatter-small` 18 to
   14; both `min-width: 4ch; text-align: right`. The text is
   `` `${Math.round(fraction * 100)}%` `` in both shapes (no zero padding
   now that the sign makes it a number).
-- [ ] **Tracks:** in `render()`, after sorting, move the focused aircraft
+- [x] **Tracks:** in `render()`, after sorting, move the focused aircraft
   to index 0. `.tracks tr.focused td { font-size: 1.2em; }` (the callsign
   button inherits it). On focus, set `.tracks-body`'s `scrollTop` to 0 in
   place of `scrollIntoView` (`tracks.js:90`).
-- [ ] Commit `feat(web): a denser page; the focused track leads the table`.
+- [x] Commit `feat(web): a denser page; the focused track leads the table`.
 
 ### Task 7: The radar's view: 2.5 nm, computed rings, no button
 

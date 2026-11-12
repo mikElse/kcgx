@@ -11,7 +11,9 @@ const GLYPHS = { live: "●", reconnecting: "◐", starting: "◐", offline: "�
 const STATES = { live: "LIVE", reconnecting: "RECONNECTING", starting: "STARTING", offline: "OFFLINE", parked: "PARKED" };
 const INPUT_EVERY_MS = 1000;
 
-const two = (fraction) => String(Math.round((fraction || 0) * 100)).padStart(2, "0");
+// Chatter is a share of the time, shown as a whole percentage.
+const whole = (fraction) => Math.round((fraction || 0) * 100);
+const percent = (fraction) => `${whole(fraction)}%`;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -47,7 +49,7 @@ export function mountStack({ stack, counts }, store, send) {
     solo.type = "button";
     solo.addEventListener("click", () => send({ t: "solo", ident: feed.ident }));
     const label = el("span", "chatter-label", "CHATTER");
-    const chatter = el("span", "chatter-big", two(feed.chatter));
+    const chatter = el("span", "chatter-big", percent(feed.chatter));
     controls.append(mute, solo, el("span", "spacer"), label, chatter);
     node.append(head, trace, controls);
     return { node, parts: { name, glyph, trace, mute, solo, chatter } };
@@ -60,7 +62,7 @@ export function mountStack({ stack, counts }, store, send) {
     const name = el("span", "feed-name", feed.name);
     const note = el("span", "note", "♪");
     note.setAttribute("aria-hidden", "true");
-    const chatter = el("span", "chatter-small", two(feed.chatter));
+    const chatter = el("span", "chatter-small", percent(feed.chatter));
     const glyph = stateGlyph(feed);
     node.append(name, note, chatter, glyph);
     return { node, parts: { name, glyph, chatter } };
@@ -73,7 +75,7 @@ export function mountStack({ stack, counts }, store, send) {
     parts.glyph.className = `feed-state state-${feed.state}`;
     parts.glyph.title = STATES[feed.state] || feed.state.toUpperCase();
     parts.glyph.setAttribute("aria-label", parts.glyph.title);
-    parts.chatter.textContent = two(feed.chatter);
+    parts.chatter.textContent = percent(feed.chatter);
     if (row.shape === "expanded") {
       parts.mute.setAttribute("aria-pressed", String(feed.muted));
       parts.mute.setAttribute("aria-label", `Mute ${feed.name}`);
@@ -83,7 +85,7 @@ export function mountStack({ stack, counts }, store, send) {
       row.node.classList.toggle("parked", feed.state === "parked");
       row.node.setAttribute(
         "aria-label",
-        `Unmute ${feed.name}, chatter ${two(feed.chatter)} percent, ${parts.glyph.title.toLowerCase()}`,
+        `Unmute ${feed.name}, chatter ${whole(feed.chatter)} percent, ${parts.glyph.title.toLowerCase()}`,
       );
     }
   }

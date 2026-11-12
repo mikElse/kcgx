@@ -433,6 +433,49 @@ def test_the_trace_draws(page):
     assert lit > 50
 
 
+def test_chatter_reads_as_a_percentage_in_both_shapes(page):
+    page.wait_for_selector(".feed.compact")
+    for selector in (".feed.expanded .chatter-big", ".feed.compact .chatter-small"):
+        texts = page.eval_on_selector_all(selector, "els => els.map(e => e.textContent)")
+        assert texts, selector
+        # a number with its sign, not two digits: 0%, 7%, 42%, 100%
+        assert all(re.fullmatch(r"(0|[1-9]\d?|100)%", text) for text in texts), texts
+    # said aloud, the row gives the number once
+    label = page.get_attribute(".feed.compact", "aria-label")
+    assert re.search(r", chatter (0|[1-9]\d?|100) percent, ", label), label
+
+
+def test_the_chatter_figures_are_small_and_do_not_shift_as_they_change(page):
+    page.wait_for_selector(".feed.compact")
+    sizes = {}
+    for name in ("chatter-big", "chatter-small"):
+        sizes[name], align, widths = page.eval_on_selector(
+            f".{name}",
+            """e => {
+                const style = getComputedStyle(e);
+                const widths = ["0%", "42%", "100%"].map(text => {
+                    const copy = e.cloneNode(); copy.textContent = text; e.after(copy);
+                    const width = copy.getBoundingClientRect().width; copy.remove(); return width; });
+                return [parseFloat(style.fontSize), style.textAlign, widths];
+            }""",
+        )
+        assert align == "right", name
+        assert max(widths) - min(widths) <= 0.5, f"{name} is {widths} px wide for 0%, 42% and 100%"
+    assert sizes["chatter-big"] < 20
+    assert sizes["chatter-small"] < sizes["chatter-big"]
+
+
+def test_m_and_s_are_small_buttons(page):
+    boxes = page.eval_on_selector_all(
+        ".feed.expanded .feed-controls .btn",
+        "els => els.map(e => { const r = e.getBoundingClientRect(); return [e.textContent, r.width, r.height]; })",
+    )
+    assert {name for name, _, _ in boxes} == {"M", "S"}
+    for name, width, height in boxes:
+        assert height <= 26, f"{name} is {height} px high"
+        assert 20 <= width <= 32, f"{name} is {width} px wide"
+
+
 # -- sheets --------------------------------------------------------------------
 
 
@@ -985,6 +1028,99 @@ def test_clicking_an_aircraft_focuses_it_and_the_table_follows(page):
     # the callsign in the table is the same switch
     page.click(f'#tracks-body tr[data-hex="{hit["hex"]}"] .callsign')
     page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused, #tracks-body tr.dimmed').length === 0")
+
+
+def rows(page):
+    """The tracks table as it stands, read in one go: [{hex, focused, cells}]."""
+    return page.eval_on_selector_all(
+        "#tracks-body tr",
+        """trs => trs.map(tr => ({hex: tr.dataset.hex, focused: tr.classList.contains("focused"),
+                                  cells: [...tr.cells].map(td => td.textContent)}))""",
+    )
+
+
+def column(table, title):
+    """One column of `rows`, as the numbers the table sorts by."""
+    index = ["CALLSIGN", "TYPE", "ALT FT", "GS KT", "TRK", "DIST NM", "SQWK"].index(title)
+    return [0.0 if row["cells"][index] == "GND" else float(row["cells"][index] or -1) for row in table]
+
+
+def focus_on_the_radar(page):
+    """Click an aircraft on the radar that the table does not already list
+    first, and that has no other within 40 px; returns its hex."""
+    wait_for_traffic(page)
+    page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")
+    leading = {row["hex"] for row in rows(page)[:2]}
+    hits = radar_debug(page)["hits"]
+    hit = next(
+        h for h in hits
+        if h["hex"] not in leading
+        and all(o is h or abs(o["x"] - h["x"]) + abs(o["y"] - h["y"]) > 40 for o in hits)
+    )
+    page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
+    page.wait_for_selector(f'#tracks-body tr.focused[data-hex="{hit["hex"]}"]')
+    return hit["hex"]
+
+
+def test_the_focused_aircraft_leads_the_table_and_the_rest_stay_sorted(page):
+    hex_ = focus_on_the_radar(page)
+    table = rows(page)
+    assert table[0]["hex"] == hex_ and table[0]["focused"]
+    assert [row["hex"] for row in table].count(hex_) == 1
+    rest = column(table[1:], "DIST NM")
+    assert rest == sorted(rest), "the rows under the focused one are not in distance order"
+    assert column(table, "DIST NM")[0] > rest[0], "the focused row was first by distance anyway"
+
+
+def test_the_focused_row_is_set_a_fifth_larger_in_every_cell(page):
+    focus_on_the_radar(page)
+    sizes = page.eval_on_selector_all(
+        "#tracks-body tr",
+        """trs => trs.slice(0, 2).map(tr =>
+            [...tr.cells, tr.querySelector(".callsign")].map(e => parseFloat(getComputedStyle(e).fontSize)))""",
+    )
+    focused, neighbour = sizes
+    assert len(focused) == 8
+    for large, usual in zip(focused, neighbour):
+        assert large == pytest.approx(1.2 * usual, abs=0.1)
+
+
+def test_sorting_leaves_the_focused_row_first_and_sorts_the_rest(page):
+    hex_ = focus_on_the_radar(page)
+    page.click("#tracks-head button:text-is('ALT FT')")
+    table = rows(page)
+    assert table[0]["hex"] == hex_ and table[0]["focused"]
+    rest = column(table[1:], "ALT FT")
+    assert rest == sorted(rest) and len(set(rest)) > 1
+    page.click("#tracks-head button:text-is('ALT FT')")
+    table = rows(page)
+    assert table[0]["hex"] == hex_
+    rest = column(table[1:], "ALT FT")
+    assert rest == sorted(rest, reverse=True)
+
+
+def test_unfocusing_returns_the_row_to_its_sorted_place(page):
+    hex_ = focus_on_the_radar(page)
+    assert rows(page)[0]["hex"] == hex_
+    page.click(f'#tracks-body tr[data-hex="{hex_}"] .callsign')
+    page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused, #tracks-body tr.dimmed').length === 0")
+    table = rows(page)
+    dists = column(table, "DIST NM")
+    assert dists == sorted(dists)
+    assert table[0]["hex"] != hex_
+    sizes = set(page.eval_on_selector_all("#tracks-body td", "tds => tds.map(td => getComputedStyle(td).fontSize)"))
+    assert len(sizes) == 1, "a row is still set larger"
+
+
+def test_focusing_scrolls_the_table_back_to_its_top(page):
+    page.set_viewport_size({"width": 1280, "height": 720})
+    wait_for_traffic(page)
+    page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")
+    scrolled = page.eval_on_selector(".tracks-body", "e => { e.scrollTop = e.scrollHeight; return e.scrollTop; }")
+    assert scrolled > 0, "the table does not scroll at this size, so the test shows nothing"
+    hex_ = focus_on_the_radar(page)
+    assert page.eval_on_selector(".tracks-body", "e => e.scrollTop") == 0
+    assert rows(page)[0]["hex"] == hex_
 
 
 def test_place_names_brighten_under_the_pointer(page):

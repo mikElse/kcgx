@@ -40,7 +40,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { background: var(--wall); color: var(--text); font: 13px/1.4 "B612 Mono", ui-monospace, Menlo, monospace; letter-spacing: 0.06em; }
+body { background: var(--wall); color: var(--text); font: 13px/1.3 "B612 Mono", ui-monospace, Menlo, monospace; letter-spacing: 0.06em; }
 button, input, select { font: inherit; letter-spacing: inherit; color: inherit; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; letter-spacing: 0.14em; }
@@ -61,8 +61,10 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
    The radar has the status row as well as its own, so its own row's floor
    is low: with it the rows' floors come to no more than the page's least
    height, lamps and all, and the page fits any window at least that high.
-   The gap and the padding are tokens, so the density is set in one place. */
-:root { --gap: 14px; --page-pad: 16px 20px 20px; }
+   The gap and the padding are tokens, so the density is set in one place:
+   --gap between screens, --page-pad round the page, and --pad-x and --pad-y
+   from a screen's frame to what is in it. */
+:root { --gap: 10px; --page-pad: 10px 12px 12px; --pad-x: 10px; --pad-y: 6px; }
 .page {
   height: 100vh; min-height: 640px; padding: var(--page-pad);
   display: grid; column-gap: var(--gap);
@@ -125,16 +127,16 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .icon-alarm { color: var(--alarm); }
 
 .btn {
-  min-height: 40px; padding: 0 14px; background: transparent; cursor: pointer;
+  min-height: 30px; padding: 0 var(--pad-x); background: transparent; cursor: pointer;
   border: 1px solid var(--frame); color: var(--text); font-size: 13px; letter-spacing: 0.12em;
 }
 .btn:hover { border-color: var(--cyan); color: var(--white); }
 .btn:focus-visible, .feed:focus-visible, .choice:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
-.btn-small { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.btn-small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .btn-alarm { border-color: var(--alarm); color: var(--alarm); }
 .btn[aria-pressed="true"] { border-color: var(--pink); color: var(--pink); }
 
-.banner { padding: 8px 14px; border: 1px solid var(--amber); color: var(--amber); font-size: 12px; letter-spacing: 0.16em; text-align: center; }
+.banner { padding: 4px var(--pad-x); border: 1px solid var(--amber); color: var(--amber); font-size: 12px; letter-spacing: 0.16em; text-align: center; }
 .banner.bad { border-color: var(--alarm); color: var(--alarm); }
 
 /* -- screens ------------------------------------------------------------------ */
@@ -146,7 +148,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 }
 .screen-title {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 8px 16px; border-top: 1px solid var(--frame); flex: 0 0 auto;
+  padding: 4px var(--pad-x); border-top: 1px solid var(--frame); flex: 0 0 auto;
 }
 .title-text { font: 20px "Share Tech Mono", monospace; letter-spacing: 0.18em; color: var(--white); text-shadow: var(--glow); }
 .title-tools { display: flex; align-items: center; gap: 14px; }
@@ -155,14 +157,14 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .screen-radar { min-height: 0; }
 .radar-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; contain: paint; }
 .radar { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.hud { position: absolute; top: 14px; display: flex; flex-direction: column; gap: 4px; pointer-events: none;
+.hud { position: absolute; top: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none;
   font: 13px "Share Tech Mono", monospace; letter-spacing: 0.14em; color: var(--muted); white-space: pre; }
-.hud-left { left: 18px; }
-.hud-right { right: 18px; align-items: flex-end; }
+.hud-left { left: var(--pad-x); }
+.hud-right { right: var(--pad-x); align-items: flex-end; }
 
 /* the airport: ICAO and clocks on top; beneath, its name and place on the
    left and the search icon bottom right. The pane has no title bar. */
-.status-body { padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 10px; }
+.status-body { padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 6px; }
 .status-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .status-bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--gap); }
 .status-names { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -173,12 +175,12 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .local { font: 20px "Share Tech Mono", monospace; letter-spacing: 0.1em; color: var(--muted); }
 
 /* frequencies */
-.freq-counts { display: flex; justify-content: space-between; gap: 8px; padding: 12px 16px 6px; }
-.stack { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 6px 12px 12px; }
+.freq-counts { display: flex; justify-content: space-between; gap: 8px; padding: var(--pad-y) var(--pad-x) 4px; }
+.stack { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; }
 .stack-empty { margin: auto; text-align: center; color: var(--muted); letter-spacing: 0.16em; }
 
 .feed { width: 100%; text-align: left; background: transparent; }
-.feed.expanded { border: 1px solid var(--dim); padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 6px; }
+.feed.expanded { border: 1px solid var(--dim); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .feed-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .feed-name { font: 17px "Share Tech Mono", monospace; letter-spacing: 0.1em; color: var(--text); text-shadow: var(--glow);
   text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -187,30 +189,32 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .state-reconnecting, .state-starting { color: var(--amber); }
 .state-offline { color: var(--alarm); }
 .state-parked { color: var(--muted); }
-.trace { display: block; width: 100%; height: 36px; }
+.trace { display: block; width: 100%; height: 30px; }
 .feed-controls { display: flex; align-items: center; gap: 6px; }
-.feed-controls .btn { min-height: 34px; min-width: 44px; padding: 0; font-size: 12px; border-color: var(--dim); }
+.feed-controls .btn { min-height: 24px; min-width: 28px; padding: 0; font-size: 12px; border-color: var(--dim); }
 .feed-controls .btn[aria-pressed="true"] { border-color: var(--pink); color: var(--pink); }
 .spacer { flex: 1 1 auto; }
 .chatter-label { font-size: 11px; letter-spacing: 0.14em; color: var(--muted); }
-.chatter-big { font: 30px/1 "Share Tech Mono", monospace; color: var(--cyan); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
+/* The two chatter figures are as wide as "100%", so one does not shift as it
+   changes: four characters, with no letter spacing to add to them. */
+.chatter-big { font: 18px/1 "Share Tech Mono", monospace; letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
 
 .feed.compact {
-  min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; cursor: pointer;
+  min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 8px; cursor: pointer;
   border: 1px solid transparent; border-bottom-color: var(--rule);
 }
 .feed.compact:hover { border-color: var(--dim); }
 .feed.compact .feed-name { font-size: 15px; flex: 1 1 auto; text-shadow: none; }
 .feed.compact.parked .feed-name { color: var(--muted); }
 .note { font-size: 12px; color: var(--muted); }
-.chatter-small { font: 18px "Share Tech Mono", monospace; min-width: 26px; text-align: right; color: var(--cyan); font-variant-numeric: tabular-nums; }
+.chatter-small { font: 14px "Share Tech Mono", monospace; letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); font-variant-numeric: tabular-nums; }
 .parked .chatter-small { color: var(--muted); }
 
 /* lamps */
-.lamps { flex-wrap: wrap; align-items: flex-end; gap: 14px 18px; padding: 10px 16px;
+.lamps { flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; padding: var(--pad-y) var(--pad-x);
   border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.lamp { --lamp: var(--cyan); display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.lamp-gap { margin-left: 28px; }
+.lamp { --lamp: var(--cyan); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.lamp-gap { margin-left: 22px; }
 .lamp-light { width: 34px; height: 12px; border: 1px solid var(--muted); background: transparent; }
 .lamp-label { font-size: 10px; letter-spacing: 0.12em; color: var(--muted); }
 .lamp.on .lamp-light { background: var(--lamp); border-color: var(--lamp); }
@@ -220,12 +224,12 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 [data-glow="LOW"] .lamp.on .lamp-light, [data-glow="FULL"] .lamp.on .lamp-light { box-shadow: 0 0 10px var(--lamp); }
 
 /* tracks */
-.tracks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 12px 4px; }
+.tracks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 8px 2px; }
 .tracks { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-.tracks th { padding: 6px 8px; font-weight: 400; color: var(--muted); text-align: left; }
+.tracks th { padding: 3px 6px; font-weight: 400; color: var(--muted); text-align: left; }
 .tracks th.num { text-align: right; }
 .empty { padding: 8px; }
-.tracks td { padding: 5px 8px; border-top: 1px solid var(--rule); white-space: nowrap; }
+.tracks td { padding: 2px 6px; border-top: 1px solid var(--rule); white-space: nowrap; }
 .tracks td.num { text-align: right; }
 .tracks th .sort { all: unset; cursor: pointer; letter-spacing: inherit; }
 .tracks th .sort:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
@@ -237,10 +241,12 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .tracks tr.dimmed { opacity: 0.35; }
 .tracks tr.focused td { outline: 1px solid var(--pink); outline-offset: -1px; }
 .tracks tr.focused td, .tracks tr.focused .callsign { color: var(--pink); }
+/* The focused row leads the table (tracks.js) a fifth larger; its callsign button inherits the size. */
+.tracks tr.focused td { font-size: 1.2em; }
 .radar { cursor: crosshair; touch-action: none; }
 
 /* teletype */
-.log { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px;
+.log { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px var(--pad-x); display: flex; flex-direction: column; gap: 4px;
   font-size: 12px; line-height: 1.5; letter-spacing: 0.08em; text-transform: uppercase; }
 .log-z { color: var(--muted); margin-right: 12px; }
 .log-line.warn { color: var(--amber); }
@@ -251,31 +257,31 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 /* -- sheets ------------------------------------------------------------------- */
 
 .sheet {
-  width: min(560px, calc(100vw - 32px)); max-height: min(80vh, 720px); padding: 18px 20px; overflow: auto;
+  width: min(560px, calc(100vw - 32px)); max-height: min(80vh, 720px); padding: 12px 14px; overflow: auto;
   background: #000; color: var(--text); border: 1px solid var(--frame); box-shadow: 0 0 24px color-mix(in srgb, var(--frame) 40%, transparent);
 }
 .sheet::backdrop { background: rgba(0, 0, 0, 0.7); }
 .sheet-small { width: min(440px, calc(100vw - 32px)); }
 .sheet h2 { margin: 0; font: 22px "Share Tech Mono", monospace; letter-spacing: 0.16em; color: var(--white); text-shadow: var(--glow); }
-.sheet h3 { margin: 18px 0 8px; font-weight: 400; }
-.sheet-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
-.sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-.field input[type="search"] { background: #000; border: 1px solid var(--dim); padding: 8px 10px; min-height: 40px; text-transform: uppercase; }
+.sheet h3 { margin: 12px 0 6px; font-weight: 400; }
+.sheet-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.field input[type="search"] { background: #000; border: 1px solid var(--dim); padding: 4px 8px; min-height: 32px; text-transform: uppercase; }
 .field input[type="search"]:focus { outline: none; border-color: var(--pink); }
-.field-row, .field.field-row { display: flex; flex-direction: row; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.field-row, .field.field-row { display: flex; flex-direction: row; align-items: center; gap: 4px 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .field-row > span:first-child { min-width: 150px; }
 .field-row input[type="range"] { flex: 1 1 100px; min-width: 0; accent-color: var(--cyan); }
 .field-row .num { min-width: 52px; text-align: right; }
-.field-row select { flex: 1 1 120px; min-width: 0; min-height: 32px; padding: 0 8px; background: #000;
+.field-row select { flex: 1 1 120px; min-width: 0; min-height: 26px; padding: 0 8px; background: #000;
   border: 1px solid var(--frame); border-radius: 0; cursor: pointer; }
 .field-row select:hover { border-color: var(--cyan); }
 .field-row select:focus-visible, .field-row input[type="range"]:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
 /* A control that does nothing as things are set (the scanlines, unless the display is CRT). */
 .field-row.off { opacity: 0.4; }
 .field-row :disabled { cursor: not-allowed; }
-.segments { display: flex; flex-wrap: wrap; gap: 6px; }
-.seg { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.segments { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg { min-height: 26px; padding: 0 8px; font-size: 12px; }
 
 /* Config docks to the right edge, the window's height, and has no backdrop:
    what it sets (scanlines, boxes, the range) is seen changing behind it.
@@ -284,7 +290,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 #config-sheet { margin: 0 0 0 auto; width: min(420px, 100%); max-width: none; height: 100%; max-height: none; }
 #config-sheet::backdrop { background: transparent; }
 .choices { display: flex; flex-direction: column; gap: 4px; }
-.choice { display: flex; gap: 14px; align-items: baseline; width: 100%; min-height: 40px; padding: 6px 10px; text-align: left;
+.choice { display: flex; gap: 14px; align-items: baseline; width: 100%; min-height: 32px; padding: 4px 8px; text-align: left;
   background: transparent; border: 1px solid var(--rule); cursor: pointer; }
 .choice:hover { border-color: var(--cyan); }
 .choice .code { font: 16px "Share Tech Mono", monospace; color: var(--cyan); min-width: 56px; }

@@ -1,7 +1,8 @@
 // The tracks table under the radar (spec, Radar): callsign, type, altitude,
 // ground speed, track, distance and squawk, sortable by any column. The
 // callsign is a button that focuses the aircraft, exactly as clicking it on
-// the radar does; the focused row is pink and outlined, the rest dim.
+// the radar does; the focused row is pink, outlined, set larger and moved to
+// the top of the table, and the rest dim.
 
 import { focus } from "./focus.js";
 
@@ -52,7 +53,10 @@ export function mountTracks({ head, body, empty }, store) {
       const key = th.firstChild.dataset.key;
       th.setAttribute("aria-sort", key === sortKey ? (ascending ? "ascending" : "descending") : "none");
     }
+    // There is one focus, and it leads the table; sorting orders the rest.
     const focused = focus.hex;
+    const at = list.findIndex((ac) => ac.hex === focused);
+    if (at > 0) list.unshift(...list.splice(at, 1));
     body.replaceChildren(...list.map((ac) => {
       const tr = document.createElement("tr");
       tr.dataset.hex = ac.hex;
@@ -84,10 +88,11 @@ export function mountTracks({ head, body, empty }, store) {
   }
 
   store.subscribe((kind) => { if (kind === "all" || kind === "aircraft") render(); });
+  // The focused row is the first, so showing it is scrolling to the top.
+  const scroller = body.closest(".tracks-body");
   focus.subscribe((hex) => {
     render();
-    const row = hex && body.querySelector(`tr[data-hex="${CSS.escape(hex)}"]`);
-    if (row) row.scrollIntoView({ block: "nearest" });
+    if (hex && scroller) scroller.scrollTop = 0;
   });
   render();
 }
