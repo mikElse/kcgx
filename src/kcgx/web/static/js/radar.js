@@ -508,7 +508,9 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
   // -- pointing, panning, zooming, focusing --
 
-  const pointer = { down: null, moved: false };
+  // moved: the press now down, or the last one, became a drag. before: the
+  // press ahead of it did.
+  const pointer = { down: null, moved: false, before: false };
 
   function local(event) {
     const ratio = window.devicePixelRatio || 1;
@@ -531,6 +533,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
   canvas.addEventListener("pointerdown", (event) => {
     pointer.down = { at: local(event), panX: view.panX, panY: view.panY };
+    pointer.before = pointer.moved;
     pointer.moved = false;
     canvas.setPointerCapture(event.pointerId);
   });
@@ -598,8 +601,15 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   }
 
   function recentre() { view.zoom = 1; view.panX = 0; view.panY = 0; staticDirty = true; }
-  // With no button for it, a double click is the way back from a pan.
-  canvas.addEventListener("dblclick", recentre);
+  // With no button for it, a double click is the way back from a pan. The
+  // browser counts presses, not clicks: two quick pans from one spot, or a
+  // click straight after a pan, also arrive as a double click and are not one.
+  canvas.addEventListener("dblclick", (event) => {
+    if (pointer.moved || pointer.before) return;
+    recentre();
+    // The readout is for the view on screen, and the pointer has not moved.
+    if (hud.position) hud.position.textContent = positionText(local(event));
+  });
 
   new ResizeObserver(() => { staticDirty = true; }).observe(canvas);
   store.subscribe((kind) => {

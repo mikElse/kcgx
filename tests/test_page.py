@@ -289,6 +289,32 @@ def test_the_header_holds_two_buttons_and_no_words(page):
     assert page.inner_text(".bar-buttons").strip() == ""
 
 
+@pytest.mark.parametrize("width, height", [(1440, 900), (820, 1000), (390, 844), (320, 640)])
+def test_the_header_icons_stay_top_right_however_narrow_the_page(page, width, height):
+    """A narrow page wraps the brand's second line, not the icons, which
+    stay level with the name."""
+    page.set_viewport_size({"width": width, "height": height})
+    at = page.evaluate(
+        """() => {
+            const box = (s) => document.querySelector(s).getBoundingClientRect().toJSON();
+            const bar = document.querySelector(".bar");
+            return { bar: box(".bar"), name: box(".brand-name"), sub: box(".brand-sub"), brand: box(".brand"),
+                     config: box("#open-config"), power: box("#open-shutdown"),
+                     inner: bar.getBoundingClientRect().right - parseFloat(getComputedStyle(bar).paddingRight),
+                     wide: document.documentElement.scrollWidth }; }"""
+    )
+    assert at["wide"] <= width, "the page scrolls sideways"
+    assert abs(at["power"]["right"] - at["inner"]) <= 1, "the icons are not at the header's right edge"
+    assert at["config"]["right"] <= at["power"]["left"] and abs(at["config"]["top"] - at["power"]["top"]) <= 1
+    # beside the name, not on a row of their own beneath it
+    middle = lambda box: (box["top"] + box["bottom"]) / 2
+    assert abs(middle(at["config"]) - middle(at["name"])) <= 2, "the icons are not level with the name"
+    assert abs(at["config"]["top"] - at["bar"]["top"]) <= 1
+    assert at["brand"]["right"] <= at["config"]["left"]
+    assert at["name"]["right"] <= at["config"]["left"] and at["sub"]["right"] <= at["config"]["left"]
+    assert at["config"]["bottom"] <= at["bar"]["bottom"]
+
+
 ICONS = [("#open-config", "Config"), ("#open-shutdown", "Shut down"), ("#open-airport", "Search airports")]
 
 
@@ -596,6 +622,63 @@ def test_the_wheel_zooms_dragging_pans_and_a_double_click_recentres(page):
     assert view["panX"] != 0 and view["panY"] != 0
     page.mouse.dblclick(x, y)
     assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+
+
+def pan(page, x, y, **press):
+    """Drag the radar from (x, y); `press` is how the browser counts the press."""
+    page.mouse.move(x, y)
+    page.mouse.down(**press)
+    page.mouse.move(x + 120, y + 60, steps=6)
+    page.mouse.up(**press)
+
+
+def test_two_quick_pans_from_one_spot_are_not_a_double_click(page):
+    """Scrubbing the map: the browser counts the second press as the second
+    click of a double click, and the pans must survive it."""
+    wait_for_traffic(page)
+    x, y = on_screen(page, 300, 300)
+    pan(page, x, y)
+    once = radar_debug(page)["view"]
+    assert once["panX"] != 0 and once["panY"] != 0
+    pan(page, x, y, click_count=2)
+    twice = radar_debug(page)["view"]
+    assert twice["zoom"] == 1
+    assert twice["panX"] == pytest.approx(2 * once["panX"]) and twice["panY"] == pytest.approx(2 * once["panY"])
+
+
+def test_a_click_straight_after_a_pan_is_not_a_double_click(page):
+    wait_for_traffic(page)
+    x, y = on_screen(page, 300, 300)
+    pan(page, x, y)
+    panned = radar_debug(page)["view"]
+    assert panned["panX"] != 0
+    # one press, which the browser counts as the second of a double click
+    # (mouse.click with click_count=2 would press twice)
+    page.mouse.move(x, y)
+    page.mouse.down(click_count=2)
+    page.mouse.up(click_count=2)
+    assert radar_debug(page)["view"] == panned
+    # and two clicks after that are a double click again
+    page.mouse.dblclick(x, y)
+    assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+
+
+def test_the_readout_follows_a_double_click(page):
+    """The bearing and distance under the pointer are for the view on screen,
+    without waiting for the pointer to move."""
+    wait_for_traffic(page)
+    x, y = on_screen(page, 300, 300)
+    page.mouse.move(x, y)
+    centred = page.inner_text("#radar-position")
+    assert re.fullmatch(r"\d{3}° \d+\.\d NM", centred)
+    page.mouse.wheel(0, -500)
+    page.wait_for_function("window.kcgx.radar.debug().view.zoom > 1.5")
+    pan(page, x, y)
+    page.mouse.move(x, y)
+    assert page.inner_text("#radar-position") != centred
+    page.mouse.dblclick(x, y)
+    assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+    assert page.inner_text("#radar-position") == centred
 
 
 def test_a_column_header_sorts_the_table(page):

@@ -105,11 +105,14 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 
 /* -- header ---------------------------------------------------------------- */
 
-.bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
-.brand { display: flex; align-items: baseline; gap: 18px; }
-.brand-name { font: 22px "Share Tech Mono", monospace; letter-spacing: 0.32em; color: var(--white); text-shadow: var(--glow); }
+/* The icons stay top right however narrow the page: the brand gives way,
+   its second line wrapping under its name. The name's line is as tall as
+   an icon, so the two sit level. */
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; min-width: 0; }
+.brand-name { font: 22px/30px "Share Tech Mono", monospace; letter-spacing: 0.32em; color: var(--white); text-shadow: var(--glow); }
 .brand-sub { font-size: 12px; letter-spacing: 0.18em; color: var(--muted); }
-.bar-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.bar-buttons { display: flex; flex: 0 0 auto; align-self: flex-start; gap: 8px; }
 
 /* A button that is only a drawing: config and shut down in the header, the
    airport search in the airport pane. No frame; the stroke is the colour. */
