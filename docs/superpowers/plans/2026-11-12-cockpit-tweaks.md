@@ -504,7 +504,7 @@ is its own change.
 
 **Files:** `radar.js`, `index.html`, `main.js`, `tests/test_page.py`
 
-- [ ] **Tests first.** The wheel zooms in until `debug().view.nm` is 2.5
+- [x] **Tests first.** The wheel zooms in until `debug().view.nm` is 2.5
   and no further, and out to `max(160, range)`. With range 40 and the view
   untouched, the 40 nm ring's radius on screen is the shorter half side
   less 18 px (the old fit, now asserted). At a 2.5 nm view at least two
@@ -512,28 +512,38 @@ is its own change.
   a ring at 120. A double click after a pan and zoom returns the view to
   `{nm: range, panX: 0, panY: 0}` (rewrite
   `test_the_wheel_zooms_dragging_pans_and_recentre_resets`).
-- [ ] **View in nm.** `view = { nm, panX, panY }`; `nm` starts at, and
+- [x] **View in nm.** `view = { nm, panX, panY }`; `nm` starts at, and
   resets to, `prefs.range_nm`.
   `scale = (min(width, height) / 2 - 18 * ratio) / view.nm`. The wheel
   divides `nm` by the factor and clamps to `[2.5, max(160, range)]`.
   `RANGE_NM`, `RINGS_NM`, `ZOOM_MIN` and `ZOOM_MAX` go. Small airports
   show when `view.nm <= 27` (the old `zoom >= 1.5` at 40 nm).
-- [ ] **Rings.** `step` is the first of 0.5, 1, 2, 5, 10, 20, 50 with
+- [x] **Rings.** `step` is the first of 0.5, 1, 2, 5, 10, 20, 50 with
   `view.nm / step <= 5`. Draw every multiple of `step` up to the range
   that is within the visible radius, dim; then the range ring itself,
   bright, whether or not it is a multiple. Numbers read `2.5`, not `2.50`.
-- [ ] **Home ring** is `clamp(2.5 nm on screen, 24 px, 64 px)`, so the
+- [x] **Home ring** is `clamp(2.5 nm on screen, 24 px, 64 px)`, so the
   airport's name stays beside it at any zoom.
-- [ ] **Double click recentres**; the RECENTRE button and its listener go.
+- [x] **Double click recentres**; the RECENTRE button and its listener go.
   The bearing and distance readout in the title bar stays. `debug().view`
   reports `nm`; `radar.recentre()` stays for tests.
-- [ ] A range change (a `prefs` frame with a new `range_nm`) resets the
+- [x] A range change (a `prefs` frame with a new `range_nm`) resets the
   view and marks the static layer dirty.
-- [ ] **Measure 250 nm.** With the demo unable to fill it, inject a 600
+- [x] **Measure 250 nm.** With the demo unable to fill it, inject a 600
   aircraft frame through `window.kcgx.store.apply` and read the frame time
   in the Performance panel. Record the number in the commit message. Over
   16 ms: open a follow up, do not fix it here.
-- [ ] Commit `feat(radar): zoom to 2.5 nm, rings by the view, range from prefs`.
+  **Measured 2026-11-12, headless Chromium under Playwright (no
+  Performance panel), 1440 by 900, canvas 1024 by 588, range and view 250,
+  600 aircraft each with a full 12 point trail, glow LOW, display CRT:
+  34.7 ms a frame at 1x (the radar's frame callback 32.0 ms of it) and
+  66.3 ms at 2x, against 16.7 ms and 0.8 ms with the demo's eleven. Over 16 ms.
+  Follow up, not done here:** the cost is the glow (with glow OFF the same
+  picture holds 16.7 ms at 1x: callback 13 ms) and the trails (one point
+  each, glow LOW: callback 12 ms). Each trail segment is its own stroke
+  with a shadow, 6600 a frame, and every aircraft is drawn whether or not
+  it is on screen.
+- [x] Commit `feat(radar): zoom to 2.5 nm, rings by the view, range from prefs`.
 
 ### Task 8: Flight tags and label boxes
 

@@ -5,19 +5,25 @@
 //
 // Two layers. The static one (map, rings, labels, the home airport) is
 // drawn into an offscreen canvas once per airport, resize, pan, zoom,
-// palette or hover change, and copied each frame. The moving one (aircraft,
-// trails, the focus ring) is drawn every frame, dead reckoned between polls
-// from ground speed and track. With display VECTOR or CRT the moving layer
-// fades instead of clearing, which is the phosphor persistence.
+// range, palette or hover change, and copied each frame. The moving one
+// (aircraft, trails, the focus ring) is drawn every frame, dead reckoned
+// between polls from ground speed and track. With display VECTOR or CRT
+// the moving layer fades instead of clearing, which is the phosphor
+// persistence.
 
 import { colours, glowBlur, reducedMotion } from "./theme.js";
 import { focus } from "./focus.js";
 
 const NM_PER_RADIAN = 3440.065;
-const RANGE_NM = 40;
-const RINGS_NM = [10, 20, 30, 40];
-const ZOOM_MIN = 0.25; // 160 nm across the shorter side
-const ZOOM_MAX = 6;
+const VIEW_MIN_NM = 2.5; // the closest view: this far from the centre to the nearer edge
+const VIEW_MAX_NM = 160; // the widest, or the range if that is wider
+const RING_STEPS_NM = [0.5, 1, 2, 5, 10, 20, 50];
+const RINGS_IN_VIEW = 5; // at most this many between the centre and the nearer edge
+const SMALL_AIRPORTS_NM = 27; // small airports show from this view inwards
+const HOME_NM = 2.5; // the home ring's true size,
+const HOME_MIN_PX = 24; // and what it is held between on screen
+const HOME_MAX_PX = 64;
+const EDGE_PX = 18; // kept clear between the view's distance and the nearer edge
 const DRAW_ON_MS = 2000;
 const LABEL_ALPHA = 0.4;
 const DIM_ALPHA = 0.15;
@@ -90,7 +96,12 @@ function decode(geo, project) {
 // -- the screen ------------------------------------------------------------------
 
 export function mountRadar(canvas, store, { hud = {} } = {}) {
-  const view = { zoom: 1, panX: 0, panY: 0 }; // pan in nm
+  // The range is a setting (prefs.range_nm). The view is held in nautical
+  // miles: `nm` from the centre to the nearer edge, less EDGE_PX. It starts
+  // at the range and returns to it; pan is in nm too.
+  const range = () => store.state.prefs.range_nm;
+  const view = { nm: range(), panX: 0, panY: 0 };
+  let viewFor = view.nm; // the range the view was last reset for
   let map = null; // decoded geo for the current airport
   let mapFor = "";
   let project = null;
@@ -98,6 +109,10 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   let staticDirty = true;
   let hovered = null; // a placed label's key
   let placed = []; // [{ key, x, y, w, h }]
+  let rings = []; // [{ nm, r, bright, text }], as last drawn
+  let home = { x: 0, y: 0, r: 0 }; // the airport and its ring, as last drawn
+  let symbols = {}; // kind -> how many are on screen, as last drawn
+  let shown = null; // the view as the last frame drew it
   let hits = []; // [{ hex, x, y, label: {x, y, w, h}, trail: [[x, y]] }]
   const still = document.createElement("canvas");
   const trace = document.createElement("canvas"); // the moving layer, for persistence
@@ -115,9 +130,48 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     return { ratio, width, height };
   }
 
-  // Pixels per nm: the 40 nm ring fits the shorter side, times the zoom.
+  // Pixels per nm: the view's distance fits the shorter side.
   function scale(width, height, ratio) {
-    return (Math.max(0, Math.min(width, height) / 2 - 18 * ratio) / RANGE_NM) * view.zoom;
+    return Math.max(0, Math.min(width, height) / 2 - EDGE_PX * ratio) / view.nm;
+  }
+
+  // Back to the whole range, about the airport.
+  function recentre() {
+    view.nm = range();
+    view.panX = 0;
+    view.panY = 0;
+    viewFor = view.nm;
+    staticDirty = true;
+  }
+
+  // The home ring is 2.5 nm, held between two sizes on screen so that it
+  // neither vanishes at a wide view nor fills a close one.
+  function homeRing(s, ratio) {
+    return Math.min(HOME_MAX_PX * ratio, Math.max(HOME_MIN_PX * ratio, HOME_NM * s));
+  }
+
+  // Which rings cross the screen: every multiple of a 1, 2, 5 step short of
+  // the range, and the range itself whether or not it is a multiple. The
+  // step is the smallest that puts no more than five between the centre and
+  // the nearer edge.
+  function ringsOn(centre, s, width, height) {
+    if (s <= 0) return [];
+    const dx = Math.max(0, -centre[0], centre[0] - width);
+    const dy = Math.max(0, -centre[1], centre[1] - height);
+    const nearest = Math.hypot(dx, dy) / s; // nm from the airport to the screen
+    const farthest = Math.hypot(
+      Math.max(centre[0], width - centre[0]), Math.max(centre[1], height - centre[1]),
+    ) / s;
+    const limit = range();
+    const step = RING_STEPS_NM.find((nm) => view.nm / nm <= RINGS_IN_VIEW) || RING_STEPS_NM[RING_STEPS_NM.length - 1];
+    const out = [];
+    const ring = (nm, bright) => out.push({ nm, r: nm * s, bright, text: `${Number(nm.toFixed(2))}` });
+    const last = Math.floor(Math.min(limit, farthest) / step);
+    for (let i = Math.max(1, Math.ceil(nearest / step)); i <= last; i += 1) {
+      if (i * step < limit) ring(i * step, false);
+    }
+    if (limit >= nearest && limit <= farthest) ring(limit, true);
+    return out;
   }
 
   function toScreen(xy, s, width, height) {
@@ -203,30 +257,34 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       }
     }
 
-    // Range rings, labelled along the north east diagonal.
+    // Range rings, dim, and the range itself, bright; labelled along the
+    // north east diagonal.
+    rings = ringsOn(centre, s, width, height);
     ctx.save();
     ctx.strokeStyle = c.cyan;
     ctx.lineWidth = ratio;
     glow(ctx, c.cyan, ratio);
-    for (const nm of RINGS_NM) {
-      ctx.globalAlpha = nm === RANGE_NM ? 0.8 : 0.35;
+    for (const ring of rings) {
+      ctx.globalAlpha = ring.bright ? 0.8 : 0.35;
       ctx.beginPath();
-      ctx.arc(centre[0], centre[1], nm * s, 0, Math.PI * 2);
+      ctx.arc(centre[0], centre[1], ring.r, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
     ctx.save();
     ctx.fillStyle = c.dim;
     ctx.font = `${12 * ratio}px ${FONT}`;
-    for (const nm of RINGS_NM) {
-      const d = nm * s * Math.SQRT1_2;
-      ctx.fillText(`${nm}`, centre[0] + d + 4 * ratio, centre[1] - d - 4 * ratio);
+    for (const ring of rings) {
+      const d = ring.r * Math.SQRT1_2;
+      ctx.fillText(ring.text, centre[0] + d + 4 * ratio, centre[1] - d - 4 * ratio);
     }
     ctx.restore();
 
     // The home airport first, so its name is reserved before anything else
     // looks for room.
     placed = [];
+    symbols = {};
+    home = { x: centre[0], y: centre[1], r: homeRing(s, ratio) };
     drawHome(ctx, centre, s, ratio, c);
     if (map) drawPlaces(ctx, s, width, height, ratio, c);
     staticDirty = progress < 1;
@@ -242,7 +300,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       items.push({ kind: "navaid", xy, text: row[2], colour: c.cyan, priority: 30 });
     }
     for (const { xy, row } of map.points.airport || []) {
-      if (row[3] === "small" && view.zoom < 1.5) continue;
+      if (row[3] === "small" && view.nm > SMALL_AIRPORTS_NM) continue;
       items.push({ kind: "airport", xy, text: row[2], colour: c.cyan, priority: row[3] === "large" ? 25 : row[3] === "medium" ? 35 : 60 });
     }
     for (const { xy, row } of map.points.city || []) {
@@ -255,7 +313,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
     // The home airport's own name and ring are reserved first.
     const home = toScreen([0, 0], s, width, height);
-    const taken = [{ x: home[0] - 26 * ratio, y: home[1] - 26 * ratio, w: 52 * ratio, h: 52 * ratio }, ...placed];
+    const clear = homeRing(s, ratio) + 2 * ratio;
+    const taken = [{ x: home[0] - clear, y: home[1] - clear, w: 2 * clear, h: 2 * clear }, ...placed];
     const free = (r) => taken.every((t) => r.x + r.w < t.x || t.x + t.w < r.x || r.y + r.h < t.y || t.y + t.h < r.y);
 
     ctx.save();
@@ -271,6 +330,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       ctx.strokeStyle = item.colour;
       glow(ctx, item.colour, ratio);
       symbol(ctx, item.kind, p, ratio);
+      symbols[item.kind] = (symbols[item.kind] || 0) + 1;
       const w = ctx.measureText(item.text).width;
       const h = 13 * ratio;
       const box = { x: p[0] + 8 * ratio, y: p[1] - h / 2 - 2 * ratio, w, h: h + 4 * ratio };
@@ -340,7 +400,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.strokeStyle = c.pink;
     ctx.lineWidth = 1.8 * ratio;
     glow(ctx, c.pink, ratio);
-    const ring = Math.max(24 * ratio, 2.5 * s);
+    const ring = homeRing(s, ratio);
     ctx.beginPath();
     ctx.arc(centre[0], centre[1], ring, 0, Math.PI * 2);
     ctx.stroke();
@@ -488,6 +548,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.globalCompositeOperation = "lighter";
     ctx.drawImage(trace, 0, 0);
     ctx.globalCompositeOperation = "source-over";
+    shown = { ...view };
 
     if (now - lastHud > 500) { lastHud = now; drawHud(list); }
     requestAnimationFrame(frame);
@@ -580,7 +641,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const at = local(event);
     const before = scale(width, height, ratio);
     const factor = Math.exp(-event.deltaY * 0.0015);
-    view.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.zoom * factor));
+    view.nm = Math.min(Math.max(VIEW_MAX_NM, range()), Math.max(VIEW_MIN_NM, view.nm / factor));
     const after = scale(width, height, ratio);
     // Keep the point under the pointer where it is.
     const nx = view.panX + (at[0] - width / 2) / before;
@@ -600,7 +661,6 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     return `${String(brg).padStart(3, "0")}° ${nm.toFixed(1)} NM`;
   }
 
-  function recentre() { view.zoom = 1; view.panX = 0; view.panY = 0; staticDirty = true; }
   // With no button for it, a double click is the way back from a pan. The
   // browser counts presses, not clicks: two quick pans from one spot, or a
   // click straight after a pan, also arrive as a double click and are not one.
@@ -616,11 +676,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     if (kind === "all") {
       const airport = store.state.airport;
       if (airport && airport.icao !== mapFor) {
-        view.zoom = 1; view.panX = 0; view.panY = 0;
+        recentre();
         loadMap(airport);
       }
+      if (range() !== viewFor) recentre();
       staticDirty = true;
     } else if (kind === "prefs") {
+      // A new range is a new picture: the view goes back to it.
+      if (range() !== viewFor) recentre();
       staticDirty = true;
     }
   });
@@ -628,11 +691,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   return {
     recentre,
     redraw() { staticDirty = true; },
-    // For tests: what is on screen, in screen pixels.
+    // For tests: what is on screen, in screen pixels. `view` changes with
+    // the event that changes it and `shown` with the next frame, so the
+    // rest describes the view once the two agree.
     debug() {
       return {
         hits: hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y })),
         placed, hovered, view: { ...view }, mapFor, loaded: Boolean(map),
+        rings, home, symbols, shown,
         layers: map ? Object.fromEntries(Object.entries(map.lines).map(([k, v]) => [k, v.length])) : {},
       };
     },

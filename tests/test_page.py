@@ -87,6 +87,9 @@ def page(browser, server):
     page.wait_for_selector(".feed.expanded")
     # The server outlives each test, and so do its prefs: start from the defaults.
     set_prefs(page, **DEFAULTS)
+    # A range left by the test before is a view left by it: the radar is
+    # drawn at this test's on its next frame, and until then says the old.
+    radar_drawn(page)
     yield page
     context.close()
     assert errors == [], errors
@@ -101,6 +104,15 @@ def other(browser, server, page):
     tab.wait_for_selector(".feed.expanded")
     yield tab
     tab.close()
+
+
+def radar_drawn(page):
+    """Wait until the radar has drawn the view it holds; returns what it drew."""
+    page.wait_for_function(
+        """() => { const d = window.kcgx.radar.debug();
+                   return JSON.stringify(d.shown) === JSON.stringify(d.view); }"""
+    )
+    return page.evaluate("window.kcgx.radar.debug()")
 
 
 def feed_names(page, shape):
@@ -715,6 +727,7 @@ def test_two_subset_buttons_pressed_before_the_server_answers_both_count(page, o
     pref_is(page, "tag_fields", ["CALLSIGN"])
     page.click("#config-sheet [data-pref=tag_fields] button:text-is('TRK')")
     pref_is(other, "tag_fields", ["CALLSIGN", "TRK"])
+    pref_is(page, "tag_fields", ["CALLSIGN", "TRK"])  # the other tab may be told first
     assert pressed(page, "tag_fields") == ["CALLSIGN", "TRK"]
 
 
@@ -1182,19 +1195,198 @@ def test_place_names_brighten_under_the_pointer(page):
     page.wait_for_function("window.kcgx.radar.debug().hovered === null")
 
 
-def test_the_wheel_zooms_dragging_pans_and_a_double_click_recentres(page):
+def canvas_size(page):
+    return page.eval_on_selector("#radar", "c => [c.width, c.height]")
+
+
+def centre_of_the_radar(page):
+    """The middle of the canvas, as a page position."""
+    width, height = canvas_size(page)
+    return on_screen(page, width / 2, height / 2)
+
+
+def fit(page):
+    """How far from the centre, in canvas pixels, the view's own distance is
+    drawn: the shorter half side less 18 px."""
+    width, height = canvas_size(page)
+    return min(width, height) / 2 - 18 * page.evaluate("devicePixelRatio")
+
+
+def turn_wheel(page, delta):
+    """Turn the wheel where the pointer is; returns once the radar has had it."""
+    page.evaluate(
+        """() => { if (window.wheels !== undefined) return;
+                   window.wheels = 0;
+                   document.getElementById("radar").addEventListener("wheel", () => { window.wheels += 1; }); }"""
+    )
+    before = page.evaluate("window.wheels")
+    page.mouse.wheel(0, delta)
+    page.wait_for_function("before => window.wheels > before", arg=before)
+
+
+def zoom_right_in(page):
+    """To the closest view, about the airport."""
+    page.mouse.move(*centre_of_the_radar(page))
+    for _ in range(6):
+        turn_wheel(page, -600)
+    radar_drawn(page)
+
+
+def lit(page, x, y):
+    """The brightest channel of the canvas within a pixel of (x, y)."""
+    return page.evaluate(
+        """([x, y]) => Math.max(...document.getElementById("radar").getContext("2d")
+                                    .getImageData(Math.round(x) - 1, Math.round(y) - 1, 3, 3).data
+                                    .filter((_, i) => i % 4 !== 3))""",
+        [x, y],
+    )
+
+
+def test_the_wheel_zooms_in_to_2_5_nm_and_no_further(page):
+    wait_for_traffic(page)
+    page.mouse.move(*centre_of_the_radar(page))
+    turn_wheel(page, -600)
+    assert 2.5 < radar_debug(page)["view"]["nm"] < 40
+    for _ in range(5):
+        turn_wheel(page, -600)
+    assert radar_debug(page)["view"]["nm"] == 2.5
+    turn_wheel(page, -600)
+    assert radar_debug(page)["view"]["nm"] == 2.5
+
+
+@pytest.mark.parametrize("range_nm, widest", [(40, 160), (250, 250)])
+def test_the_wheel_zooms_out_to_160_nm_or_to_the_range_if_that_is_wider(page, range_nm, widest):
+    wait_for_traffic(page)
+    set_prefs(page, range_nm=range_nm)
+    page.wait_for_function("nm => window.kcgx.radar.debug().view.nm === nm", arg=range_nm)
+    page.mouse.move(*centre_of_the_radar(page))
+    turn_wheel(page, -600)
+    assert radar_debug(page)["view"]["nm"] < range_nm
+    for _ in range(5):
+        turn_wheel(page, 600)
+    assert radar_debug(page)["view"]["nm"] == widest
+    turn_wheel(page, 600)
+    assert radar_debug(page)["view"]["nm"] == widest
+
+
+def test_the_range_ring_fits_the_shorter_side_less_18_px(page):
+    wait_for_traffic(page)
+    debug = radar_drawn(page)
+    assert debug["view"] == {"nm": 40, "panX": 0, "panY": 0}
+    width, height = canvas_size(page)
+    assert (debug["home"]["x"], debug["home"]["y"]) == (width / 2, height / 2)
+    assert [(ring["nm"], ring["bright"]) for ring in debug["rings"]] == [
+        (10, False), (20, False), (30, False), (40, True),
+    ]
+    assert debug["rings"][-1]["r"] == pytest.approx(fit(page))
+    assert [ring["text"] for ring in debug["rings"]] == ["10", "20", "30", "40"]
+
+
+def test_at_2_5_nm_the_rings_are_half_a_mile_apart_and_numbered_plainly(page):
+    wait_for_traffic(page)
+    zoom_right_in(page)
+    debug = radar_drawn(page)
+    assert debug["view"]["nm"] == 2.5
+    width, height = canvas_size(page)
+    home = debug["home"]
+    whole = [
+        ring for ring in debug["rings"]
+        if home["x"] - ring["r"] >= 0 and home["x"] + ring["r"] <= width
+        and home["y"] - ring["r"] >= 0 and home["y"] + ring["r"] <= height
+    ]
+    assert len(whole) >= 2
+    assert [ring["nm"] for ring in whole] == [0.5, 1, 1.5, 2, 2.5]
+    assert [ring["text"] for ring in whole] == ["0.5", "1", "1.5", "2", "2.5"]
+    assert whole[-1]["r"] == pytest.approx(fit(page))
+    # every ring listed is one that crosses the screen
+    corner = max(
+        ((x - home["x"]) ** 2 + (y - home["y"]) ** 2) ** 0.5 for x in (0, width) for y in (0, height)
+    )
+    assert all(ring["r"] <= corner for ring in debug["rings"])
+
+
+def test_a_new_range_resets_the_view_and_draws_its_ring(page):
     wait_for_traffic(page)
     x, y = on_screen(page, 300, 300)
     page.mouse.move(x, y)
+    turn_wheel(page, -500)
+    pan(page, x, y)
+    view = radar_debug(page)["view"]
+    assert view["nm"] < 27 and view["panX"] != 0 and view["panY"] != 0
+    set_prefs(page, range_nm=120)
+    debug = radar_drawn(page)
+    assert debug["view"] == {"nm": 120, "panX": 0, "panY": 0}
+    assert [(ring["nm"], ring["bright"]) for ring in debug["rings"]] == [(50, False), (100, False), (120, True)]
+    r = debug["rings"][-1]["r"]
+    assert r == pytest.approx(fit(page))
+    # and it is on the canvas, where it is said to be
+    home = debug["home"]
+    for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+        assert lit(page, home["x"] + dx * r, home["y"] + dy * r) > 60, (dx, dy)
+
+
+def test_a_setting_other_than_the_range_leaves_the_view_alone(page):
+    wait_for_traffic(page)
+    x, y = on_screen(page, 300, 300)
+    page.mouse.move(x, y)
+    turn_wheel(page, -500)
+    pan(page, x, y)
+    view = radar_debug(page)["view"]
+    assert view["nm"] < 27 and view["panX"] != 0
+    set_prefs(page, glow="FULL", range_nm=40)
+    assert radar_debug(page)["view"] == view
+
+
+def test_the_home_ring_is_2_5_nm_held_between_24_and_64_px(page):
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    px_per_nm = fit(page) / 40
+    assert 2.5 * px_per_nm < 24 * ratio, "2.5 nm is over 24 px at this size, so the test shows nothing"
+    assert radar_drawn(page)["home"]["r"] == 24 * ratio
+    page.mouse.move(*centre_of_the_radar(page))
+    turn_wheel(page, -600)
+    debug = radar_drawn(page)
+    true_size = 2.5 * fit(page) / debug["view"]["nm"]
+    assert 24 * ratio < true_size < 64 * ratio, "the test wants a view where 2.5 nm is between the limits"
+    assert debug["home"]["r"] == pytest.approx(true_size)
+    zoom_right_in(page)
+    # and the airport's name is still beside the ring, not out at 2.5 nm
+    debug = radar_drawn(page)
+    assert debug["home"]["r"] == 64 * ratio
+    name = next(p for p in debug["placed"] if p["key"] == "home")
+    assert 0 < name["x"] - debug["home"]["x"] <= 64 * ratio
+    assert 0 < debug["home"]["y"] - (name["y"] + name["h"]) <= 64 * ratio
+
+
+def test_small_airports_show_from_a_27_nm_view(page):
+    wait_for_traffic(page)
+    page.mouse.move(*centre_of_the_radar(page))
+    turn_wheel(page, -250)
+    wide = radar_drawn(page)
+    assert 27 < wide["view"]["nm"] < 28
+    turn_wheel(page, -20)
+    close = radar_drawn(page)
+    assert 26 < close["view"]["nm"] <= 27
+    # A closer view shows less ground, so more airports on it are new ones.
+    assert close["symbols"]["airport"] > wide["symbols"]["airport"]
+    assert close["symbols"]["navaid"] <= wide["symbols"]["navaid"]
+
+
+def test_the_wheel_zooms_dragging_pans_and_a_double_click_recentres(page):
+    wait_for_traffic(page)
+    set_prefs(page, range_nm=120)
+    page.wait_for_function("window.kcgx.radar.debug().view.nm === 120")
+    x, y = on_screen(page, 300, 300)
+    page.mouse.move(x, y)
     page.mouse.wheel(0, -500)
-    page.wait_for_function("window.kcgx.radar.debug().view.zoom > 1.5")
+    page.wait_for_function("window.kcgx.radar.debug().view.nm < 80")
     page.mouse.down()
     page.mouse.move(x + 120, y + 60, steps=6)
     page.mouse.up()
     view = radar_debug(page)["view"]
     assert view["panX"] != 0 and view["panY"] != 0
     page.mouse.dblclick(x, y)
-    assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+    assert radar_debug(page)["view"] == {"nm": 120, "panX": 0, "panY": 0}
 
 
 def pan(page, x, y, **press):
@@ -1215,7 +1407,7 @@ def test_two_quick_pans_from_one_spot_are_not_a_double_click(page):
     assert once["panX"] != 0 and once["panY"] != 0
     pan(page, x, y, click_count=2)
     twice = radar_debug(page)["view"]
-    assert twice["zoom"] == 1
+    assert twice["nm"] == 40
     assert twice["panX"] == pytest.approx(2 * once["panX"]) and twice["panY"] == pytest.approx(2 * once["panY"])
 
 
@@ -1233,7 +1425,7 @@ def test_a_click_straight_after_a_pan_is_not_a_double_click(page):
     assert radar_debug(page)["view"] == panned
     # and two clicks after that are a double click again
     page.mouse.dblclick(x, y)
-    assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+    assert radar_debug(page)["view"] == {"nm": 40, "panX": 0, "panY": 0}
 
 
 def test_the_readout_follows_a_double_click(page):
@@ -1245,12 +1437,12 @@ def test_the_readout_follows_a_double_click(page):
     centred = page.inner_text("#radar-position")
     assert re.fullmatch(r"\d{3}° \d+\.\d NM", centred)
     page.mouse.wheel(0, -500)
-    page.wait_for_function("window.kcgx.radar.debug().view.zoom > 1.5")
+    page.wait_for_function("window.kcgx.radar.debug().view.nm < 27")
     pan(page, x, y)
     page.mouse.move(x, y)
     assert page.inner_text("#radar-position") != centred
     page.mouse.dblclick(x, y)
-    assert radar_debug(page)["view"] == {"zoom": 1, "panX": 0, "panY": 0}
+    assert radar_debug(page)["view"] == {"nm": 40, "panX": 0, "panY": 0}
     assert page.inner_text("#radar-position") == centred
 
 
