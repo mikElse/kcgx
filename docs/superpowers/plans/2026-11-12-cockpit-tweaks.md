@@ -299,7 +299,7 @@ is its own change.
 
 **Files:** `index.html`, `cockpit.css`, `main.js`, `tests/test_page.py`
 
-- [ ] **Tests first** (browser). By default four screens show (Radar,
+- [x] **Tests first** (browser). By default four screens show (Radar,
   Airport, Frequencies, Tracks), `#lamps` and the teletype are not
   displayed, and the frequencies pane's bottom edge is level with the
   tracks pane's (within 1 px) at every size in `SIZES` wider than 1100.
@@ -309,7 +309,7 @@ is its own change.
   runs in all four combinations. Set prefs in tests by sending the message
   through the page's own socket: expose `send` beside `store` on
   `window.kcgx`.
-- [ ] **Flatten the page.** `.toprow`, `.column` and `.bottomrow` go; the
+- [x] **Flatten the page.** `.toprow`, `.column` and `.bottomrow` go; the
   eight parts become children of `.page`, placed by name:
 
   ```css
@@ -337,16 +337,16 @@ is its own change.
 
   Rows are still spaced by `margin-top` on each part, as the comment at
   `cockpit.css:50` explains, so a hidden part costs nothing.
-- [ ] `<html>` gains `data-lamps="OFF" data-teletype="OFF"` so the first
+- [x] `<html>` gains `data-lamps="OFF" data-teletype="OFF"` so the first
   paint is the default layout. `applyPrefs` sets both from the prefs.
-- [ ] The flicker offsets at `cockpit.css:253-254` name panes instead of
+- [x] The flicker offsets at `cockpit.css:253-254` name panes instead of
   positions (`.screen-freq`, `.screen-tracks`).
-- [ ] `mountLog` still runs while hidden. In `main.js`, a `message` with
+- [x] `mountLog` still runs while hidden. In `main.js`, a `message` with
   `page: true`, or one `log.say` raises, shows in the banner for 8 s when
   `prefs.teletype` is false (decision 4). Test:
   `window.kcgx.store.apply({t: "error", text: "x"})` puts "ERROR: X" in
   the banner with the teletype off, and leaves the banner alone with it on.
-- [ ] Commit `feat(web): one grid; lamps and teletype are settings`.
+- [x] Commit `feat(web): one grid; lamps and teletype are settings`.
 
 ### Task 4: The header and the airport pane
 

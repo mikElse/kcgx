@@ -1,7 +1,7 @@
 /* KCGX cockpit. The look is the NORAD wall in WarGames: line art on black,
    framed screens with their names along the bottom, lamps between them.
-   Everything visual hangs off three attributes on <html>, set from the
-   server's prefs: data-palette, data-glow, data-display. */
+   Everything visual hangs off attributes on <html>, set from the server's
+   prefs: data-palette, data-glow, data-display, data-lamps, data-teletype. */
 
 @font-face { font-family: "Share Tech Mono"; src: url("fonts/share-tech-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "B612 Mono"; src: url("fonts/b612-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
@@ -47,29 +47,54 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .num { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
 
-/* Header, banner, top row, lamps, bottom row. The top row takes what the
-   window has left; screens are grid cells, so they can never overlap. Each
-   part has a named area, so the hidden banner leaves its row empty rather
-   than shifting the others up; spacing is margins, so an empty row costs
-   nothing. */
+/* One grid holds the eight parts: header, banner, radar, airport status,
+   frequencies, lamps, tracks, teletype. Each is placed by name, so screens
+   are grid cells and can never overlap. Radar and tracks take the left
+   column with the lamp bar between them; the right column is the status
+   over frequencies, which runs down to the bottom of tracks, or to the top
+   of the teletype when that is shown. The radar's row takes what the window
+   has left. Rows are spaced by a margin on top of each part, so a row whose
+   part is hidden (the banner, the lamps) is empty and costs nothing.
+   The status row is min-content, not auto: a screen clips what overflows
+   it, so an auto row would let a short window squeeze the airport out of
+   sight, where min-content keeps it whole and lets the page scroll.
+   The gap and the padding are tokens, so the density is set in one place. */
+:root { --gap: 14px; --page-pad: 16px 20px 20px; }
 .page {
-  height: 100vh; min-height: 720px; padding: 16px 20px 20px;
-  display: grid; grid-template-rows: auto auto minmax(380px, 1fr) auto minmax(180px, 24vh);
-  grid-template-areas: "bar" "banner" "top" "lamps" "bottom";
+  height: 100vh; min-height: 640px; padding: var(--page-pad);
+  display: grid; column-gap: var(--gap);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-rows: auto auto min-content minmax(240px, 1fr) auto minmax(160px, 24vh);
+  grid-template-areas:
+    "bar bar" "banner banner"
+    "radar status" "radar freq" "lamps freq" "tracks freq";
 }
+[data-teletype="ON"] .page { grid-template-areas:
+    "bar bar" "banner banner"
+    "radar status" "radar freq" "lamps freq" "tracks log"; }
+.page > * { min-width: 0; }
 .bar { grid-area: bar; }
-.banner { grid-area: banner; margin-top: 14px; }
-.toprow { grid-area: top; margin-top: 14px; }
-.lamps { grid-area: lamps; margin-top: 14px; }
-.bottomrow { grid-area: bottom; margin-top: 14px; }
-.toprow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 400px); gap: 14px; min-height: 0; }
-.column { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; min-height: 0; min-width: 0; }
-.bottomrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 400px); gap: 14px; min-height: 0; }
-.toprow > *, .bottomrow > * { min-width: 0; min-height: 0; }
+.banner { grid-area: banner; }
+.screen-radar { grid-area: radar; }
+.screen-status { grid-area: status; }
+.screen-freq { grid-area: freq; }
+.lamps { grid-area: lamps; }
+.screen-tracks { grid-area: tracks; }
+.screen-log { grid-area: log; }
+.banner, .page > .screen, .lamps { margin-top: var(--gap); }
+
+/* The lamp bar and the teletype show only when asked for (prefs lamps and
+   teletype, as data-lamps and data-teletype on <html>). */
+.page > .lamps, .page > .screen-log { display: none; }
+[data-lamps="ON"] .page > .lamps { display: flex; }
+[data-teletype="ON"] .page > .screen-log { display: flex; }
 
 @media (max-width: 1100px) {
-  .page { height: auto; grid-template-rows: auto auto auto auto auto; }
-  .toprow, .bottomrow { grid-template-columns: minmax(0, 1fr); }
+  .page, [data-teletype="ON"] .page {
+    height: auto; grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none; grid-auto-rows: auto;
+    grid-template-areas: "bar" "banner" "radar" "status" "freq" "lamps" "tracks" "log";
+  }
   .radar-wrap { flex: 0 0 auto; height: 440px; }
   .stack { max-height: 70vh; }
   .log { max-height: 40vh; }
@@ -168,7 +193,7 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 @keyframes flash { from { border-color: var(--pink); box-shadow: 0 0 12px var(--pink); } }
 
 /* lamps */
-.lamps { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 18px; padding: 10px 16px;
+.lamps { flex-wrap: wrap; align-items: flex-end; gap: 14px 18px; padding: 10px 16px;
   border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
 .lamp { --lamp: var(--cyan); display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .lamp-gap { margin-left: 28px; }
@@ -250,8 +275,8 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
   radial-gradient(ellipse at center, transparent 52%, rgba(0, 0, 0, 0.42) 100%); }
 [data-display="CRT"] .screen { border-radius: 16px; }
 [data-display="VECTOR"] .screen, [data-display="CRT"] .screen { animation: flicker 7.3s infinite; }
-.screen:nth-of-type(2n) { animation-delay: -2.1s; }
-.column .screen:nth-of-type(2) { animation-delay: -4.6s; }
+.screen-tracks { animation-delay: -2.1s; }
+.screen-freq { animation-delay: -4.6s; }
 [data-display="VECTOR"] .jit, [data-display="CRT"] .jit { animation: jitter 5.1s infinite; }
 [data-display="CRT"] .jit { filter: drop-shadow(1px 0 0 rgba(255, 40, 90, 0.35)) drop-shadow(-1px 0 0 rgba(0, 210, 255, 0.35)); }
 @keyframes flicker { 0%, 100% { opacity: 1; } 31% { opacity: 1; } 31.6% { opacity: 0.93; } 32.2% { opacity: 1; }

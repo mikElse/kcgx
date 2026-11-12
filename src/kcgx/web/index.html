@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-palette="WOPR" data-glow="LOW" data-display="CRT">
+<html lang="en" data-palette="WOPR" data-glow="LOW" data-display="CRT" data-lamps="OFF" data-teletype="OFF">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -25,75 +25,69 @@
 
   <div class="banner" id="banner" role="status" hidden></div>
 
-  <div class="toprow">
-    <section class="screen screen-radar" aria-label="Radar">
-      <div class="ovl" aria-hidden="true"></div>
-      <div class="radar-wrap">
-        <canvas id="radar" class="radar jit" role="img" aria-label="Radar: the map and traffic around the airport. Drag to pan, scroll to zoom, click an aircraft to focus it; the tracks table lists the same aircraft."></canvas>
-        <div class="hud hud-left" aria-hidden="true"><span>RNG 40 NM</span><span id="radar-poll">RADAR WAITING</span></div>
-        <div class="hud hud-right" aria-hidden="true"><span id="radar-tracks">0 TRACKS</span></div>
-      </div>
-      <div class="screen-title">
-        <span class="title-text">TRAFFIC</span>
-        <div class="title-tools">
-          <span class="muted small" id="radar-position"></span>
-          <button type="button" class="btn btn-small" id="recentre">RECENTRE</button>
-        </div>
-      </div>
-    </section>
-
-    <div class="column">
-      <section class="screen screen-status" aria-label="Status">
-        <div class="ovl" aria-hidden="true"></div>
-        <div class="status-body">
-          <div class="status-top">
-            <div class="status-airport">
-              <span class="icao" id="icao">····</span>
-              <span class="airport-name" id="airport-name"></span>
-              <span class="muted small" id="airport-where"></span>
-            </div>
-            <div class="clocks">
-              <span class="zulu" id="zulu">0000Z</span>
-              <span class="local" id="local">00:00</span>
-            </div>
-          </div>
-          <button type="button" class="btn btn-pink" id="open-airport">CHANGE AIRPORT</button>
-        </div>
-        <div class="screen-title"><span class="title-text">STATUS</span></div>
-      </section>
-
-      <section class="screen screen-freq" aria-label="Frequencies">
-        <div class="ovl" aria-hidden="true"></div>
-        <div class="freq-counts muted small" id="freq-counts"></div>
-        <div class="stack" id="stack"></div>
-        <div class="screen-title"><span class="title-text">FREQUENCIES</span></div>
-      </section>
+  <section class="screen screen-radar" aria-label="Radar">
+    <div class="ovl" aria-hidden="true"></div>
+    <div class="radar-wrap">
+      <canvas id="radar" class="radar jit" role="img" aria-label="Radar: the map and traffic around the airport. Drag to pan, scroll to zoom, click an aircraft to focus it; the tracks table lists the same aircraft."></canvas>
+      <div class="hud hud-left" aria-hidden="true"><span>RNG 40 NM</span><span id="radar-poll">RADAR WAITING</span></div>
+      <div class="hud hud-right" aria-hidden="true"><span id="radar-tracks">0 TRACKS</span></div>
     </div>
-  </div>
+    <div class="screen-title">
+      <span class="title-text">TRAFFIC</span>
+      <div class="title-tools">
+        <span class="muted small" id="radar-position"></span>
+        <button type="button" class="btn btn-small" id="recentre">RECENTRE</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen screen-status" aria-label="Status">
+    <div class="ovl" aria-hidden="true"></div>
+    <div class="status-body">
+      <div class="status-top">
+        <div class="status-airport">
+          <span class="icao" id="icao">····</span>
+          <span class="airport-name" id="airport-name"></span>
+          <span class="muted small" id="airport-where"></span>
+        </div>
+        <div class="clocks">
+          <span class="zulu" id="zulu">0000Z</span>
+          <span class="local" id="local">00:00</span>
+        </div>
+      </div>
+      <button type="button" class="btn btn-pink" id="open-airport">CHANGE AIRPORT</button>
+    </div>
+    <div class="screen-title"><span class="title-text">STATUS</span></div>
+  </section>
+
+  <section class="screen screen-freq" aria-label="Frequencies">
+    <div class="ovl" aria-hidden="true"></div>
+    <div class="freq-counts muted small" id="freq-counts"></div>
+    <div class="stack" id="stack"></div>
+    <div class="screen-title"><span class="title-text">FREQUENCIES</span></div>
+  </section>
 
   <div class="lamps" id="lamps" role="group" aria-label="Status lamps"></div>
 
-  <div class="bottomrow">
-    <section class="screen screen-tracks" aria-label="Tracks">
-      <div class="ovl" aria-hidden="true"></div>
-      <div class="tracks-body">
-        <table class="tracks">
-          <thead>
-            <tr id="tracks-head"></tr>
-          </thead>
-          <tbody id="tracks-body"></tbody>
-        </table>
-        <p class="muted small empty" id="tracks-empty">WAITING FOR THE RADAR</p>
-      </div>
-      <div class="screen-title"><span class="title-text">TRACKS</span></div>
-    </section>
+  <section class="screen screen-tracks" aria-label="Tracks">
+    <div class="ovl" aria-hidden="true"></div>
+    <div class="tracks-body">
+      <table class="tracks">
+        <thead>
+          <tr id="tracks-head"></tr>
+        </thead>
+        <tbody id="tracks-body"></tbody>
+      </table>
+      <p class="muted small empty" id="tracks-empty">WAITING FOR THE RADAR</p>
+    </div>
+    <div class="screen-title"><span class="title-text">TRACKS</span></div>
+  </section>
 
-    <section class="screen screen-log" aria-label="Teletype">
-      <div class="ovl" aria-hidden="true"></div>
-      <div class="log" id="log" role="log" aria-live="polite"></div>
-      <div class="screen-title"><span class="title-text">TELETYPE</span></div>
-    </section>
-  </div>
+  <section class="screen screen-log" aria-label="Teletype">
+    <div class="ovl" aria-hidden="true"></div>
+    <div class="log" id="log" role="log" aria-live="polite"></div>
+    <div class="screen-title"><span class="title-text">TELETYPE</span></div>
+  </section>
 </div>
 
 <dialog class="sheet" id="airport-sheet" aria-labelledby="airport-title">

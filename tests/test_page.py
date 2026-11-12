@@ -81,6 +81,8 @@ def page(browser, server):
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.goto(server + "/")
     page.wait_for_selector(".feed.expanded")
+    # The server outlives each test, and so do its prefs: start from the default layout.
+    set_prefs(page, lamps=False, teletype=False)
     yield page
     context.close()
     assert errors == [], errors
@@ -90,26 +92,143 @@ def feed_names(page, shape):
     return page.eval_on_selector_all(f".feed.{shape} .feed-name", "els => els.map(e => e.textContent)")
 
 
+def set_prefs(page, **prefs):
+    """Change settings as a control would, through the page's own socket;
+    returns once the server's answer has been applied to the page."""
+    page.evaluate("prefs => window.kcgx.send({t: 'prefs', ...prefs})", prefs)
+    page.wait_for_function(
+        """prefs => Object.entries(prefs).every(
+            ([key, value]) => JSON.stringify(window.kcgx.store.state.prefs[key]) === JSON.stringify(value))""",
+        arg=prefs,
+    )
+
+
+def parts(page):
+    """The screens and the lamp bar that are displayed, by name:
+    {name: (left, top, right, bottom)}."""
+    found = page.eval_on_selector_all(
+        ".screen, .lamps",
+        """els => els.filter(e => e.getClientRects().length).map(e => {
+            const r = e.getBoundingClientRect();
+            const name = e.id || [...e.classList].find(c => c.startsWith("screen-")).slice(7);
+            return [name, r.left, r.top, r.right, r.bottom]; })""",
+    )
+    return {name: tuple(box) for name, *box in found}
+
+
 # -- layout --------------------------------------------------------------------
 
 
+WIDE = [size for size in SIZES if size[0] > 1100]  # two columns
+LAYOUTS = [(lamps, teletype) for lamps in (False, True) for teletype in (False, True)]
+
+
+@pytest.mark.parametrize("lamps, teletype", LAYOUTS)
 @pytest.mark.parametrize("width, height", SIZES)
-def test_no_two_screens_overlap_and_none_spills_out(page, width, height):
+def test_no_two_screens_overlap_and_none_spills_out(page, width, height, lamps, teletype):
     page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=lamps, teletype=teletype)
     page.wait_for_timeout(200)
-    boxes = page.eval_on_selector_all(
-        ".screen",
-        "els => els.map(e => { const r = e.getBoundingClientRect();"
-        " return [e.getAttribute('aria-label'), r.left, r.top, r.right, r.bottom]; })",
-    )
-    assert len(boxes) == 5
-    for i, (name, left, top, right, bottom) in enumerate(boxes):
-        assert right - left > 100 and bottom - top > 40, f"{name} collapsed at {width}x{height}"
-        for other, l2, t2, r2, b2 in boxes[i + 1:]:
+    where = f"at {width}x{height}, lamps {lamps}, teletype {teletype}"
+    shown = parts(page)
+    expected = ["radar", "status", "freq"] + ["lamps"] * lamps + ["tracks"] + ["log"] * teletype
+    assert list(shown) == expected, where
+    boxes = list(shown.items())
+    for i, (name, (left, top, right, bottom)) in enumerate(boxes):
+        least = 20 if name == "lamps" else 40
+        assert right - left > 100 and bottom - top > least, f"{name} collapsed {where}"
+        for other, (l2, t2, r2, b2) in boxes[i + 1:]:
             apart = right <= l2 + 0.5 or r2 <= left + 0.5 or bottom <= t2 + 0.5 or b2 <= top + 0.5
-            assert apart, f"{name} overlaps {other} at {width}x{height}"
+            assert apart, f"{name} overlaps {other} {where}"
     scroll_width = page.evaluate("document.documentElement.scrollWidth")
-    assert scroll_width <= width, f"the page scrolls sideways at {width}x{height}"
+    assert scroll_width <= width, f"the page scrolls sideways {where}"
+
+
+def test_by_default_four_screens_show_and_no_lamps_or_teletype(page):
+    assert page.get_attribute("html", "data-lamps") == "OFF"
+    assert page.get_attribute("html", "data-teletype") == "OFF"
+    assert list(parts(page)) == ["radar", "status", "freq", "tracks"]
+    assert not page.is_visible("#lamps")
+    assert not page.is_visible(".screen-log")
+    assert not page.is_visible("#log")
+
+
+def test_the_first_paint_is_the_default_layout(server):
+    """Before any script has run, the page is already laid out without the
+    lamps and the teletype, so they never flash on."""
+    with urllib.request.urlopen(server + "/") as response:
+        html = response.read().decode()
+    tag = re.search(r"<html[^>]*>", html).group(0)
+    assert 'data-lamps="OFF"' in tag and 'data-teletype="OFF"' in tag
+
+
+@pytest.mark.parametrize("lamps", [False, True])
+@pytest.mark.parametrize("width, height", WIDE)
+def test_frequencies_runs_down_to_the_bottom_of_tracks(page, width, height, lamps):
+    page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=lamps)
+    page.wait_for_timeout(200)
+    shown = parts(page)
+    radar, status, freq, tracks = (shown[name] for name in ("radar", "status", "freq", "tracks"))
+    assert abs(freq[3] - tracks[3]) <= 1, f"frequencies ends at {freq[3]}, tracks at {tracks[3]}"
+    assert freq[1] >= status[3] and abs(freq[0] - status[0]) <= 1, "frequencies is not under the airport"
+    assert tracks[1] >= radar[3] and abs(tracks[0] - radar[0]) <= 1, "tracks is not under the radar"
+    assert freq[0] >= radar[2], "frequencies is not beside the radar"
+
+
+@pytest.mark.parametrize("lamps", [False, True])
+@pytest.mark.parametrize("width, height", WIDE)
+def test_a_short_window_never_squeezes_the_airport_pane(page, width, height, lamps):
+    """Its row is sized by what is in it: a screen clips what overflows it,
+    so a squeezed pane would cut off the button that changes the airport."""
+    page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=lamps)
+    page.wait_for_timeout(200)
+    hidden = page.eval_on_selector(".screen-status", "e => e.scrollHeight - e.clientHeight")
+    assert hidden <= 0, f"{hidden} px of the airport pane is cut off at {width}x{height}"
+
+
+@pytest.mark.parametrize("lamps", [False, True])
+@pytest.mark.parametrize("width, height", WIDE)
+def test_the_teletype_sits_under_frequencies_level_with_tracks(page, width, height, lamps):
+    page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=lamps, teletype=True)
+    page.wait_for_timeout(200)
+    assert page.get_attribute("html", "data-teletype") == "ON"
+    shown = parts(page)
+    assert [name for name in shown if name != "lamps"] == ["radar", "status", "freq", "tracks", "log"]
+    freq, tracks, log = shown["freq"], shown["tracks"], shown["log"]
+    assert log[1] >= freq[3], "the teletype is not under frequencies"
+    assert abs(log[0] - freq[0]) <= 1 and abs(log[2] - freq[2]) <= 1, "the teletype is not in frequencies' column"
+    assert abs(log[1] - tracks[1]) <= 1 and abs(log[3] - tracks[3]) <= 1, "the teletype is not level with tracks"
+    assert page.is_visible("#log")
+
+
+@pytest.mark.parametrize("teletype", [False, True])
+@pytest.mark.parametrize("width, height", WIDE)
+def test_the_lamp_bar_sits_between_radar_and_tracks_no_wider_than_the_radar(page, width, height, teletype):
+    page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=True, teletype=teletype)
+    page.wait_for_timeout(200)
+    assert page.get_attribute("html", "data-lamps") == "ON"
+    shown = parts(page)
+    radar, lamps, tracks = shown["radar"], shown["lamps"], shown["tracks"]
+    assert radar[3] <= lamps[1] and lamps[3] <= tracks[1], "the lamp bar is not between radar and tracks"
+    assert lamps[0] >= radar[0] - 0.5 and lamps[2] <= radar[2] + 0.5, "the lamp bar is wider than the radar"
+    assert page.locator("#lamps .lamp").count() >= 4
+
+
+@pytest.mark.parametrize("width, height", [size for size in SIZES if size[0] <= 1100])
+def test_a_narrow_page_is_one_column_in_reading_order(page, width, height):
+    page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=True, teletype=True)
+    page.wait_for_timeout(200)
+    shown = parts(page)
+    assert list(shown) == ["radar", "status", "freq", "lamps", "tracks", "log"]
+    boxes = list(shown.values())
+    for above, below in zip(boxes, boxes[1:]):
+        assert above[3] <= below[1] + 0.5
+        assert abs(above[0] - below[0]) <= 1 and abs(above[2] - below[2]) <= 1
 
 
 @pytest.mark.parametrize("width, height", [(1440, 900), (1100, 760), (820, 1000)])
@@ -206,6 +325,71 @@ def test_the_volume_slider_reaches_the_server(page):
     page.fill("#volume", "100")
     page.dispatch_event("#volume", "input")
     page.wait_for_function("document.getElementById('freq-counts').textContent.includes('VOL 100%')")
+
+
+# -- errors with the teletype hidden ---------------------------------------------
+
+
+def test_a_page_error_shows_in_the_banner_while_the_teletype_is_hidden(page):
+    assert not page.is_visible("#banner")
+    page.clock.install()
+    page.evaluate('window.kcgx.store.apply({t: "error", text: "x"})')
+    assert page.is_visible("#banner")
+    assert page.inner_text("#banner") == "ERROR: X"
+    assert "bad" in page.get_attribute("#banner", "class")
+    page.clock.fast_forward(7000)
+    assert page.is_visible("#banner")
+    page.clock.fast_forward(1500)
+    assert not page.is_visible("#banner")
+    # it was typed on the hidden teletype all the same
+    set_prefs(page, teletype=True)
+    page.wait_for_function("document.getElementById('log').textContent.includes('ERROR: X')")
+
+
+def test_a_page_error_leaves_the_banner_alone_while_the_teletype_shows(page):
+    set_prefs(page, teletype=True)
+    page.evaluate('window.kcgx.store.apply({t: "error", text: "x"})')
+    page.wait_for_selector("#log .log-line.alarm:has-text('ERROR: X')")
+    assert not page.is_visible("#banner")
+
+
+def test_a_failed_request_shows_in_the_banner_while_the_teletype_is_hidden(browser, server):
+    # Its own page: the browser reports the failed request on the console,
+    # which the `page` fixture would count as an error.
+    page = browser.new_page()
+    page.goto(server + "/")
+    page.wait_for_selector(".feed.expanded")
+    set_prefs(page, teletype=False)
+    page.route("**/api/airports?*", lambda route: route.fulfill(status=500, json={"error": "no such luck"}))
+    page.click("#open-airport")
+    page.fill("#airport-query", "seattle")
+    page.wait_for_selector("#banner.bad:text-is('AIRPORT SEARCH FAILED: NO SUCH LUCK')")
+    page.close()
+
+
+def test_turning_the_teletype_on_clears_a_page_error_from_the_banner(page):
+    page.evaluate('window.kcgx.store.apply({t: "error", text: "x"})')
+    assert page.is_visible("#banner")
+    set_prefs(page, teletype=True)
+    page.wait_for_selector("#banner", state="hidden")
+
+
+def test_a_server_note_does_not_reach_the_banner(page):
+    page.evaluate('window.kcgx.store.apply({t: "message", z: "1200Z", text: "tower offline"})')
+    page.wait_for_timeout(100)
+    assert not page.is_visible("#banner")
+
+
+def test_the_teletype_opens_on_its_newest_line(page):
+    page.evaluate(
+        """for (let i = 0; i < 80; i += 1) window.kcgx.store.apply({t: "message", z: "1200Z", text: `line ${i}`})"""
+    )
+    set_prefs(page, teletype=True)
+    page.wait_for_function(
+        """() => { const log = document.getElementById('log');
+                   return log.scrollHeight > log.clientHeight + 40
+                       && log.scrollHeight - log.scrollTop - log.clientHeight < 24; }"""
+    )
 
 
 # -- the radar -----------------------------------------------------------------
@@ -315,6 +499,7 @@ def test_a_column_header_sorts_the_table(page):
 
 def test_an_emergency_squawk_lights_the_lamp_and_turns_the_row_red(page):
     wait_for_traffic(page)
+    set_prefs(page, lamps=True)
     page.evaluate(
         """window.kcgx.store.apply({t: "aircraft", ok: true, error: "", age: 0, refresh: 15, range: 40,
             ac: [{hex: "e1", label: "N52RT", type: "BE36", lat: 45.9, lon: -123.0, alt: 7500, gs: 150,
@@ -326,6 +511,7 @@ def test_an_emergency_squawk_lights_the_lamp_and_turns_the_row_red(page):
 
 def test_a_refused_radar_says_so_and_dims_its_lamp(page):
     wait_for_traffic(page)
+    set_prefs(page, lamps=True)
     page.evaluate(
         """window.kcgx.store.apply({t: "aircraft", ok: false, error: "ERR 429", age: 40, refresh: 15,
             range: 40, ac: []})"""

@@ -25,11 +25,44 @@ function applyPrefs() {
   root.dataset.palette = prefs.palette;
   root.dataset.glow = prefs.glow;
   root.dataset.display = prefs.display;
+  root.dataset.lamps = prefs.lamps ? "ON" : "OFF";
+  const opened = prefs.teletype && root.dataset.teletype !== "ON";
+  root.dataset.teletype = prefs.teletype ? "ON" : "OFF";
+  // The teletype kept collecting while it was hidden, but a hidden pane
+  // cannot scroll: open it on its newest line. Its errors are in view
+  // again, so the banner gives them up.
+  if (opened) $("log").scrollTop = $("log").scrollHeight;
+  if (prefs.teletype) raised.clear();
   $("palette-name").textContent = prefs.palette;
   forget();
 }
 
-const log = mountLog($("log"), store);
+// Hiding the teletype must not hide errors: while it is hidden, a line
+// from the page itself (a failed request, a message the server refused)
+// also shows in the banner, for RAISED_MS. Server notes do not; they are
+// history, and turning the teletype on shows them.
+const RAISED_MS = 8000;
+const raised = {
+  text: "",
+  timer: 0,
+  show(text) {
+    if (store.state.prefs.teletype) return;
+    clearTimeout(this.timer);
+    this.text = text.toUpperCase();
+    this.timer = setTimeout(() => this.clear(), RAISED_MS);
+    banner();
+  },
+  clear() {
+    if (!this.text) return;
+    clearTimeout(this.timer);
+    this.text = "";
+    banner();
+  },
+};
+
+// The teletype is mounted whether or not it shows, so it is whole when it does.
+const teletype = mountLog($("log"), store);
+const log = { say(text) { teletype.say(text); raised.show(text); } };
 const stack = mountStack({ stack: $("stack"), counts: $("freq-counts") }, store, send);
 mountStatus({
   icao: $("icao"), name: $("airport-name"), where: $("airport-where"), zulu: $("zulu"), local: $("local"),
@@ -78,7 +111,7 @@ function fromLink() {
 }
 window.addEventListener("hashchange", fromLink);
 fromLink();
-window.kcgx = { radar, store }; // for the browser tests
+window.kcgx = { radar, store, send }; // for the browser tests
 
 function banner() {
   const { state } = store;
@@ -86,6 +119,7 @@ function banner() {
   let text = "";
   let kind = "";
   if (state.shutdown) text = "";
+  else if (raised.text) { text = raised.text; kind = "bad"; }
   else if (!state.connected) { text = "CONNECTION LOST. RECONNECTING TO THE KCGX SERVER"; kind = "warn"; }
   else if (!state.audioOk) { text = "NO AUDIO OUTPUT ON THE SERVER. THE FEEDS STILL RUN; CHECK THE SOUND DEVICE"; kind = "bad"; }
   node.hidden = !text;
@@ -93,9 +127,10 @@ function banner() {
   node.className = `banner ${kind}`.trim();
 }
 
-store.subscribe((kind) => {
+store.subscribe((kind, detail) => {
   if (kind === "all" || kind === "prefs") { applyPrefs(); radar.redraw(); }
   if (kind === "all" || kind === "connection") banner();
+  if (kind === "message" && detail.page) raised.show(detail.text);
 });
 banner();
 $("where-served").textContent = `LOCAL COCKPIT  ${location.host}`;
