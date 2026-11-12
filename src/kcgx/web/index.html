@@ -34,7 +34,7 @@
     <div class="ovl" aria-hidden="true"></div>
     <div class="radar-wrap">
       <canvas id="radar" class="radar jit" role="img" aria-label="Radar: the map and traffic around the airport. Drag to pan, scroll to zoom, double click to recentre, click an aircraft to focus it; the tracks table lists the same aircraft."></canvas>
-      <div class="hud hud-left" aria-hidden="true"><span>RNG 40 NM</span><span id="radar-poll">RADAR WAITING</span></div>
+      <div class="hud hud-left" aria-hidden="true"><span id="radar-range">RNG 40 NM</span><span id="radar-poll">RADAR WAITING</span></div>
       <div class="hud hud-right" aria-hidden="true"><span id="radar-tracks">0 TRACKS</span></div>
     </div>
     <div class="screen-title">
@@ -108,22 +108,54 @@
   <div class="choices" id="airport-results"></div>
 </dialog>
 
+<!-- Every setting is one [data-pref] control, declared here with its range
+     or its names; sheets.js binds them by kind and knows none by name. They
+     must agree with kcgx.prefs.SCHEMA, which tests/test_page_prefs.py checks. -->
 <dialog class="sheet" id="config-sheet" aria-labelledby="config-title">
   <form method="dialog" class="sheet-head">
     <h2 id="config-title">CONFIG</h2>
     <button class="btn btn-small" value="close" aria-label="Close">CLOSE</button>
   </form>
+
   <h3 class="muted small">OUTPUT</h3>
   <label class="field field-row"><span>MASTER VOLUME</span>
     <input id="volume" type="range" min="0" max="100" step="5">
     <span class="num" id="volume-value">100%</span>
   </label>
+
   <h3 class="muted small">LOOK</h3>
-  <div class="field-row" role="group" aria-label="Palette"><span>PALETTE</span><div class="segments" data-pref="palette"></div></div>
-  <div class="field-row" role="group" aria-label="Glow"><span>GLOW</span><div class="segments" data-pref="glow"></div></div>
-  <div class="field-row" role="group" aria-label="Display"><span>DISPLAY</span><div class="segments" data-pref="display"></div></div>
-  <h3 class="muted small">LIMITS</h3>
-  <div class="field-row"><span>STREAMS AT ONCE</span><span class="num" id="max-streams">7</span><span class="muted small">LIVEATC'S LIMIT; FIXED</span></div>
+  <label class="field-row"><span>THEME</span>
+    <select data-pref="palette"><option>WOPR</option><option>AMBER</option><option>MATRIX</option><option>MONO</option></select></label>
+  <div class="field-row" role="group" aria-label="Glow"><span>GLOW</span>
+    <div class="segments" data-pref="glow" data-kind="choice" data-values="OFF LOW FULL"></div></div>
+  <div class="field-row" role="group" aria-label="Display"><span>DISPLAY</span>
+    <div class="segments" data-pref="display" data-kind="choice" data-values="OFF VECTOR CRT"></div></div>
+  <label class="field-row"><span>SCANLINE OPACITY</span>
+    <input type="range" data-pref="scan_opacity" data-only-when="display=CRT" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+  <label class="field-row"><span>SCANLINE SIZE</span>
+    <input type="range" data-pref="scan_size" data-only-when="display=CRT" min="2" max="8" step="1"><span class="num" data-unit="PX"></span></label>
+
+  <h3 class="muted small">LAYOUT</h3>
+  <div class="field-row" role="group" aria-label="Status lamps"><span>STATUS LAMPS</span>
+    <div class="segments" data-pref="lamps" data-kind="flag"></div></div>
+  <div class="field-row" role="group" aria-label="Teletype"><span>TELETYPE</span>
+    <div class="segments" data-pref="teletype" data-kind="flag"></div></div>
+
+  <h3 class="muted small">RADAR</h3>
+  <label class="field-row"><span>RANGE</span>
+    <input type="range" data-pref="range_nm" min="10" max="250" step="10"><span class="num" data-unit="NM"></span></label>
+  <div class="field-row" role="group" aria-label="Flight tag"><span>FLIGHT TAG</span>
+    <div class="segments" data-pref="tag_fields" data-kind="subset" data-values="CALLSIGN TYPE SQWK ALT GS TRK DIST"></div></div>
+  <div class="field-row" role="group" aria-label="Label boxes"><span>LABEL BOXES</span>
+    <div class="segments" data-pref="box_items" data-kind="subset" data-values="AIRCRAFT HOME AIRPORTS NAVAIDS CITIES PEAKS STATES RINGS HUD"></div></div>
+  <label class="field-row"><span>BOX FILL</span>
+    <input type="range" data-pref="box_fill" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+  <label class="field-row"><span>BOX PADDING</span>
+    <input type="range" data-pref="box_pad" min="0" max="12" step="1"><span class="num" data-unit="PX"></span></label>
+  <label class="field-row"><span>BOX BORDER</span>
+    <input type="range" data-pref="box_border" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+  <label class="field-row"><span>BORDER WIDTH</span>
+    <input type="range" data-pref="box_width" min="1" max="5" step="1"><span class="num" data-unit="PX"></span></label>
 </dialog>
 
 <dialog class="sheet sheet-small" id="shutdown-sheet" aria-labelledby="shutdown-title">

@@ -403,7 +403,7 @@ is its own change.
 **Files:** `index.html`, `sheets.js`, `main.js`, `cockpit.css`,
 `tests/test_page_prefs.py` (new), `tests/test_page.py`
 
-- [ ] **Tests first.** `test_page_prefs.py` needs no browser: it parses
+- [x] **Tests first.** `test_page_prefs.py` needs no browser: it parses
   `index.html` with `html.parser` and asserts that every key in
   `prefs.SCHEMA` has exactly one `[data-pref]` control, that a number's
   `min`/`max` equal the schema's, and that a choice's or subset's option
@@ -415,7 +415,7 @@ is its own change.
   `window.kcgx.store.state.prefs`; `#max-streams` and "LIMITS" are gone;
   scanline controls are disabled unless display is CRT; with the sheet
   open, a pixel of the radar is not darkened by a backdrop.
-- [ ] **Controls are declared in the HTML and bound generically:**
+- [x] **Controls are declared in the HTML and bound generically:**
 
   ```html
   <label class="field-row"><span>THEME</span>
@@ -434,10 +434,10 @@ is its own change.
   not, `sheets.js:151`); a `choice` segment group is one pressed button; a
   `flag` group is OFF/ON; a `subset` group toggles each button and sends
   the whole list.
-- [ ] **Docked, clear backdrop** (decision 10):
+- [x] **Docked, clear backdrop** (decision 10):
   `#config-sheet { margin: 0 0 0 auto; height: 100vh; max-height: none; width: min(420px, 100vw); }`
   and `#config-sheet::backdrop { background: transparent; }`.
-- [ ] **Scanlines:**
+- [x] **Scanlines:**
 
   ```css
   :root { --scan-alpha: 0.34; --scan-size: 3px; --scan-line: 1px; }
@@ -449,9 +449,9 @@ is its own change.
 
   `applyPrefs` sets the three properties: alpha `scan_opacity / 100`, size
   `scan_size` px, line `max(1, round(scan_size / 3))` px.
-- [ ] The radar HUD's "RNG 40 NM" (`index.html:33`) is written from
+- [x] The radar HUD's "RNG 40 NM" (`index.html:33`) is written from
   `prefs.range_nm`.
-- [ ] Commit `feat(web): config owns every setting`.
+- [x] Commit `feat(web): config owns every setting`.
 
 ### Task 6: Density, frequencies and tracks
 

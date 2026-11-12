@@ -41,7 +41,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--wall); color: var(--text); font: 13px/1.4 "B612 Mono", ui-monospace, Menlo, monospace; letter-spacing: 0.06em; }
-button, input { font: inherit; letter-spacing: inherit; color: inherit; }
+button, input, select { font: inherit; letter-spacing: inherit; color: inherit; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; letter-spacing: 0.14em; }
 .num { font-variant-numeric: tabular-nums; }
@@ -265,8 +265,24 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 .field input[type="search"]:focus { outline: none; border-color: var(--pink); }
 .field-row, .field.field-row { display: flex; flex-direction: row; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .field-row > span:first-child { min-width: 150px; }
-.field-row input[type="range"] { flex: 1 1 160px; accent-color: var(--cyan); }
+.field-row input[type="range"] { flex: 1 1 100px; min-width: 0; accent-color: var(--cyan); }
+.field-row .num { min-width: 52px; text-align: right; }
+.field-row select { flex: 1 1 120px; min-width: 0; min-height: 32px; padding: 0 8px; background: #000;
+  border: 1px solid var(--frame); border-radius: 0; cursor: pointer; }
+.field-row select:hover { border-color: var(--cyan); }
+.field-row select:focus-visible, .field-row input[type="range"]:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+/* A control that does nothing as things are set (the scanlines, unless the display is CRT). */
+.field-row.off { opacity: 0.4; }
+.field-row :disabled { cursor: not-allowed; }
 .segments { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg { min-height: 32px; padding: 0 10px; font-size: 12px; }
+
+/* Config docks to the right edge, the window's height, and has no backdrop:
+   what it sets (scanlines, boxes, the range) is seen changing behind it.
+   100%, not 100vw and 100vh: the sheet is fixed, so 100% is the window
+   without its scrollbar and without a phone's address bar. */
+#config-sheet { margin: 0 0 0 auto; width: min(420px, 100%); max-width: none; height: 100%; max-height: none; }
+#config-sheet::backdrop { background: transparent; }
 .choices { display: flex; flex-direction: column; gap: 4px; }
 .choice { display: flex; gap: 14px; align-items: baseline; width: 100%; min-height: 40px; padding: 6px 10px; text-align: left;
   background: transparent; border: 1px solid var(--rule); cursor: pointer; }
@@ -280,10 +296,15 @@ button, input { font: inherit; letter-spacing: inherit; color: inherit; }
 
 /* -- display effects (spec, Display effects) ------------------------------------ */
 
+/* The scanlines are settings (prefs scan_opacity and scan_size): main.js
+   writes the three properties, and these are the defaults for first paint.
+   --scan-size is the pitch; --scan-line, the dark part, is a third of it. */
+:root { --scan-alpha: 0.34; --scan-size: 3px; --scan-line: 1px; }
 .ovl { position: absolute; inset: 0; z-index: 2; pointer-events: none; display: none; }
 [data-display="VECTOR"] .ovl { display: block; background: radial-gradient(ellipse at center, transparent 62%, rgba(0, 0, 0, 0.27) 100%); }
 [data-display="CRT"] .ovl { display: block; background:
-  repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.34) 0, rgba(0, 0, 0, 0.34) 1px, transparent 1px, transparent 3px),
+  repeating-linear-gradient(to bottom, rgb(0 0 0 / var(--scan-alpha)) 0 var(--scan-line),
+    transparent var(--scan-line) var(--scan-size)),
   radial-gradient(ellipse at center, transparent 52%, rgba(0, 0, 0, 0.42) 100%); }
 [data-display="CRT"] .screen { border-radius: 16px; }
 [data-display="VECTOR"] .screen, [data-display="CRT"] .screen { animation: flicker 7.3s infinite; }

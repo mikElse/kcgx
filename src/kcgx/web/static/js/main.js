@@ -23,6 +23,11 @@ function applyPrefs() {
   root.dataset.palette = prefs.palette;
   root.dataset.glow = prefs.glow;
   root.dataset.display = prefs.display;
+  // The scanlines: the pitch is the setting, the dark line a third of it.
+  root.style.setProperty("--scan-alpha", String(prefs.scan_opacity / 100));
+  root.style.setProperty("--scan-size", `${prefs.scan_size}px`);
+  root.style.setProperty("--scan-line", `${Math.max(1, Math.round(prefs.scan_size / 3))}px`);
+  $("radar-range").textContent = `RNG ${prefs.range_nm} NM`;
   root.dataset.lamps = prefs.lamps ? "ON" : "OFF";
   const opened = prefs.teletype && root.dataset.teletype !== "ON";
   root.dataset.teletype = prefs.teletype ? "ON" : "OFF";
@@ -74,8 +79,7 @@ const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,
 );
 const configSheet = mountConfigSheet(
-  { sheet: $("config-sheet"), volume: $("volume"), volumeValue: $("volume-value"), maxStreams: $("max-streams") },
-  store, send,
+  { sheet: $("config-sheet"), volume: $("volume"), volumeValue: $("volume-value") }, store, send,
 );
 const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, () => {
   store.setShutdown();

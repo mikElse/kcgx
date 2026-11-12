@@ -12,12 +12,16 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import time
 import urllib.request
+import zlib
 
 import pytest
+
+from kcgx.prefs import DEFAULTS, SCHEMA, Choice, Flag, Number, Subset
 
 playwright_api = pytest.importorskip("playwright.sync_api")
 
@@ -81,11 +85,22 @@ def page(browser, server):
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.goto(server + "/")
     page.wait_for_selector(".feed.expanded")
-    # The server outlives each test, and so do its prefs: start from the default layout.
-    set_prefs(page, lamps=False, teletype=False)
+    # The server outlives each test, and so do its prefs: start from the defaults.
+    set_prefs(page, **DEFAULTS)
     yield page
     context.close()
     assert errors == [], errors
+
+
+@pytest.fixture
+def other(browser, server, page):
+    """A second tab on the same cockpit. It asks for `page` so that it opens
+    after the prefs are back at their defaults."""
+    tab = browser.new_page()
+    tab.goto(server + "/")
+    tab.wait_for_selector(".feed.expanded")
+    yield tab
+    tab.close()
 
 
 def feed_names(page, shape):
@@ -434,20 +449,21 @@ def test_changing_airport_redraws_everything(page):
     page.wait_for_function("document.getElementById('icao').textContent === 'KPDX'")
 
 
-def test_prefs_apply_to_every_tab(page, browser, server):
-    other = browser.new_page()
-    other.goto(server + "/")
-    other.wait_for_selector(".feed.expanded")
+def test_prefs_apply_to_every_tab(page, other):
+    theme = "#config-sheet select[data-pref=palette]"
     page.click("#open-config")
-    page.click(".segments[data-pref=palette] button:text-is('AMBER')")
+    assert page.input_value(theme) == "WOPR"
+    page.select_option(theme, "AMBER")
     other.wait_for_function("document.documentElement.dataset.palette === 'AMBER'")
+    page.wait_for_function("document.documentElement.dataset.palette === 'AMBER'")
+    assert other.input_value(theme) == "AMBER", "the other tab's dropdown did not follow"
     page.click(".segments[data-pref=display] button:text-is('VECTOR')")
     other.wait_for_function("document.documentElement.dataset.display === 'VECTOR'")
     page.click(".segments[data-pref=display] button:text-is('CRT')")
-    page.click(".segments[data-pref=palette] button:text-is('WOPR')")
+    page.select_option(theme, "WOPR")
     other.wait_for_function("document.documentElement.dataset.palette === 'WOPR'")
     assert other.get_attribute("html", "data-display") == "CRT"
-    other.close()
+    assert other.input_value(theme) == "WOPR"
 
 
 def test_the_volume_slider_reaches_the_server(page):
@@ -458,6 +474,290 @@ def test_the_volume_slider_reaches_the_server(page):
     page.fill("#volume", "100")
     page.dispatch_event("#volume", "input")
     page.wait_for_function("document.getElementById('freq-counts').textContent.includes('VOL 100%')")
+
+
+# -- the config sheet ------------------------------------------------------------
+
+NUMBERS = {key: spec for key, spec in SCHEMA.items() if isinstance(spec, Number)}
+SUBSETS = {key: spec for key, spec in SCHEMA.items() if isinstance(spec, Subset)}
+FLAGS = [key for key, spec in SCHEMA.items() if isinstance(spec, Flag)]
+SEGMENTED = {key: spec for key, spec in SCHEMA.items() if isinstance(spec, Choice) and key != "palette"}
+READOUTS = {
+    "scan_opacity": "{}%", "scan_size": "{} PX", "range_nm": "{} NM",
+    "box_fill": "{}%", "box_pad": "{} PX", "box_border": "{}%", "box_width": "{} PX",
+}
+
+
+def pref_is(tab, key, value):
+    """Wait until `tab` has been told by the server that `key` is `value`."""
+    tab.wait_for_function(
+        "([key, value]) => JSON.stringify(window.kcgx.store.state.prefs[key]) === JSON.stringify(value)",
+        arg=[key, value],
+    )
+
+
+def pressed(tab, key):
+    """The lit buttons of a segment group, as the page has them."""
+    return tab.eval_on_selector_all(
+        f"#config-sheet [data-pref={key}] button[aria-pressed=true]", "bs => bs.map(b => b.textContent)"
+    )
+
+
+def readout(tab, key):
+    return tab.text_content(f"#config-sheet .field-row:has([data-pref={key}]) [data-unit]")
+
+
+def pixel(page, x, y):
+    """One pixel of the page as it is painted: (r, g, b)."""
+    png = page.screenshot(clip={"x": x, "y": y, "width": 1, "height": 1}, animations="disabled")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    at, packed, head = 8, b"", None
+    while at < len(png):
+        length, kind = struct.unpack(">I4s", png[at:at + 8])
+        body = png[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            head = struct.unpack(">IIBB", body[:10])
+        elif kind == b"IDAT":
+            packed += body
+        at += 12 + length
+    width, height, depth, colour = head
+    assert (width, height, depth) == (1, 1, 8) and colour in (2, 6), head
+    # One row of one pixel: a filter byte (which has no neighbour to work
+    # from, so every filter leaves the bytes as they are), then r, g, b.
+    return tuple(zlib.decompress(packed)[1:4])
+
+
+def css_colour(page, name):
+    """A palette colour, as (r, g, b)."""
+    text = page.evaluate(
+        """name => { const probe = document.createElement("span");
+                     probe.style.color = `var(${name})`; document.body.append(probe);
+                     const colour = getComputedStyle(probe).color; probe.remove(); return colour; }""",
+        name,
+    )
+    return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
+
+
+def spy_on_sends(page):
+    """From here on, `window.sent` is every message the page sends the server."""
+    page.evaluate(
+        """() => { window.sent = []; const send = WebSocket.prototype.send;
+                   WebSocket.prototype.send = function (data) { window.sent.push(JSON.parse(data)); send.call(this, data); }; }"""
+    )
+
+
+def test_limits_and_the_stream_count_are_gone(page):
+    assert page.locator("#max-streams").count() == 0
+    said = page.text_content("#config-sheet")
+    assert "LIMITS" not in said and "STREAMS AT ONCE" not in said
+    assert page.eval_on_selector_all("#config-sheet h3", "hs => hs.map(h => h.textContent)") == [
+        "OUTPUT", "LOOK", "LAYOUT", "RADAR",
+    ]
+
+
+def test_the_sheet_opens_showing_the_defaults(page):
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    assert page.input_value("#config-sheet select[data-pref=palette]") == DEFAULTS["palette"]
+    for key in SEGMENTED:
+        assert pressed(page, key) == [DEFAULTS[key]], key
+    for key in FLAGS:
+        assert page.eval_on_selector_all(
+            f"#config-sheet [data-pref={key}] button", "bs => bs.map(b => b.textContent)"
+        ) == ["OFF", "ON"], key
+        assert pressed(page, key) == ["ON" if DEFAULTS[key] else "OFF"], key
+    for key, spec in SUBSETS.items():
+        assert page.eval_on_selector_all(
+            f"#config-sheet [data-pref={key}] button", "bs => bs.map(b => b.textContent)"
+        ) == list(spec.names), key
+        assert pressed(page, key) == DEFAULTS[key], key
+    for key in NUMBERS:
+        assert page.input_value(f"#config-sheet input[data-pref={key}]") == str(DEFAULTS[key]), key
+        assert readout(page, key) == READOUTS[key].format(DEFAULTS[key]), key
+    # every control is one a person can reach and work
+    for key in SCHEMA:
+        assert page.locator(f"#config-sheet [data-pref={key}]").is_visible(), key
+
+
+def test_each_number_slider_reaches_a_second_tab(page, other):
+    page.click("#open-config")
+    for key, spec in NUMBERS.items():
+        value = spec.low if spec.default == spec.high else spec.high
+        slider = f"#config-sheet input[data-pref={key}]"
+        page.fill(slider, str(value))  # sets it and fires `input`, as a drag does
+        assert readout(page, key) == READOUTS[key].format(value), f"{key}: the readout waited for the server"
+        pref_is(other, key, value)
+        pref_is(page, key, value)
+        assert other.input_value(slider) == str(value), f"{key}: the other tab's slider did not follow"
+        assert readout(other, key) == READOUTS[key].format(value), key
+        assert page.input_value(slider) == str(value), key
+
+
+def test_a_slider_sends_whole_numbers_and_only_its_own_setting(page):
+    spy_on_sends(page)
+    page.click("#open-config")
+    page.fill("#config-sheet input[data-pref=range_nm]", "120")
+    pref_is(page, "range_nm", 120)
+    assert page.evaluate("window.sent") == [{"t": "prefs", "range_nm": 120}]
+
+
+def test_dragging_a_slider_sends_where_it_stopped_not_every_step(page):
+    """The range above all: a drag must not become a burst of messages. The
+    steps are 20 ms apart, each inside the 80 ms the slider waits; a timer
+    that is due sooner runs sooner, so a busy page cannot reorder them."""
+    spy_on_sends(page)
+    page.click("#open-config")
+    page.eval_on_selector(
+        "#config-sheet input[data-pref=range_nm]",
+        """async slider => { for (const value of [50, 60, 70, 80, 90, 100]) {
+                                 slider.value = String(value);
+                                 slider.dispatchEvent(new Event("input", { bubbles: true }));
+                                 await new Promise(done => setTimeout(done, 20)); } }""",
+    )
+    assert readout(page, "range_nm") == "100 NM"
+    pref_is(page, "range_nm", 100)
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.sent") == [{"t": "prefs", "range_nm": 100}]
+
+
+def test_each_subset_button_reaches_a_second_tab(page, other):
+    page.click("#open-config")
+    for key, spec in SUBSETS.items():
+        chosen = set(DEFAULTS[key])
+        # Twice round: every button is turned on once and off once.
+        for name in spec.names * 2:
+            page.click(f"#config-sheet [data-pref={key}] button:text-is('{name}')")
+            chosen ^= {name}
+            expected = [n for n in spec.names if n in chosen]  # the whole list, in schema order
+            pref_is(other, key, expected)
+            pref_is(page, key, expected)
+            assert pressed(page, key) == expected, f"{key} after {name}"
+            assert pressed(other, key) == expected, f"{key} after {name}, in the other tab"
+        assert chosen == set(DEFAULTS[key])
+    # all of a subset's buttons can be off at once
+    for name in DEFAULTS["tag_fields"]:
+        page.click(f"#config-sheet [data-pref=tag_fields] button:text-is('{name}')")
+    pref_is(other, "tag_fields", [])
+    assert pressed(other, "tag_fields") == []
+
+
+@pytest.mark.parametrize("key", FLAGS)
+def test_a_flag_is_off_or_on_and_reaches_a_second_tab(page, other, key):
+    page.click("#open-config")
+    for label, value in (("ON", True), ("OFF", False)):
+        page.click(f"#config-sheet [data-pref={key}] button:text-is('{label}')")
+        pref_is(other, key, value)
+        pref_is(page, key, value)
+        assert pressed(page, key) == [label] and pressed(other, key) == [label]
+        assert other.get_attribute("html", f"data-{key}") == label
+        assert page.get_attribute("html", f"data-{key}") == label
+
+
+def test_a_choice_segment_group_has_one_pressed_button(page, other):
+    page.click("#open-config")
+    for key, spec in SEGMENTED.items():
+        for name in spec.names:
+            page.click(f"#config-sheet [data-pref={key}] button:text-is('{name}')")
+            pref_is(other, key, name)
+            pref_is(page, key, name)
+            assert pressed(page, key) == [name] and pressed(other, key) == [name]
+            assert other.get_attribute("html", f"data-{key}") == name
+
+
+def test_a_slider_in_hand_is_not_moved_by_another_tab(page, other):
+    """As the volume slider: a frame from the server must not pull a slider
+    out from under the pointer. It catches up when it is let go."""
+    page.click("#open-config")
+    held = "#config-sheet input[data-pref=box_pad]"
+    page.focus(held)
+    set_prefs(other, box_pad=9, box_width=3)
+    pref_is(page, "box_pad", 9)
+    pref_is(page, "box_width", 3)
+    assert page.input_value(held) == str(DEFAULTS["box_pad"])
+    assert page.input_value("#config-sheet input[data-pref=box_width]") == "3", "a slider not in hand did not follow"
+    page.focus("#config-sheet input[data-pref=box_width]")
+    assert page.input_value(held) == "9"
+    assert readout(page, "box_pad") == "9 PX"
+
+
+def test_the_scanline_sliders_are_disabled_unless_the_display_is_crt(page):
+    page.click("#open-config")
+    scan = ["scan_opacity", "scan_size"]
+    for display in ("CRT", "VECTOR", "OFF", "CRT"):
+        page.click(f"#config-sheet [data-pref=display] button:text-is('{display}')")
+        pref_is(page, "display", display)
+        for key in NUMBERS:
+            off = page.is_disabled(f"#config-sheet input[data-pref={key}]")
+            assert off == (key in scan and display != "CRT"), f"{key} with display {display}"
+
+
+def scan_properties(page):
+    return page.evaluate(
+        """() => { const css = getComputedStyle(document.documentElement);
+                   return ["--scan-alpha", "--scan-size", "--scan-line"].map(n => css.getPropertyValue(n).trim()); }"""
+    )
+
+
+@pytest.mark.parametrize("size, line", [(2, 1), (3, 1), (4, 1), (5, 2), (6, 2), (8, 3)])
+def test_the_scanline_size_is_the_pitch_and_the_dark_line_a_third_of_it(page, size, line):
+    set_prefs(page, scan_opacity=50, scan_size=size)
+    assert scan_properties(page) == ["0.5", f"{size}px", f"{line}px"]
+    drawn = page.eval_on_selector(".screen-radar .ovl", "e => getComputedStyle(e).backgroundImage")
+    assert "repeating-linear-gradient" in drawn and "0.5)" in drawn, drawn
+    assert f"{line}px" in drawn and f"{size}px" in drawn, drawn
+
+
+@pytest.mark.parametrize("opacity, alpha", [(0, "0"), (34, "0.34"), (100, "1")])
+def test_the_scanline_opacity_is_a_percentage(page, opacity, alpha):
+    set_prefs(page, scan_opacity=opacity)
+    assert scan_properties(page) == [alpha, "3px", "1px"]
+
+
+def test_the_radars_range_readout_follows_the_setting(page):
+    assert page.text_content("#radar-range") == "RNG 40 NM"
+    set_prefs(page, range_nm=120)
+    page.wait_for_function("document.getElementById('radar-range').textContent === 'RNG 120 NM'")
+
+
+@pytest.mark.parametrize("width, height", [(1440, 900), (1280, 640), (390, 844)])
+def test_the_config_sheet_docks_to_the_right_edge_at_full_height(page, width, height):
+    page.set_viewport_size({"width": width, "height": height})
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    box = page.eval_on_selector("#config-sheet", "e => e.getBoundingClientRect().toJSON()")
+    inner = page.evaluate("document.documentElement.clientWidth")
+    assert abs(box["right"] - inner) <= 1, "the sheet is not against the right edge"
+    assert abs(box["top"]) <= 1 and abs(box["bottom"] - height) <= 1, "the sheet is not the window's height"
+    assert abs(box["width"] - min(420, inner)) <= 1
+    # what does not fit scrolls inside the sheet, and the last control can be reached
+    assert page.evaluate("document.documentElement.scrollWidth") <= width
+    last = page.locator("#config-sheet input[data-pref=box_width]")
+    last.scroll_into_view_if_needed()
+    at = last.evaluate("e => e.getBoundingClientRect().toJSON()")
+    assert at["top"] >= 0 and at["bottom"] <= height and at["left"] >= box["left"] and at["right"] <= box["right"]
+
+
+def test_the_config_sheet_does_not_darken_the_radar_and_the_airport_sheet_does(page):
+    """Decision 10: scanlines, boxes and range are seen changing while they
+    are set. The pixel is the radar screen's frame, halfway down its left
+    edge: with no display effects it is exactly the frame colour."""
+    set_prefs(page, display="OFF", glow="OFF")
+    frame = css_colour(page, "--frame")
+    x, y = page.eval_on_selector(
+        ".screen-radar", "e => { const r = e.getBoundingClientRect(); return [r.left, Math.round(r.top + r.height / 2)]; }"
+    )
+    assert x == int(x) and pixel(page, x, y) == frame
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    sheet = page.eval_on_selector("#config-sheet", "e => e.getBoundingClientRect().left")
+    assert x < sheet, "the sheet itself covers the pixel"
+    assert pixel(page, x, y) == frame, "the radar is darkened behind the config sheet"
+    # The same pixel does show a backdrop: the airport sheet still has one.
+    page.click("#config-sheet button[value=close]")
+    page.click("#open-airport")
+    page.wait_for_selector("#airport-sheet[open]")
+    dimmed = pixel(page, x, y)
+    assert sum(dimmed) < sum(frame) / 2, f"the airport sheet's backdrop left {dimmed}"
 
 
 # -- errors with the teletype hidden ---------------------------------------------
