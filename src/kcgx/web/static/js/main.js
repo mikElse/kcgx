@@ -3,7 +3,8 @@
 
 import { createStore } from "./store.js";
 import { connect } from "./connection.js";
-import { forget } from "./theme.js";
+import { bindTheme, forget } from "./theme.js";
+import { bindFrames } from "./frames.js";
 import { mountStack } from "./stack.js";
 import { mountStatus } from "./status.js";
 import { mountLamps } from "./lamps.js";
@@ -14,6 +15,8 @@ import { mountAirportSheet, mountConfigSheet, mountShutdownSheet, mountVolume } 
 
 const $ = (id) => document.getElementById(id);
 const store = createStore();
+bindFrames(store); // the frame rate cap, prefs.fps_max
+bindTheme(store); // renderScale(), glowBlur(layer)
 const link = connect(store);
 const send = (message) => link.send(message);
 

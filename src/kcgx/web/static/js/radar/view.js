@@ -4,7 +4,8 @@
 // recentre, click an aircraft to focus it, hover a label to brighten it,
 // and the bearing and distance under the pointer.
 //
-// `radar` is the shared state `mountRadar` makes (see radar/index.js).
+// `radar` is the shared state `mountRadar` makes (see radar/index.js);
+// `init` adds this module's part of it.
 
 import { focus } from "../focus.js";
 
@@ -17,6 +18,24 @@ const EDGE_PX = 18; // kept clear between the view's distance and the nearer edg
 // at the range and returns to it; pan is in nm too.
 export function newView(range) {
   return { nm: range, panX: 0, panY: 0 };
+}
+
+// This module's part of `radar`, its pointer handlers, and its say in what
+// the store changes: a new range is a new picture, and the view goes back
+// to it.
+export function init(radar) {
+  radar.view = newView(radar.range());
+  radar.viewFor = radar.view.nm; // the range the view was last reset for
+  // moved: the press now down, or the last one, became a drag. before: the
+  // press ahead of it did. at: where the pointer last was.
+  radar.pointer = { down: null, moved: false, before: false, at: [0, 0] };
+  bindPointer(radar);
+  radar.store.subscribe((kind) => {
+    if ((kind === "all" || kind === "prefs") && radar.range() !== radar.viewFor) recentre(radar);
+  });
+  return {
+    debug: () => ({ view: { ...radar.view } }),
+  };
 }
 
 // Pixels per nm: the view's distance fits the shorter side.
@@ -78,7 +97,7 @@ function positionText(radar, at) {
 }
 
 // The canvas's pointer, wheel and double click handlers.
-export function bindPointer(radar) {
+function bindPointer(radar) {
   const { canvas, view, pointer, hud } = radar;
 
   canvas.addEventListener("pointerdown", (event) => {

@@ -9,11 +9,12 @@
 // Two bare labels may cross, and both read; a box would hide the other
 // label, so a boxed label is given room that no other label is in.
 //
-// `radar` is the shared state `mountRadar` makes (see radar/index.js).
+// `radar` is the shared state `mountRadar` makes (see radar/index.js);
+// `init` adds this module's part of it.
 
 import { colours, glowBlur, reducedMotion } from "../theme.js";
 import { FONT, around, claim, inked, meets, paintBox, trailing } from "./draw.js";
-import { scale, toScreen } from "./view.js";
+import { recentre, scale, toScreen } from "./view.js";
 
 const NM_PER_RADIAN = 3440.065;
 const RING_STEPS_NM = [0.5, 1, 2, 5, 10, 20, 50];
@@ -40,6 +41,43 @@ const DRAWN_ON = new Set(["coast", "lake", "river", "country", "state"]);
 // argument, `labelPx(base, radar)`.
 export function labelPx(base) {
   return base;
+}
+
+// -- this module's part of `radar` -------------------------------------------------
+
+// The map and what the last drawing of the layer left for the pointer and
+// for tests, and the layer's canvas. A new airport is a new map and a new
+// picture: the view goes back to the whole range about it.
+export function init(radar) {
+  radar.still = document.createElement("canvas");
+  radar.canvases.push(radar.still);
+  radar.map = null; // decoded geo for the current airport
+  radar.mapFor = "";
+  radar.project = null;
+  radar.drawOnFrom = 0;
+  radar.hovered = null; // a placed label's key
+  // A label is what `claim` gives: { x, y, w, h, boxed, box: {x, y, w, h} or null }.
+  radar.placed = []; // [{ key, ...label }]
+  radar.rings = []; // [{ nm, r, bright, text, label: {...label, at: [x, baseline]} or null }], as last drawn
+  radar.home = { x: 0, y: 0, r: 0 }; // the airport and its ring, as last drawn
+  radar.symbols = {}; // kind -> how many are on screen, as last drawn
+  radar.store.subscribe((kind) => {
+    const { airport } = radar.store.state;
+    if (kind === "all" && airport && airport.icao !== radar.mapFor) {
+      recentre(radar);
+      loadMap(radar, airport);
+    }
+  });
+  return {
+    debug() {
+      const { map } = radar;
+      return {
+        placed: [...radar.placed], hovered: radar.hovered, mapFor: radar.mapFor, loaded: Boolean(map),
+        rings: [...radar.rings], home: { ...radar.home }, symbols: { ...radar.symbols },
+        layers: map ? Object.fromEntries(Object.entries(map.lines).map(([k, v]) => [k, v.length])) : {},
+      };
+    },
+  };
 }
 
 // -- the projection --------------------------------------------------------------
@@ -248,8 +286,8 @@ export function drawStatic(radar, now) {
   // that would touch it is the one left off. The airport's name has its
   // place before any of them: a box under it, or under a number, is not to
   // be drawn across the other.
-  const rings = ringsOn(radar, centre, s, width, height);
-  radar.rings = rings;
+  const { rings } = radar;
+  rings.splice(0, rings.length, ...ringsOn(radar, centre, s, width, height));
   const name = homeName(radar, ctx, centre, s, ratio, prefs);
   const keepOff = name && (radar.boxed("HOME") || radar.boxed("RINGS")) ? name.label : null;
   ctx.save();
@@ -279,9 +317,9 @@ export function drawStatic(radar, now) {
 
   // The home airport first, so its name is reserved before any place
   // looks for room.
-  radar.placed = [];
-  radar.symbols = {};
-  radar.home = { x: centre[0], y: centre[1], r: homeRing(s, ratio) };
+  radar.placed.length = 0;
+  for (const kind of Object.keys(radar.symbols)) delete radar.symbols[kind];
+  Object.assign(radar.home, { x: centre[0], y: centre[1], r: homeRing(s, ratio) });
   if (name) drawHome(radar, ctx, centre, s, ratio, c, prefs, name);
   if (map) drawPlaces(radar, ctx, s, width, height, ratio, c, prefs);
   radar.staticDirty = progress < 1;

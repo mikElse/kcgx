@@ -8,7 +8,8 @@
 // are drawn bare on a third canvas (`radar.bare`), a colour at a time, and
 // that canvas is drawn onto the moving layer once with the shadow on.
 //
-// `radar` is the shared state `mountRadar` makes (see radar/index.js).
+// `radar` is the shared state `mountRadar` makes (see radar/index.js);
+// `init` adds this module's part of it.
 
 import { glowBlur } from "../theme.js";
 import { focus } from "../focus.js";
@@ -29,6 +30,21 @@ export function reckon(lat, lon, gs, trk, seconds) {
   const dlat = (nm * Math.cos(b)) / 60;
   const dlon = (nm * Math.sin(b)) / (60 * Math.max(0.01, Math.cos((lat * Math.PI) / 180)));
   return [lat + dlat, lon + dlon];
+}
+
+// -- this module's part of `radar` -------------------------------------------------
+
+// The layer's two canvases, and what its last drawing left: the aircraft
+// where they were reckoned to be, and for the pointer what is where.
+export function init(radar) {
+  radar.trace = document.createElement("canvas"); // the moving layer, for persistence
+  radar.bare = document.createElement("canvas"); // the aircraft's lines in one colour, before their glow
+  radar.canvases.push(radar.trace, radar.bare);
+  radar.now = []; // [{ ...ac, now: [x, y] in nm, age }], as last drawn
+  radar.hits = []; // [{ hex, x, y, tag: {lines, ...label} or null, trail: [[x, y]] }]
+  return {
+    debug: () => ({ hits: radar.hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y, tag: h.tag })) }),
+  };
 }
 
 // -- flight tags -----------------------------------------------------------------
@@ -110,15 +126,15 @@ function strokeAircraft(pen, { ac, isFocus, alpha, head, points }, ratio) {
 // Draws the aircraft onto `ctx` and returns them, with the boxes their tags
 // are to stand on: [{ box, colour, alpha }], each as dim as its aircraft.
 // The boxes cannot be drawn here; `frame` puts them under this layer.
-// Leaves `radar.hits` saying what is where, for the pointer.
+// Leaves `radar.now` holding the aircraft as drawn, and `radar.hits`
+// saying what is where, for the pointer.
 export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
-  const { store, project, bare } = radar;
-  const hits = [];
-  radar.hits = hits;
+  const { store, project, bare, hits, now: list } = radar;
+  hits.length = 0;
   const boxes = [];
   const step = TAG_STEP_PX * ratio;
   const focused = focus.hex;
-  const list = aircraftNow(radar);
+  list.splice(0, list.length, ...aircraftNow(radar));
   if (focused && !list.some((ac) => ac.hex === focused)) focus.set(null);
   const seen = list.map((ac) => {
     const isFocus = ac.hex === focused;

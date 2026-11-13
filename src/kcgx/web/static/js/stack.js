@@ -6,6 +6,7 @@
 
 import { HISTORY } from "./store.js";
 import { colours, glowBlur } from "./theme.js";
+import { onFrame } from "./frames.js";
 
 const GLYPHS = { live: "●", reconnecting: "◐", starting: "◐", offline: "○", parked: "‖" };
 const STATES = { live: "LIVE", reconnecting: "RECONNECTING", starting: "STARTING", offline: "OFFLINE", parked: "PARKED" };
@@ -187,16 +188,13 @@ export function mountStack({ stack, counts }, store, send) {
     ctx.restore();
   }
 
-  function frame() {
-    if (levelsDirty) {
-      levelsDirty = false;
-      for (const [ident, row] of rows) {
-        if (row.shape === "expanded") drawTrace(row.parts.trace, ident);
-      }
+  onFrame(() => {
+    if (!levelsDirty) return;
+    levelsDirty = false;
+    for (const [ident, row] of rows) {
+      if (row.shape === "expanded") drawTrace(row.parts.trace, ident);
     }
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
+  });
 
   // The viewer's hand on the stack holds the resort (spec, Feature parity).
   let lastInput = 0;

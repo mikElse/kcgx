@@ -14,45 +14,50 @@
 // VECTOR or CRT the moving layer fades instead of clearing, which is the
 // phosphor persistence.
 //
-// The parts share one object, `radar`, made here: the store, the canvases,
-// the view and what the last drawing left for the pointer and for tests.
+// The parts share one object, `radar`, made here. This file puts the
+// shared core on it: the canvas, the store, the HUD, the range, whether the
+// static layer is to be drawn again, the canvases `size()` keeps at the
+// screen's size, and what the last frame drew. Each of view.js, still.js
+// and moving.js then adds its own part in its `init(radar)`, which also
+// binds that module's listeners and may return `{ tick(now), debug() }`.
+// The inits run in that order, before the first frame; every frame starts
+// with each tick in the same order, and `debug()` is the core's and every
+// module's put together, a key from two of them being an error.
+//
+// The objects on `radar` (the view, the pointer, the lists of what was
+// drawn) are changed in place and never replaced, so a part may keep hold
+// of one. Values (`map`, `project`, `shown`, `hovered`, ...) are set anew.
 
 import { colours, reducedMotion } from "../theme.js";
+import { onFrame } from "../frames.js";
 import { paintBox } from "./draw.js";
-import { drawStatic, loadMap } from "./still.js";
-import { drawMoving } from "./moving.js";
-import { bindPointer, newView, recentre, scale } from "./view.js";
+import { drawStatic, init as initStill } from "./still.js";
+import { drawMoving, init as initMoving } from "./moving.js";
+import { init as initView, recentre, scale } from "./view.js";
+
+// One object from several, each key from one only.
+export function mergeDebug(parts) {
+  const out = {};
+  for (const part of parts) {
+    for (const [key, value] of Object.entries(part)) {
+      if (key in out) throw new Error(`radar debug(): ${key} is given twice`);
+      out[key] = value;
+    }
+  }
+  return out;
+}
 
 export function mountRadar(canvas, store, { hud = {} } = {}) {
   const range = () => store.state.prefs.range_nm;
   const radar = {
     canvas, store, hud, range,
-    view: newView(range()),
-    viewFor: 0, // the range the view was last reset for
-    map: null, // decoded geo for the current airport
-    mapFor: "",
-    project: null,
-    drawOnFrom: 0,
     staticDirty: true,
-    hovered: null, // a placed label's key
-    // A label is what `claim` gives: { x, y, w, h, boxed, box: {x, y, w, h} or null }.
-    placed: [], // [{ key, ...label }]
-    rings: [], // [{ nm, r, bright, text, label: {...label, at: [x, baseline]} or null }], as last drawn
-    home: { x: 0, y: 0, r: 0 }, // the airport and its ring, as last drawn
-    symbols: {}, // kind -> how many are on screen, as last drawn
+    canvases: [canvas], // every canvas size() keeps at the screen's size; an init adds its own
     shown: null, // the view and the range, as the last frame drew them
-    hits: [], // [{ hex, x, y, tag: {lines, ...label} or null, trail: [[x, y]] }]
-    // moved: the press now down, or the last one, became a drag. before: the
-    // press ahead of it did. at: where the pointer last was.
-    pointer: { down: null, moved: false, before: false, at: [0, 0] },
-    still: document.createElement("canvas"),
-    trace: document.createElement("canvas"), // the moving layer, for persistence
-    bare: document.createElement("canvas"), // the aircraft's lines in one colour, before their glow
     boxed: (item) => store.state.prefs.box_items.includes(item),
     size,
   };
-  radar.viewFor = radar.view.nm;
-  const { view, still, trace, bare } = radar;
+  let frames = 0; // drawn so far, for tests of the frame rate
 
   // -- sizes --
 
@@ -61,11 +66,16 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const box = canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(box.width * ratio));
     const height = Math.max(1, Math.round(box.height * ratio));
-    for (const c of [canvas, still, trace, bare]) {
+    for (const c of radar.canvases) {
       if (c.width !== width || c.height !== height) { c.width = width; c.height = height; radar.staticDirty = true; }
     }
     return { ratio, width, height };
   }
+
+  // -- the parts --
+
+  const hooks = [initView(radar), initStill(radar), initMoving(radar)].filter(Boolean);
+  const ticks = hooks.filter((h) => h.tick);
 
   // -- the frame loop --
 
@@ -76,11 +86,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
   let lastHud = 0;
   function frame(now) {
+    for (const h of ticks) h.tick(now);
+    frames += 1;
     const { ratio, width, height } = size();
     if (radar.staticDirty) drawStatic(radar, now);
     const c = colours();
     const { prefs } = store.state;
     const s = scale(radar, width, height, ratio);
+    const { trace, still } = radar;
 
     const t = trace.getContext("2d");
     t.setTransform(1, 0, 0, 1, 0, 0);
@@ -105,12 +118,11 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.globalCompositeOperation = "lighter";
     ctx.drawImage(trace, 0, 0);
     ctx.globalCompositeOperation = "source-over";
-    radar.shown = { ...view, range: range() };
+    radar.shown = { ...radar.view, range: range() };
 
     if (now - lastHud > 500) { lastHud = now; drawHud(list); }
-    requestAnimationFrame(frame);
   }
-  requestAnimationFrame(frame);
+  onFrame(frame);
 
   function drawHud(list) {
     const polled = store.state.radar;
@@ -124,25 +136,11 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     hud.poll.textContent = polled.error ? `${polled.error}, PICTURE ${age}S OLD` : `POLLED ${age}S AGO`;
   }
 
-  // -- the pointer, and what the store says --
-
-  bindPointer(radar);
+  // -- what the store says --
 
   new ResizeObserver(() => { radar.staticDirty = true; }).observe(canvas);
   store.subscribe((kind) => {
-    if (kind === "all") {
-      const airport = store.state.airport;
-      if (airport && airport.icao !== radar.mapFor) {
-        recentre(radar);
-        loadMap(radar, airport);
-      }
-      if (range() !== radar.viewFor) recentre(radar);
-      radar.staticDirty = true;
-    } else if (kind === "prefs") {
-      // A new range is a new picture: the view goes back to it.
-      if (range() !== radar.viewFor) recentre(radar);
-      radar.staticDirty = true;
-    }
+    if (kind === "all" || kind === "prefs") radar.staticDirty = true;
   });
 
   return {
@@ -152,13 +150,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     // change with the event that changes them and `shown` with the next
     // frame, so the rest describes them once `shown` agrees with both.
     debug() {
-      const { map } = radar;
-      return {
-        hits: radar.hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y, tag: h.tag })),
-        placed: radar.placed, hovered: radar.hovered, view: { ...view }, mapFor: radar.mapFor, loaded: Boolean(map),
-        rings: radar.rings, home: radar.home, symbols: radar.symbols, shown: radar.shown,
-        layers: map ? Object.fromEntries(Object.entries(map.lines).map(([k, v]) => [k, v.length])) : {},
-      };
+      return mergeDebug([{ shown: radar.shown, frames }, ...hooks.map((h) => (h.debug ? h.debug() : {}))]);
     },
   };
 }

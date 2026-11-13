@@ -2053,11 +2053,20 @@ def plane(hex_, east=0.0, north=0.0, **over):
     }
 
 
+# One frame of the radar's from now, not of the browser's: the frame rate cap
+# passes over browser frames that come too soon (headless WebKit's come 10 ms
+# apart). The radar's clock asks for each frame before a test does, so it has
+# drawn by the time the test looks.
+RADAR_FRAME = """async () => {
+    const drawn = window.kcgx.radar.debug().frames;
+    while (window.kcgx.radar.debug().frames === drawn) await new Promise(requestAnimationFrame);
+}"""
+
+
 def frames(page, count=2):
-    """Let the radar draw: returns `count` animation frames from now."""
+    """Let the radar draw: returns `count` of its frames from now."""
     page.evaluate(
-        """count => new Promise(done => {
-            const step = n => (n ? requestAnimationFrame(() => step(n - 1)) : done()); step(count); })""",
+        f"async count => {{ const frame = {RADAR_FRAME}; for (let n = 0; n < count; n += 1) await frame(); }}",
         count,
     )
 
@@ -2145,12 +2154,12 @@ def holds(outer, inner):
 
 
 def picture(page):
-    """The radar canvas, once two looks at it two frames apart agree: the map
-    draws itself on over two seconds, and a setting takes a frame to show.
-    For a picture that holds still: aircraft with no ground speed."""
+    """The radar canvas, once two looks at it two of its frames apart agree:
+    the map draws itself on over two seconds, and a setting takes a frame to
+    show. For a picture that holds still: aircraft with no ground speed."""
     return page.evaluate(
         """async () => { const canvas = document.getElementById("radar");
-                         const frame = () => new Promise(requestAnimationFrame);
+                         const frame = """ + RADAR_FRAME + """;
                          let last = "";
                          for (let tries = 0; tries < 400; tries += 1) {
                              await frame(); await frame();
@@ -2344,7 +2353,7 @@ def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
 
 # Every draw the radar makes with a shadow on, by its name, in one frame of
 # its own. The radar's layers are canvases that are not in the page; the
-# waveforms' are.
+# waveforms' are. A frame of the radar's (RADAR_FRAME, above).
 SHADOWED = """async () => {
     const proto = CanvasRenderingContext2D.prototype;
     const draws = ["stroke", "fill", "fillRect", "strokeRect", "fillText", "strokeText", "drawImage"];
@@ -2355,8 +2364,8 @@ SHADOWED = """async () => {
         if (radars && this.shadowBlur > 0) seen[name] = (seen[name] || 0) + 1;
         return kept[name].apply(this, args);
     };
-    const frame = () => new Promise(requestAnimationFrame);
-    await frame();  // the radar's frame is asked for before this one, so it has been drawn
+    const frame = """ + RADAR_FRAME + """;
+    await frame();
     for (const name of Object.keys(seen)) delete seen[name];
     await frame();
     Object.assign(proto, kept);
