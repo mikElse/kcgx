@@ -191,6 +191,8 @@ COLUMNS = """() => import('/static/js/columns.js').then(({ COLUMNS, COLUMN }) =>
   columns: COLUMNS.map((c) => ({ key: c.key, title: c.title, filter: c.filter, num: c.num })),
   read: [FULL, {}, { alt: "GND" }, { alt: null, gs: null, trk: null, sq: null }].map(
     (ac) => Object.fromEntries(COLUMNS.map((c) => [c.key, [c.text(ac), c.sort(ac)]]))),
+  values: [FULL, {}, { alt: "GND" }, { alt: null, vs: null }].map(
+    (ac) => Object.fromEntries(COLUMNS.filter((c) => c.filter === "number").map((c) => [c.key, c.value(ac)]))),
 }))"""
 FULL = {
     "hex": "a1b2c3", "label": "DAL1388", "type": "A321", "reg": "N123DX", "lat": 45.58899, "lon": -122.5975,
@@ -227,13 +229,20 @@ def test_every_tracks_column_reads_an_aircraft_and_one_that_reports_nothing(page
         "OPER": "DELTA AIR LINES", "CAT": "A3", "AGE": 3.4, "LAT": 45.58899, "LON": -122.5975,
     }
     # Nothing reported, or not yet sent by the server: an empty cell, sorted
-    # below every figure (as phase F's table sorted a missing one).
+    # below every figure, negative ones included (V/S, LON).
     for read in (empty, unknown):
         assert {name: text for name, (text, _) in read.items()} == {name: "" for name in TITLES}
     assert {name: sort for name, (_, sort) in empty.items()} == {
-        name: "" if name in TEXT_FILTERS else -1 for name in TITLES
+        name: "" if name in TEXT_FILTERS else float("-inf") for name in TITLES
     }
     assert ground["ALT"] == ["GND", 0]
+    # What a number filter compares: the figure, GND as 0, and null for
+    # nothing reported, so a filter can leave out what reports nothing.
+    full_v, empty_v, ground_v, null_v = found["values"]
+    numbers = [name for name in TITLES if name not in TEXT_FILTERS]
+    assert full_v == {name: sort for name, (_, sort) in full.items() if name in numbers}
+    assert empty_v == {name: None for name in numbers}
+    assert ground_v["ALT"] == 0 and null_v["ALT"] is None and null_v["VS"] is None
 
 
 def test_the_table_shows_phase_f_s_seven_columns_until_tracks_reads_track_cols(page):
@@ -246,3 +255,14 @@ def test_the_table_shows_phase_f_s_seven_columns_until_tracks_reads_track_cols(p
 
 def test_the_store_starts_with_no_rank(page):
     assert page.evaluate("window.kcgx.store.state.rank instanceof Map && window.kcgx.store.state.rank.size === 0")
+
+
+def test_the_tracks_row_is_a_custom_property_tracks_can_set(page):
+    """Phase 0 seam: the grid's last row reads --tracks-row, so the TRACKS
+    lane sizes its pane without editing the page's grid rule."""
+    page.set_viewport_size({"width": 1440, "height": 900})
+    before = box_of(page, ".screen-tracks")["height"]
+    page.evaluate("document.querySelector('.page').style.setProperty('--tracks-row', '300px')")
+    after = box_of(page, ".screen-tracks")["height"]
+    # The row holds the pane and the gap above it (its margin-top).
+    assert abs((after - before) - (300 - 0.24 * 900)) <= 2, (before, after)

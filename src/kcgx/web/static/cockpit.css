@@ -70,7 +70,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
   height: 100vh; min-height: 640px; padding: var(--page-pad);
   display: grid; column-gap: var(--gap);
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
-  grid-template-rows: auto auto min-content minmax(48px, 1fr) auto minmax(160px, 24vh);
+  grid-template-rows: auto auto min-content minmax(48px, 1fr) auto var(--tracks-row, minmax(160px, 24vh));
   grid-template-areas:
     "bar bar" "banner banner"
     "radar status" "radar freq" "lamps freq" "tracks freq";

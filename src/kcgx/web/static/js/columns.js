@@ -8,7 +8,10 @@
 //   title   the header: "ALT FT"
 //   text    (ac) => the cell's text; "" for anything the aircraft does not
 //           report, including fields the server does not send yet
-//   sort    (ac) => the value the table sorts by
+//   sort    (ac) => the value the table sorts by; a figure not reported
+//           sorts below every real one (-Infinity), negative ones included
+//   value   (ac) => for "number" columns only: the figure a number filter
+//           compares, GND as 0, and null when nothing is reported
 //   filter  "text" (a case-insensitive substring) or "number" (min and max)
 //   num     true when the cell is set right-aligned, as figures are
 //
@@ -20,7 +23,8 @@ const blank = (value) => value === null || value === undefined;
 const plain = (value) => (blank(value) ? "" : String(value));
 const three = (value) => (blank(value) ? "" : String(value).padStart(3, "0"));
 const fixed = (places) => (value) => (blank(value) ? "" : Number(value).toFixed(places));
-const figure = (value) => (blank(value) ? -1 : value);
+const figure = (value) => (blank(value) ? -Infinity : value);
+const reported = (value) => (blank(value) ? null : Number(value));
 
 function textColumn(key, title, field, extra = {}) {
   const text = (ac) => plain(ac[field]);
@@ -32,6 +36,7 @@ function numberColumn(key, title, field, show = plain, extra = {}) {
     key, title, filter: "number", num: true,
     text: (ac) => show(ac[field]),
     sort: (ac) => figure(ac[field]),
+    value: (ac) => reported(ac[field]),
     ...extra,
   };
 }
@@ -40,7 +45,10 @@ export const COLUMNS = [
   textColumn("CALLSIGN", "CALLSIGN", "label"),
   textColumn("TYPE", "TYPE", "type"),
   textColumn("REG", "REG", "reg"),
-  numberColumn("ALT", "ALT FT", "alt", plain, { sort: (ac) => (ac.alt === "GND" ? 0 : figure(ac.alt)) }),
+  numberColumn("ALT", "ALT FT", "alt", plain, {
+    sort: (ac) => (ac.alt === "GND" ? 0 : figure(ac.alt)),
+    value: (ac) => (ac.alt === "GND" ? 0 : reported(ac.alt)),
+  }),
   numberColumn("VS", "V/S FPM", "vs"),
   numberColumn("GS", "GS KT", "gs"),
   numberColumn("TRK", "TRK", "trk", three),
