@@ -1,8 +1,8 @@
 // The three sheets: change airport, config and shut down. Each is a
 // <dialog>, so focus, Escape and the backdrop come from the browser. The
 // one exception is Escape in the airport search, which the browsers do not
-// agree on; see mountAirportSheet. Also the master volume, which the config
-// sheet held until phase G and the frequencies pane holds now.
+// agree on; see mountAirportSheet. The master volume, which the config sheet
+// held until phase G, is the frequencies pane's (stack.js mountVolume).
 
 function button(className, label, onClick) {
   const node = document.createElement("button");
@@ -289,27 +289,6 @@ export function mountConfigSheet({ sheet }, store, send) {
   store.subscribe((kind) => { if (kind === "all" || kind === "prefs") render(); });
   render();
   return { open() { render(); if (!sheet.open) sheet.showModal(); } };
-}
-
-// -- the master volume -------------------------------------------------------------
-//
-// Not a pref: it is the server's audio state, and lives in the frequencies
-// pane, not the config sheet (phase G decision 3). Like a slider in the
-// sheet, a frame from the server does not move it while it has the focus.
-
-export function mountVolume({ volume, volumeValue }, store, send) {
-  const sendVolume = debounce((value) => send({ t: "volume", value }), 60);
-  volume.addEventListener("input", () => {
-    volumeValue.textContent = `${volume.value}%`;
-    sendVolume(Number(volume.value) / 100);
-  });
-  function render() {
-    if (document.activeElement === volume) return;
-    volume.value = String(Math.round(store.state.volume * 100));
-    volumeValue.textContent = `${volume.value}%`;
-  }
-  store.subscribe((kind) => { if (kind === "all" || kind === "volume") render(); });
-  render();
 }
 
 export function mountShutdownSheet({ sheet }, store, onEnded, log) {

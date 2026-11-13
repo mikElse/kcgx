@@ -72,13 +72,19 @@
   <section class="screen screen-freq" aria-label="Frequencies">
     <div class="ovl" aria-hidden="true"></div>
     <!-- G:freq-head -->
-    <!-- The master volume is not a pref (phase G decision 3); sheets.js mountVolume binds it. -->
-    <label class="field-row freq-volume"><span class="muted small">VOLUME</span>
+    <!-- The master mute and volume are not prefs (phase G decision 3); stack.js mountVolume binds them. -->
+    <div class="field-row freq-head" id="freq-head">
+      <button type="button" class="btn freq-mute" id="master-mute" aria-pressed="false" aria-label="Mute all feeds" title="MUTE">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 9.5h4l5-4v13l-5-4H3z"/>
+          <path class="waves" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>
+          <path class="cross" d="M15.5 9.5l5 5M20.5 9.5l-5 5"/>
+        </svg>
+      </button>
       <input id="volume" type="range" min="0" max="100" step="5" aria-label="Master volume">
       <span class="num" id="volume-value">100%</span>
-    </label>
+    </div>
     <!-- /G:freq-head -->
-    <div class="freq-counts muted small" id="freq-counts"></div>
     <div class="stack" id="stack"></div>
     <div class="screen-title"><span class="title-text">FREQUENCIES</span></div>
   </section>

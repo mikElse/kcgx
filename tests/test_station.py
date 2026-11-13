@@ -16,6 +16,7 @@ from kcgx.hub import Client, Hub
 from kcgx.prefs import DEFAULTS
 from kcgx.station import Station, UnknownAirport
 from squelch.config import Config
+from squelch.feeds import Feed
 from squelch.mixer import Mixer
 from squelch.runtime import AUDIO_FAILED
 from station_fakes import AIRPORTS, LISTINGS, Builder, listing, picker
@@ -249,7 +250,92 @@ async def test_volume_reaches_the_mixer_and_every_page():
     page = watch(hub)
     station.handle({"t": "volume", "value": 0.35})
     assert station.mixer.volume == pytest.approx(0.35)
-    assert frames(page, "volume") == [{"t": "volume", "value": 0.35}]
+    assert frames(page, "volume") == [{"t": "volume", "value": 0.35, "muted": False}]
+
+
+async def test_select_from_a_page_leaves_one_feed_audible_for_every_page():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.handle({"t": "select", "ident": "kpdx3_atis"})
+    assert [s.feed.ident for s in station.cockpit.sessions if not s.muted] == ["kpdx3_atis"]
+    sent = frames(page)
+    changed = {f["feed"]["ident"]: f["feed"]["muted"] for f in sent if f["t"] == "feed"}
+    assert changed == {"kpdx3_twr": True, "kpdx3_atis": False}
+    assert sent[-1] == {"t": "order", "idents": ["kpdx3_atis", "kpdx3_twr", "kpdx3_gnd"]}
+
+
+async def test_the_master_mute_keeps_the_volume_and_reaches_every_page():
+    station, hub, _, _ = make()
+    await station.open("KPDX")
+    station.handle({"t": "volume", "value": 0.4})
+    page = watch(hub)
+    station.handle({"t": "master_mute", "on": True})
+    assert station.mixer.master_muted is True
+    assert station.mixer.volume == pytest.approx(0.4)
+    assert frames(page, "volume") == [{"t": "volume", "value": 0.4, "muted": True}]
+    assert station.snapshot()["muted"] is True
+    station.handle({"t": "volume", "value": 0.6})
+    assert frames(page, "volume") == [{"t": "volume", "value": 0.6, "muted": True}]
+    station.handle({"t": "master_mute", "on": False})
+    assert frames(page, "volume") == [{"t": "volume", "value": 0.6, "muted": False}]
+    assert station.snapshot()["muted"] is False
+
+
+async def test_a_mixer_without_a_master_mute_reads_as_unmuted():
+    """A mixer that has never been muted may not have the attribute (the
+    demo's): the snapshot says it is not muted."""
+
+    class Plain:
+        volume = 1.0
+
+        def clear_channels(self):
+            pass
+
+    station, _, _, _ = make(mixer=Plain())
+    assert station.snapshot()["muted"] is False
+
+
+def chicago(config, *, warn):
+    if config.icao == "KORD":
+        return [Feed("kord_app", "KORD Chicago Approach (10R/28C)"), Feed("kord_twr", "KORD Chicago O'Hare Tower")]
+    return listing(config, warn=warn)
+
+
+async def test_feed_titles_drop_the_airport():
+    station, hub, _, _ = make(chicago)
+    await station.open("KPDX")
+    page = watch(hub)
+    await station.change_airport("KORD")
+    feeds = frames(page, "snapshot")[-1]["feeds"]
+    assert [(f["name"], f["title"]) for f in feeds] == [
+        ("Chicago Approach (10R/28C)", "Approach (10R/28C)"),
+        ("Chicago O'Hare Tower", "Tower"),
+    ]
+
+
+async def test_feed_frames_carry_the_title_too():
+    station, hub, _, _ = make(chicago)
+    await station.open("KORD")
+    page = watch(hub)
+    station.handle({"t": "select", "ident": "kord_twr"})
+    titles = {f["feed"]["ident"]: f["feed"]["title"] for f in frames(page, "feed")}
+    assert titles == {"kord_app": "Approach (10R/28C)", "kord_twr": "Tower"}
+
+
+async def test_turning_short_names_off_sends_every_feed_again_with_its_name():
+    station, hub, _, _ = make(chicago)
+    await station.open("KORD")
+    page = watch(hub)
+    station.handle({"t": "prefs", "short_names": False})
+    titles = {f["feed"]["ident"]: f["feed"]["title"] for f in frames(page, "feed")}
+    assert titles == {"kord_app": "Chicago Approach (10R/28C)", "kord_twr": "Chicago O'Hare Tower"}
+    assert [f["title"] for f in station.snapshot()["feeds"]] == ["Chicago Approach (10R/28C)", "Chicago O'Hare Tower"]
+    station.handle({"t": "prefs", "palette": "AMBER"})
+    assert frames(page, "feed") == [], "a setting that is not short_names sends no feed"
+    station.handle({"t": "prefs", "short_names": True})
+    titles = {f["feed"]["ident"]: f["feed"]["title"] for f in frames(page, "feed")}
+    assert titles == {"kord_app": "Approach (10R/28C)", "kord_twr": "Tower"}
 
 
 async def test_input_from_a_page_holds_the_resort():

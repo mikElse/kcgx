@@ -1,11 +1,15 @@
-// The frequency stack (spec, The feed stack in this language). An audible
-// feed is an expanded row: name, an oscilloscope trace of its level, M and S.
-// A muted feed is one compact line, and the whole line is a button that
-// unmutes it. Rows are moved, never rebuilt, when the order changes, so a
-// trace keeps its history across a reorder.
+// The frequency stack (spec, The feed stack in this language). One feed is
+// heard at a time, picked like a radio button (phase G decision 3). The
+// audible feed is the expanded row: its title, chatter and state, and an
+// oscilloscope trace of its level. Every other feed is one compact line, and
+// the whole line is a button that selects it; the expanded row is no button,
+// as picking what is playing does nothing. Rows are moved, never rebuilt,
+// when the order changes, so a trace keeps its history across a reorder.
+//
+// The pane's header, the master mute and the volume, is mountVolume below.
 
 import { HISTORY } from "./store.js";
-import { colours, glowBlur } from "./theme.js";
+import { colours, glowBlur, renderScale } from "./theme.js";
 import { onFrame } from "./frames.js";
 
 const GLYPHS = { live: "●", reconnecting: "◐", starting: "◐", offline: "○", parked: "‖" };
@@ -16,6 +20,10 @@ const INPUT_EVERY_MS = 1000;
 const whole = (fraction) => Math.round((fraction || 0) * 100);
 const percent = (fraction) => `${whole(fraction)}%`;
 
+// What a row is called: the title (the name without the airport, by the
+// short_names setting), from the server.
+const titleOf = (feed) => feed.title || feed.name;
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -23,7 +31,7 @@ function el(tag, className, text) {
   return node;
 }
 
-export function mountStack({ stack, counts }, store, send) {
+export function mountStack({ stack }, store, send) {
   const rows = new Map(); // ident -> { node, shape, parts }
   let levelsDirty = false;
 
@@ -34,33 +42,26 @@ export function mountStack({ stack, counts }, store, send) {
     return span;
   }
 
+  // Name, chatter and state, left to right, as in a compact row.
   function buildExpanded(feed) {
     const node = el("div", "feed expanded");
+    node.setAttribute("role", "group");
     const head = el("div", "feed-head");
-    const name = el("span", "feed-name", feed.name);
+    const name = el("span", "feed-name", titleOf(feed));
+    const chatter = el("span", "chatter-big", percent(feed.chatter));
     const glyph = stateGlyph(feed);
-    head.append(name, glyph);
+    head.append(name, chatter, glyph);
     const trace = el("canvas", "trace");
     trace.setAttribute("aria-hidden", "true");
-    const controls = el("div", "feed-controls");
-    const mute = el("button", "btn", "M");
-    mute.type = "button";
-    mute.addEventListener("click", () => send({ t: "mute", ident: feed.ident }));
-    const solo = el("button", "btn", "S");
-    solo.type = "button";
-    solo.addEventListener("click", () => send({ t: "solo", ident: feed.ident }));
-    const label = el("span", "chatter-label", "CHATTER");
-    const chatter = el("span", "chatter-big", percent(feed.chatter));
-    controls.append(mute, solo, el("span", "spacer"), label, chatter);
-    node.append(head, trace, controls);
-    return { node, parts: { name, glyph, trace, mute, solo, chatter } };
+    node.append(head, trace);
+    return { node, parts: { name, glyph, trace, chatter } };
   }
 
   function buildCompact(feed) {
     const node = el("button", "feed compact");
     node.type = "button";
-    node.addEventListener("click", () => send({ t: "mute", ident: feed.ident }));
-    const name = el("span", "feed-name", feed.name);
+    node.addEventListener("click", () => send({ t: "select", ident: feed.ident }));
+    const name = el("span", "feed-name", titleOf(feed));
     const note = el("span", "note", "♪");
     note.setAttribute("aria-hidden", "true");
     const chatter = el("span", "chatter-small", percent(feed.chatter));
@@ -71,29 +72,38 @@ export function mountStack({ stack, counts }, store, send) {
 
   function update(row, feed) {
     const { parts } = row;
-    parts.name.textContent = feed.name;
+    const title = titleOf(feed);
+    parts.name.textContent = title;
     parts.glyph.textContent = GLYPHS[feed.state] || "●";
     parts.glyph.className = `feed-state state-${feed.state}`;
     parts.glyph.title = STATES[feed.state] || feed.state.toUpperCase();
     parts.glyph.setAttribute("aria-label", parts.glyph.title);
     parts.chatter.textContent = percent(feed.chatter);
+    const said = `chatter ${whole(feed.chatter)} percent, ${parts.glyph.title.toLowerCase()}`;
     if (row.shape === "expanded") {
-      parts.mute.setAttribute("aria-pressed", String(feed.muted));
-      parts.mute.setAttribute("aria-label", `Mute ${feed.name}`);
-      parts.solo.setAttribute("aria-pressed", String(feed.soloed));
-      parts.solo.setAttribute("aria-label", `Solo ${feed.name}`);
+      row.node.setAttribute("aria-label", `Playing ${title}, ${said}`);
     } else {
+      // Audible but not first: only /debug or open_feed makes two.
+      const audible = feed.muted === false;
+      row.node.classList.toggle("playing", audible);
       row.node.classList.toggle("parked", feed.state === "parked");
-      row.node.setAttribute(
-        "aria-label",
-        `Unmute ${feed.name}, chatter ${whole(feed.chatter)} percent, ${parts.glyph.title.toLowerCase()}`,
-      );
+      row.node.setAttribute("aria-label", audible ? `${title}, playing, ${said}` : `Listen to ${title}, ${said}`);
     }
+  }
+
+  // The expanded row is the feed that is not muted. The server keeps that
+  // to one; should /debug unmute more, the first in the stack is expanded,
+  // the others are compact rows marked playing, and a click on one of them
+  // selects it.
+  function playing() {
+    const { state } = store;
+    return state.order.find((ident) => state.feeds.get(ident)?.muted === false);
   }
 
   function render() {
     const { state } = store;
     const wanted = new Set(state.order);
+    const heard = playing();
     for (const [ident, row] of rows) {
       if (!wanted.has(ident)) { row.node.remove(); rows.delete(ident); }
     }
@@ -101,7 +111,7 @@ export function mountStack({ stack, counts }, store, send) {
     for (const ident of state.order) {
       const feed = state.feeds.get(ident);
       if (!feed) continue;
-      const shape = feed.muted ? "compact" : "expanded";
+      const shape = ident === heard ? "expanded" : "compact";
       let row = rows.get(ident);
       if (!row || row.shape !== shape) {
         const built = shape === "expanded" ? buildExpanded(feed) : buildCompact(feed);
@@ -118,7 +128,6 @@ export function mountStack({ stack, counts }, store, send) {
       previous = row.node;
     }
     renderEmpty();
-    renderCounts();
     levelsDirty = true;
   }
 
@@ -137,22 +146,14 @@ export function mountStack({ stack, counts }, store, send) {
     }
   }
 
-  function renderCounts() {
-    const { state } = store;
-    const feeds = [...state.feeds.values()];
-    const live = feeds.filter((f) => f.state === "live").length;
-    const parked = feeds.filter((f) => f.state === "parked").length;
-    counts.replaceChildren(
-      el("span", "", `${feeds.length} FEEDS`),
-      el("span", "", `${live} LIVE  ${parked} PARKED`),
-      el("span", "", `VOL ${Math.round(state.volume * 100)}%`),
-    );
-  }
-
   // -- the traces ---------------------------------------------------------------
 
+  // Backing store by the render scale (phase G decision 6): at OFF, half
+  // the pixels, scaled up hard; the glow is the traffic layer's.
   function drawTrace(canvas, ident) {
-    const ratio = window.devicePixelRatio || 1;
+    const scale = renderScale();
+    const ratio = (window.devicePixelRatio || 1) * scale;
+    canvas.style.imageRendering = scale < 1 ? "pixelated" : "";
     const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
     const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
@@ -173,7 +174,7 @@ export function mountStack({ stack, counts }, store, send) {
     ctx.lineWidth = 1.2 * ratio;
     ctx.lineJoin = "round";
     ctx.shadowColor = c.cyan;
-    ctx.shadowBlur = glowBlur() * ratio;
+    ctx.shadowBlur = glowBlur("traffic") * ratio;
     ctx.beginPath();
     for (let i = 0; i < HISTORY; i += 1) {
       const slot = (h.next + i) % HISTORY;
@@ -209,5 +210,37 @@ export function mountStack({ stack, counts }, store, send) {
     else if (kind !== "message") render();
   });
   window.addEventListener("resize", () => { levelsDirty = true; });
+  render();
+}
+
+// -- the pane's header: the master mute and volume ----------------------------------
+//
+// Neither is a pref: they are the server's audio state, and live here, not in
+// the config sheet (phase G decision 3). The mute silences everything and
+// keeps the volume and the picked feed as they were. Like a slider in the
+// sheet, a frame from the server does not move the volume while it has the
+// focus.
+
+function debounce(fn, ms) {
+  let timer = 0;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
+
+export function mountVolume({ mute, volume, volumeValue }, store, send) {
+  mute.addEventListener("click", () => send({ t: "master_mute", on: !store.state.muted }));
+  const sendVolume = debounce((value) => send({ t: "volume", value }), 60);
+  volume.addEventListener("input", () => {
+    volumeValue.textContent = `${volume.value}%`;
+    sendVolume(Number(volume.value) / 100);
+  });
+  function render() {
+    const { muted } = store.state;
+    // The label names the control and stays; aria-pressed says its state.
+    mute.setAttribute("aria-pressed", String(muted));
+    if (document.activeElement === volume) return;
+    volume.value = String(Math.round(store.state.volume * 100));
+    volumeValue.textContent = `${volume.value}%`;
+  }
+  store.subscribe((kind) => { if (kind === "all" || kind === "volume") render(); });
   render();
 }

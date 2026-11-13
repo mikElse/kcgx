@@ -120,8 +120,11 @@ class Cockpit:
                 f"the quietest muted feed gives up its place."
             )
 
-    def reconcile_streams(self) -> None:
-        """Park and connect feeds until the slots match slots.plan().
+    def reconcile_streams(self, *, announce: bool = True) -> list:
+        """Park and connect feeds until the slots match slots.plan(), and
+        return the sessions parked or started, in stack order. Each is
+        announced, unless `announce` is False and the caller says it once
+        with its own changes.
 
         Parking first, so the stream count never goes over the limit even
         for the moment between the two: that moment is a connection LiveATC
@@ -137,6 +140,7 @@ class Cockpit:
                 activity_of=lambda s: s.activity,
             )
         }
+        changed = set()
         for session in self._sessions:
             # Also parks a feed never started, so it says "parked" rather
             # than sitting on "starting" for a start that is not coming.
@@ -144,11 +148,16 @@ class Cockpit:
                 session.connected or session.state != "parked"
             ):
                 session.park()
-                self._emit(FEED, session)
+                changed.add(id(session))
+                if announce:
+                    self._emit(FEED, session)
         for session in self._sessions:
             if not session.connected and id(session) in wanted:
                 session.start()
-                self._emit(FEED, session)
+                changed.add(id(session))
+                if announce:
+                    self._emit(FEED, session)
+        return [s for s in self._sessions if id(s) in changed]
 
     def _refuse_over_limit(self, session) -> bool:
         """Warn and return True if unmuting `session` would need a slot
@@ -199,6 +208,34 @@ class Cockpit:
         self._mark_solo()
         for s in self._sessions:
             self._emit(FEED, s)
+        self._reorder_now()
+        return True
+
+    def select(self, ident: str) -> bool:
+        """Make `ident` the one audible feed, as a radio button does.
+
+        Any solo is cancelled: choosing what to hear is a new intent, as a
+        mute by hand is. Never over the stream limit, since one feed is
+        audible after. Returns False, and changes and says nothing, when
+        the feed is unknown or already the only one audible.
+        """
+        session = self.session(ident)
+        if session is None:
+            return False
+        audible = [s for s in self._sessions if not s.muted]
+        if audible == [session] and not self.solo.active:
+            return False
+        before = {id(s): (s.muted, s.soloed) for s in self._sessions}
+        self.solo.cancel()
+        for s in self._sessions:
+            s.muted = s is not session
+        self._mark_solo()
+        # Parks before it starts, so a parked feed takes the slot of another.
+        streamed = {id(s) for s in self.reconcile_streams(announce=False)}
+        # One frame for each feed changed, by the mix or by its stream.
+        for s in self._sessions:
+            if id(s) in streamed or before[id(s)] != (s.muted, s.soloed):
+                self._emit(FEED, s)
         self._reorder_now()
         return True
 

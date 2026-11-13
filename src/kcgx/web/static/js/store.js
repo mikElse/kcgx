@@ -15,6 +15,7 @@ export function createStore() {
     feeds: new Map(), // ident -> feed view
     order: [], // idents, stack order
     volume: 1,
+    muted: false, // the master mute, which keeps the volume (phase G decision 3)
     audioOk: true,
     // kcgx.prefs.DEFAULTS, until the first snapshot brings the server's.
     prefs: {
@@ -149,6 +150,7 @@ export function createStore() {
         state.feeds = new Map(frame.feeds.map((f) => [f.ident, f]));
         state.order = frame.feeds.map((f) => f.ident);
         state.volume = frame.volume;
+        state.muted = Boolean(frame.muted);
         state.audioOk = frame.audio_ok;
         state.prefs = { ...state.prefs, ...(frame.prefs || {}) };
         state.log = frame.log.slice(-200);
@@ -192,6 +194,7 @@ export function createStore() {
         break;
       case "volume":
         state.volume = frame.value;
+        state.muted = Boolean(frame.muted);
         emit("volume");
         break;
       case "prefs": {

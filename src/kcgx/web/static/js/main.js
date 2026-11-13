@@ -5,13 +5,13 @@ import { createStore } from "./store.js";
 import { connect } from "./connection.js";
 import { bindTheme, forget } from "./theme.js";
 import { bindFrames } from "./frames.js";
-import { mountStack } from "./stack.js";
+import { mountStack, mountVolume } from "./stack.js";
 import { mountStatus } from "./status.js";
 import { mountLamps } from "./lamps.js";
 import { mountLog } from "./log.js";
 import { mountRadar } from "./radar/index.js";
 import { mountTracks } from "./tracks.js";
-import { mountAirportSheet, mountConfigSheet, mountShutdownSheet, mountVolume } from "./sheets.js";
+import { mountAirportSheet, mountConfigSheet, mountShutdownSheet } from "./sheets.js";
 
 const $ = (id) => document.getElementById(id);
 const store = createStore();
@@ -77,7 +77,8 @@ const raised = {
 // The teletype is mounted whether or not it shows, so it is whole when it does.
 const teletype = mountLog($("log"), store);
 const log = { say(text) { teletype.say(text); raised.show(text); } };
-mountStack({ stack: $("stack"), counts: $("freq-counts") }, store, send);
+mountStack({ stack: $("stack") }, store, send);
+mountVolume({ mute: $("master-mute"), volume: $("volume"), volumeValue: $("volume-value") }, store, send);
 mountStatus({
   icao: $("icao"), name: $("airport-name"), where: $("airport-where"), zulu: $("zulu"), local: $("local"),
 }, store);
@@ -91,7 +92,6 @@ const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,
 );
 const configSheet = mountConfigSheet({ sheet: $("config-sheet") }, store, send);
-mountVolume({ volume: $("volume"), volumeValue: $("volume-value") }, store, send);
 const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, () => {
   store.setShutdown();
   link.stop();

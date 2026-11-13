@@ -94,6 +94,9 @@ class Mixer:
         # `ambient`: rebinding a float is atomic under CPython and a gain
         # that lands one block late is not observable.
         self.volume = float(volume)
+        # The master mute (phase G decision 3): silence out, the volume kept
+        # as it was, and every channel still metering. Read like `volume`.
+        self.master_muted = False
         self._ambient_enabled = bool(ambient_enabled)
         # Floored at one block: a capacity below the callback's own read
         # size starves on every single block, which is silence, not audio.
@@ -205,7 +208,8 @@ class Mixer:
             np.copyto(out[:block, 1], dry)
         # Master volume, before the clip so turning it up cannot push the
         # sum past full scale. `out=` because the callback allocates nothing.
-        np.multiply(out, self.volume, out=out)
+        # The master mute is a gain of nothing, applied the same way.
+        np.multiply(out, 0.0 if self.master_muted else self.volume, out=out)
         np.clip(out, -1.0, 1.0, out=out)
 
     # -- the device ----------------------------------------------------

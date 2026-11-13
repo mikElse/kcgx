@@ -205,7 +205,10 @@ The first six are the ones most worth the owner's eye before work starts.
     In the one-column layout (under 1100 px) there is no grip; collapse still
     works.
 19. **Feed titles lose the airport's ICAO, IATA and city as whole words**,
-    anywhere in the title, case-insensitive, with spaces tidied. If nothing
+    anywhere in the title, with spaces, dashes and empty brackets tidied.
+    The city and the airport's name match in any case; the ICAO and IATA
+    codes only in capitals, after the city, since many codes are words
+    (`LAS` in "Las Vegas", `SAN` in "San Diego", `AND`). If nothing
     would be left, the title stays as it was. A setting (`short_names`) turns
     it off.
 20. **The airport picker is 840 px wide** (50 % over 560), fixed height

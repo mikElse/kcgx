@@ -22,6 +22,7 @@ from typing import Any
 from kcgx import protocol
 from kcgx.airports import Airport, find
 from kcgx.hub import Hub
+from kcgx.names import short_feed_name
 from kcgx.prefs import defaults, merge, write_prefs
 from kcgx.radar import Fetch, Radar, fetch_adsb_lol
 from kcgx.state import write_airport
@@ -173,7 +174,11 @@ class Station:
         """Act on one parsed message from a page (see protocol.parse_client)."""
         kind = message["t"]
         cockpit = self.cockpit
-        if kind == "mute":
+        if kind == "select":
+            cockpit.select(message["ident"])
+        elif kind == "master_mute":
+            self.set_master_mute(message["on"])
+        elif kind == "mute":
             cockpit.toggle_mute(message["ident"])
         elif kind == "solo":
             cockpit.toggle_solo(message["ident"])
@@ -190,7 +195,14 @@ class Station:
 
     def set_volume(self, value: float) -> None:
         self.mixer.volume = float(value)
-        self.hub.broadcast(protocol.volume_frame(self.mixer.volume))
+        self.hub.broadcast(protocol.volume_frame(self.mixer.volume, self._master_muted()))
+
+    def set_master_mute(self, on: bool) -> None:
+        """Silence everything, or end the silence. The volume and which feed
+        is picked stay as they were (phase G decision 3); like the volume,
+        it is audio state and not a pref, so it is not remembered."""
+        self.mixer.master_muted = bool(on)
+        self.hub.broadcast(protocol.volume_frame(self.mixer.volume, self._master_muted()))
 
     def set_prefs(self, changes: dict) -> None:
         """Any settings from kcgx.prefs.SCHEMA, already validated by the
@@ -198,9 +210,14 @@ class Station:
         changing two cells both land. Remembered, and sent to every page so
         all tabs agree. A new range also reaches the radar, which sends its
         own frame."""
+        short_names = self.prefs["short_names"]
         self.prefs = merge(self.prefs, changes)
         self._remember_prefs(self.prefs)
         self.hub.broadcast(protocol.prefs_frame(self.prefs))
+        if self.prefs["short_names"] != short_names:
+            # Every title changes with it.
+            for session in self.cockpit.sessions:
+                self.hub.broadcast(protocol.feed_frame(session, self._title))
         if self.prefs["range_nm"] != self.radar.range_nm:
             self.radar.set_range(self.prefs["range_nm"])
 
@@ -233,11 +250,27 @@ class Station:
             loading=self.loading,
             sessions=self.cockpit.sessions,
             volume=self.mixer.volume,
+            muted=self._master_muted(),
             max_streams=self.cockpit.max_streams,
             audio_ok=not getattr(self.mixer, "failed", False),
             log=self.hub.log,
             prefs=self.prefs,
             radar=self.radar.frame(),
+            title_of=self._title,
+        )
+
+    def _master_muted(self) -> bool:
+        # The demo's mixer has no master mute until one is set.
+        return bool(getattr(self.mixer, "master_muted", False))
+
+    def _title(self, session: Any) -> str:
+        """The feed's name as the page shows it: without the airport's code,
+        city or name when `short_names` is on (kcgx.names)."""
+        airport = self.airport
+        if not self.prefs["short_names"] or airport is None:
+            return session.name
+        return short_feed_name(
+            session.name, icao=airport.icao, iata=airport.iata, name=airport.name, where=airport.where,
         )
 
     # -- shutting down -----------------------------------------------------
@@ -267,11 +300,11 @@ class Station:
 
     def _on_change(self, kind: str, payload: Any) -> None:
         if kind == FEED:
-            self.hub.broadcast(protocol.feed_frame(payload))
+            self.hub.broadcast(protocol.feed_frame(payload, self._title))
         elif kind == ORDER:
             self.hub.broadcast(protocol.order_frame(payload))
         elif kind == ADDED:
-            self.hub.broadcast(protocol.added_frame(payload))
+            self.hub.broadcast(protocol.added_frame(payload, self._title))
         elif kind == MESSAGE:
             self.hub.note(payload)
 
@@ -282,7 +315,7 @@ class Station:
 
     def _session_changed(self, session: Any) -> None:
         if self._current(session):
-            self.hub.broadcast(protocol.feed_frame(session))
+            self.hub.broadcast(protocol.feed_frame(session, self._title))
 
     def _session_warned(self, session: Any, message: str) -> None:
         if self._current(session):

@@ -20,6 +20,7 @@ from kcgx.protocol import (
     parse_client,
     prefs_frame,
     snapshot,
+    volume_frame,
 )
 from squelch.feeds import Feed
 
@@ -54,6 +55,7 @@ def test_a_feed_view_carries_everything_a_row_shows():
         "ident": "kpdx3_twr",
         "label": "Tower (Both)",
         "name": "Tower (Both)",
+        "title": "Tower (Both)",
         "state": "live",
         "muted": False,
         "soloed": False,
@@ -61,6 +63,36 @@ def test_a_feed_view_carries_everything_a_row_shows():
         "connected": True,
         "chatter": 0.341,
     }
+
+
+def test_a_feed_view_takes_its_title_from_the_station():
+    view = feed_view(two()[0], lambda session: session.name.upper())
+    assert view["name"] == "Tower (Both)"
+    assert view["title"] == "TOWER (BOTH)"
+
+
+def test_the_volume_frame_carries_the_master_mute():
+    assert volume_frame(0.456) == {"t": "volume", "value": 0.46, "muted": False}
+    assert volume_frame(0.5, True) == {"t": "volume", "value": 0.5, "muted": True}
+
+
+def test_a_snapshot_carries_the_master_mute_and_the_titles():
+    frame = snapshot(
+        airport=None, icao="KPDX", loading=False, sessions=two(), volume=0.5,
+        muted=True, max_streams=7, audio_ok=True, log=[],
+        title_of=lambda session: "T " + session.feed.ident,
+    )
+    assert frame["muted"] is True and frame["volume"] == 0.5
+    assert [f["title"] for f in frame["feeds"]] == ["T kpdx3_twr", "T kpdx3_gnd"]
+
+
+def test_a_snapshot_is_not_muted_unless_told():
+    frame = snapshot(
+        airport=None, icao="KPDX", loading=False, sessions=two(), volume=1,
+        max_streams=7, audio_ok=True, log=[],
+    )
+    assert frame["muted"] is False
+    assert [f["title"] for f in frame["feeds"]] == [f["name"] for f in frame["feeds"]]
 
 
 def test_an_airport_view_from_the_dataset():
@@ -141,11 +173,16 @@ def test_encoding_is_compact_and_keeps_unicode():
 # -- page to server --------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["mute", "solo", "ambient", "open_feed"])
+@pytest.mark.parametrize("kind", ["select", "mute", "solo", "ambient", "open_feed"])
 def test_ident_actions_parse(kind):
     assert parse_client(json.dumps({"t": kind, "ident": "kpdx3_twr"})) == {
         "t": kind, "ident": "kpdx3_twr",
     }
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_master_mute_parses(on):
+    assert parse_client(json.dumps({"t": "master_mute", "on": on})) == {"t": "master_mute", "on": on}
 
 
 def test_input_parses():
@@ -308,6 +345,12 @@ def test_a_setting_is_named_exactly():
         '{"t": "volume", "value": true}',
         '{"t": "volume", "value": NaN}',
         '{"t": "volume", "value": Infinity}',
+        '{"t": "select"}',
+        '{"t": "select", "ident": "KPDX3_TWR"}',
+        '{"t": "master_mute"}',
+        '{"t": "master_mute", "on": 1}',
+        '{"t": "master_mute", "on": "true"}',
+        '{"t": "master_mute", "on": null}',
     ],
 )
 def test_anything_else_is_refused(text):
