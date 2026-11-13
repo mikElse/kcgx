@@ -208,6 +208,8 @@ def test_a_subset_from_a_page_is_put_in_schema_order_without_repeats():
         ("range_nm", 251),
         ("range_nm", 40.0),
         ("range_nm", "40"),
+        ("range_nm", 45),  # off its steps of 10
+        ("poll_secs", 17),
         ("scan_size", True),
         ("box_width", 0),
         ("tag_fields", ["CALLSIGN", "COLOUR"]),
@@ -251,7 +253,7 @@ def test_glow_the_choice_is_an_unknown_setting_now():
 
 
 def test_one_bad_pref_refuses_the_whole_message():
-    with pytest.raises(BadMessage, match="^range_nm must be a whole number from 10 to 250$"):
+    with pytest.raises(BadMessage, match="^range_nm must be a whole number from 10 to 250 in steps of 10$"):
         parse_client('{"t":"prefs","palette":"MONO","range_nm":1000}')
 
 

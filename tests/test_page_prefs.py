@@ -21,6 +21,9 @@ INDEX_HTML = WEB / "index.html"
 SHEETS_JS = WEB / "static" / "js" / "sheets.js"
 COCKPIT_CSS = WEB / "static" / "cockpit.css"
 
+# The settings the sheet never has a control for: the tracks pane binds them
+# itself, its collapse button and its grip (phase G Task 9).
+PANE_BOUND = frozenset({"tracks_open", "tracks_pct"})
 # Until phase G Task 2: the round two settings (phase G Task 1) are in the
 # schema but not yet in the sheet; Task 2 gives each its control and empties
 # this. Every check below holds for every other setting, as strictly as ever,
@@ -33,11 +36,11 @@ UNTIL_TASK_2 = frozenset({
     "map", "label_min", "label_max", "tag_px", "follow_nm", "info_box",
     "tail_secs", "tail_alpha", "tail_alpha_min", "tail_alpha_max", "tail_gs_low", "tail_gs_high",
     "ground_mode", "ground_gs", "ground_alt", "ground_min", "ground_alpha",
-    "track_cols", "track_sort", "track_desc", "sort_floor", "tracks_open", "tracks_pct",
+    "track_cols", "track_sort", "track_desc", "sort_floor",
     "short_names",
 })
 # The settings the sheet has a control for, in schema order.
-ON_THE_PAGE = {key: spec for key, spec in SCHEMA.items() if key not in UNTIL_TASK_2}
+ON_THE_PAGE = {key: spec for key, spec in SCHEMA.items() if key not in UNTIL_TASK_2 | PANE_BOUND}
 
 # The settings table in the plan: the words beside each control.
 ROWS = {
@@ -158,11 +161,19 @@ def test_every_setting_has_exactly_one_control_and_no_control_is_for_anything_el
 
 def test_the_settings_waiting_for_a_control_are_all_in_the_schema():
     assert UNTIL_TASK_2 <= set(SCHEMA)
+    assert PANE_BOUND <= set(SCHEMA)
+    assert not UNTIL_TASK_2 & PANE_BOUND
 
 
+# Until phase G Task 2: strict, so it fails the moment the sheet has a control
+# for every setting but the pane's, and UNTIL_TASK_2 must then be emptied.
 @pytest.mark.xfail(strict=True, reason="until phase G Task 2: the round two settings have no controls yet")
 def test_every_setting_has_a_control(sheet):
-    assert sorted(c["key"] for c in sheet.controls) == sorted(SCHEMA)
+    assert sorted(c["key"] for c in sheet.controls) == sorted(set(SCHEMA) - PANE_BOUND)
+
+
+def test_the_pane_bound_settings_have_no_control_in_the_sheet(sheet):
+    assert not PANE_BOUND & {c["key"] for c in sheet.controls}
 
 
 def test_the_controls_are_in_the_config_sheet_in_the_schemas_order(sheet):
@@ -193,11 +204,9 @@ def test_a_numbers_slider_has_the_schemas_range(sheet, key):
     attrs = found["attrs"]
     assert found["tag"] == "input" and attrs.get("type") == "range"
     assert (int(attrs["min"]), int(attrs["max"])) == (spec.low, spec.high)
-    # Whole steps that land on both ends and on the default, so the slider
-    # can show every value it starts at and send only whole numbers.
-    step = int(attrs.get("step", "1"))
-    assert step >= 1
-    assert (spec.high - spec.low) % step == 0 and (spec.default - spec.low) % step == 0
+    # The schema's own step, so the slider offers exactly the values the
+    # server takes; it lands on both ends and on the default (test_prefs).
+    assert int(attrs.get("step", "1")) == spec.step
 
 
 def test_the_range_moves_in_steps_of_ten(sheet):

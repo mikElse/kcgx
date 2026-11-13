@@ -53,15 +53,23 @@ class Flag:
 
 @dataclass(frozen=True)
 class Number:
-    """A whole number from `low` to `high`. true is not 1, and 3.0 is not 3."""
+    """A whole number from `low` to `high`, `step` apart counting from `low`.
+    true is not 1, and 3.0 is not 3."""
 
     low: int
     high: int
     default: int
+    step: int = 1
 
     def check(self, value: Any) -> int:
-        if isinstance(value, bool) or not isinstance(value, int) or not self.low <= value <= self.high:
-            raise ValueError(f"must be a whole number from {self.low} to {self.high}")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not self.low <= value <= self.high
+            or (value - self.low) % self.step
+        ):
+            steps = f" in steps of {self.step}" if self.step != 1 else ""
+            raise ValueError(f"must be a whole number from {self.low} to {self.high}{steps}")
         return value
 
 
@@ -194,7 +202,7 @@ MAP = Table(
 SCHEMA: dict[str, Kind] = {
     # General
     "boot_anim": Flag(True),
-    "ui_zoom": Number(50, 200, 100),  # %
+    "ui_zoom": Number(50, 200, 100, step=5),  # %
     "font": Choice(FONTS, "CLASSIC"),
     "font_px": Number(10, 20, 13),
     "clock_24h": Flag(True),
@@ -212,14 +220,14 @@ SCHEMA: dict[str, Kind] = {
     # 0.45 a frame does at 60 Hz (0.55 ** (19 / 16.7) is a half).
     "burn_in": Number(0, 100, 19),
     "fps_max": Number(15, 120, 60),  # 120 is the display's own rate
-    "poll_secs": Number(15, 120, 15),  # adsb.lol: no more than one request every 15 s
+    "poll_secs": Number(15, 120, 15, step=5),  # adsb.lol: no more than one request every 15 s
     "motion": Choice(("GLIDE", "STEP"), "GLIDE"),
     "view_ease": Choice(("OFF", "QUICK", "SMOOTH"), "QUICK"),
     "zoom_speed": Number(25, 400, 100),  # % of the phase F wheel rate
     "lamps": Flag(False),
     "teletype": Flag(False),
     # Traffic
-    "range_nm": Number(10, 250, 40),
+    "range_nm": Number(10, 250, 40, step=10),  # as its slider has, since phase F
     "tag_fields": Subset(TAG_FIELDS, ("CALLSIGN", "ALT")),
     "box_items": Subset(BOX_ITEMS, ()),
     "box_fill": Number(0, 100, 70),  # %
@@ -232,7 +240,7 @@ SCHEMA: dict[str, Kind] = {
     "tag_px": Number(10, 28, 16),  # px
     "follow_nm": Number(1, 50, 10),
     "info_box": Flag(True),
-    "tail_secs": Number(0, 600, 180),
+    "tail_secs": Number(0, 600, 180, step=15),
     "tail_alpha": Number(0, 100, 95),  # %
     "tail_alpha_min": Number(0, 100, 35),
     "tail_alpha_max": Number(0, 100, 95),
@@ -240,7 +248,7 @@ SCHEMA: dict[str, Kind] = {
     "tail_gs_high": Number(0, 600, 250),  # kt
     "ground_mode": Choice(("SHOW", "FADE", "HIDE"), "FADE"),
     "ground_gs": Number(0, 50, 5),  # kt
-    "ground_alt": Number(0, 5000, 0),  # ft above sea level; 0 is GND only
+    "ground_alt": Number(0, 5000, 0, step=100),  # ft above sea level; 0 is GND only
     "ground_min": Number(0, 30, 2),  # minutes
     "ground_alpha": Number(0, 100, 25),  # %
     # Tracks
@@ -315,12 +323,19 @@ def merge(prefs: dict, changes: dict) -> dict:
 
 def migrate(stored: dict) -> dict:
     """A file from before phase G: its `glow` (OFF, LOW or FULL) becomes the
-    three glow numbers, each unless the file has that one already."""
+    three glow numbers, each unless the file has that one already, and one
+    its check accepts: a bad one would be dropped and leave the default."""
     glow = stored.get("glow")
     if not isinstance(glow, str) or glow.upper() not in OLD_GLOW:
         return stored
     level = OLD_GLOW[glow.upper()]
-    return {**{key: level for key in GLOW_KEYS}, **stored}
+    out = dict(stored)
+    for key in GLOW_KEYS:
+        try:
+            SCHEMA[key].check(stored[key])
+        except (KeyError, ValueError):
+            out[key] = level
+    return out
 
 
 def defaults() -> dict:

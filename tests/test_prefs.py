@@ -132,7 +132,7 @@ def test_the_defaults_are_the_plans_tables():
 def test_the_schema_is_the_plans_tables():
     # General
     assert SCHEMA["boot_anim"] == Flag(True)
-    assert SCHEMA["ui_zoom"] == Number(50, 200, 100)
+    assert SCHEMA["ui_zoom"] == Number(50, 200, 100, step=5)
     assert SCHEMA["font"] == Choice(("CLASSIC", "B612", "SHARETECH", "PLEX", "JETBRAINS", "VT323", "SYSTEM"), "CLASSIC")
     assert SCHEMA["font_px"] == Number(10, 20, 13)
     assert SCHEMA["clock_24h"] == Flag(True)
@@ -147,14 +147,14 @@ def test_the_schema_is_the_plans_tables():
     assert SCHEMA["aa"] == Choice(("OFF", "ON", "SUPER"), "ON")
     assert SCHEMA["burn_in"] == Number(0, 100, 19)
     assert SCHEMA["fps_max"] == Number(15, 120, 60)
-    assert SCHEMA["poll_secs"] == Number(15, 120, 15)
+    assert SCHEMA["poll_secs"] == Number(15, 120, 15, step=5)
     assert SCHEMA["motion"] == Choice(("GLIDE", "STEP"), "GLIDE")
     assert SCHEMA["view_ease"] == Choice(("OFF", "QUICK", "SMOOTH"), "QUICK")
     assert SCHEMA["zoom_speed"] == Number(25, 400, 100)
     assert SCHEMA["lamps"] == Flag(False)
     assert SCHEMA["teletype"] == Flag(False)
     # Traffic
-    assert SCHEMA["range_nm"] == Number(10, 250, 40)
+    assert SCHEMA["range_nm"] == Number(10, 250, 40, step=10)  # as its slider, since phase F
     assert SCHEMA["tag_fields"] == Subset(
         ("CALLSIGN", "TYPE", "SQWK", "ALT", "GS", "TRK", "DIST"), ("CALLSIGN", "ALT")
     )
@@ -179,7 +179,7 @@ def test_the_schema_is_the_plans_tables():
     assert SCHEMA["tag_px"] == Number(10, 28, 16)
     assert SCHEMA["follow_nm"] == Number(1, 50, 10)
     assert SCHEMA["info_box"] == Flag(True)
-    assert SCHEMA["tail_secs"] == Number(0, 600, 180)
+    assert SCHEMA["tail_secs"] == Number(0, 600, 180, step=15)
     assert SCHEMA["tail_alpha"] == Number(0, 100, 95)
     assert SCHEMA["tail_alpha_min"] == Number(0, 100, 35)
     assert SCHEMA["tail_alpha_max"] == Number(0, 100, 95)
@@ -187,7 +187,7 @@ def test_the_schema_is_the_plans_tables():
     assert SCHEMA["tail_gs_high"] == Number(0, 600, 250)
     assert SCHEMA["ground_mode"] == Choice(("SHOW", "FADE", "HIDE"), "FADE")
     assert SCHEMA["ground_gs"] == Number(0, 50, 5)
-    assert SCHEMA["ground_alt"] == Number(0, 5000, 0)
+    assert SCHEMA["ground_alt"] == Number(0, 5000, 0, step=100)
     assert SCHEMA["ground_min"] == Number(0, 30, 2)
     assert SCHEMA["ground_alpha"] == Number(0, 100, 25)
     # Tracks
@@ -254,6 +254,26 @@ def test_a_number_is_a_whole_number_in_range():
     for bad in (1, 9, True, 3.0, 3.5, "3", None):
         with pytest.raises(ValueError, match="must be a whole number from 2 to 8"):
             spec.check(bad)
+
+
+def test_a_number_moves_in_whole_steps_from_its_low_end():
+    assert Number(2, 8, 3).step == 1
+    spec = Number(15, 120, 15, step=5)
+    assert [spec.check(v) for v in (15, 20, 115, 120)] == [15, 20, 115, 120]
+    for bad in (16, 119, 10, 125, 20.0, True, "20"):
+        with pytest.raises(ValueError, match="^must be a whole number from 15 to 120 in steps of 5$"):
+            spec.check(bad)
+    # The steps count from `low`, not from 0.
+    assert Number(1, 21, 1, step=10).check(11) == 11
+    with pytest.raises(ValueError, match="in steps of 10"):
+        Number(1, 21, 1, step=10).check(10)
+
+
+def test_every_numbers_step_lands_on_both_ends_and_its_default():
+    for key, spec in SCHEMA.items():
+        if isinstance(spec, Number):
+            assert spec.step >= 1, key
+            assert (spec.high - spec.low) % spec.step == 0 and (spec.default - spec.low) % spec.step == 0, key
 
 
 def test_a_subset_comes_back_without_repeats_in_schema_order():
@@ -383,6 +403,17 @@ def test_a_stored_glow_number_beats_the_migration(tmp_path):
     assert (prefs["glow_map"], prefs["glow_traffic"], prefs["glow_text"]) == (10, 75, 75)
 
 
+@pytest.mark.parametrize("bad", [150, "bad", -1, 33.0, True, None])
+def test_a_stored_glow_number_that_fails_its_check_does_not_block_the_migration(tmp_path, bad):
+    prefs = stored(tmp_path, {"glow": "FULL", "glow_map": bad})
+    assert (prefs["glow_map"], prefs["glow_traffic"], prefs["glow_text"]) == (75, 75, 75)
+
+
+def test_a_bad_stored_glow_number_beside_a_good_one(tmp_path):
+    prefs = stored(tmp_path, {"glow": "LOW", "glow_map": "bad", "glow_traffic": 150, "glow_text": 90})
+    assert (prefs["glow_map"], prefs["glow_traffic"], prefs["glow_text"]) == (33, 33, 90)
+
+
 def test_a_stored_glow_that_is_not_one_of_the_three_is_ignored(tmp_path):
     assert stored(tmp_path, {"glow": "BRIGHT"}) == DEFAULTS
     assert stored(tmp_path, {"glow": 2}) == DEFAULTS
@@ -444,6 +475,11 @@ def test_unknown_values_and_keys_fall_back_to_the_defaults(tmp_path):
         ("glow_map", 101),
         ("aa", "MAX"),
         ("poll_secs", 10),  # adsb.lol asks for no more than one request every 15 s
+        ("poll_secs", 17),  # off its steps of 5
+        ("ui_zoom", 101),
+        ("tail_secs", 100),
+        ("ground_alt", 150),
+        ("range_nm", 45),
         ("track_cols", ["CALLSIGN", "COLOUR"]),
         ("map", "on"),
     ],
@@ -471,6 +507,14 @@ def test_one_bad_value_falls_back_without_disturbing_the_others(tmp_path, key, b
     }
     assert stored(tmp_path, good) == {**DEFAULTS, **good}
     assert stored(tmp_path, {**good, key: bad}) == {**DEFAULTS, **good, key: DEFAULTS[key]}
+
+
+def test_a_hand_edited_range_off_its_steps_of_ten_reads_as_the_default(tmp_path):
+    """Phase F read a hand edited 45 as 45 NM. The range moves in tens now,
+    as its slider always has, so 45 is not a setting: it falls back to 40."""
+    assert stored(tmp_path, {"range_nm": 45})["range_nm"] == 40
+    assert stored(tmp_path, {"range_nm": 50})["range_nm"] == 50
+    assert clean({"range_nm": 45, "ui_zoom": 105, "poll_secs": 16}) == {"ui_zoom": 105}
 
 
 def test_a_subset_is_stored_without_repeats_in_schema_order(tmp_path):

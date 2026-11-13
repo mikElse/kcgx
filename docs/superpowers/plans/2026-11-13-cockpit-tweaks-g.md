@@ -825,7 +825,10 @@ names drop), `tests/test_radar.py`, `tests/test_demo.py`
   the socket was connected and the radar drawing beneath it (the HUD's age is
   written before the fade). In AMBER the scene's tower pixels are the AMBER
   palette's `--white`, not WOPR's. A second page on the same server gets no
-  cover. `boot_anim: false` and reduced motion each give no cover. The page
+  cover. `boot_anim: false` and reduced motion each give no cover. The cover
+  is decided once, from the first snapshot's `boot && boot_anim`: a later
+  `prefs` frame turning `boot_anim` on shows no cover (test it; the page
+  fixture resets prefs to DEFAULTS, where it is on). The page
   shows nothing at all (black, no WOPR flash) until the first snapshot or
   1.5 s, whichever is first.
 - [ ] **`boot-scene.js`**: the path data from `vector-scene.jsx:3-43`
