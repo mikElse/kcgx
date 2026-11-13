@@ -4,6 +4,8 @@ trail (decision 8, Task 11), and the HUD's two readouts (Task 11)."""
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from page_fixtures import *  # noqa: F403  (fixtures and helpers)
@@ -666,3 +668,235 @@ def test_the_hud_counts_the_tracks_drawn_not_those_hidden(page):
     page.wait_for_function(said, arg="4 TRACKS")
     focus_on(page, None)
     page.wait_for_function(said, arg="3 TRACKS")
+
+
+# -- glow, burn-in, motion and render scale (Task 4e); culling (Task 5b) ------
+
+PARTS = """() => { if (!window.radarParts) window.kcgx.radar.hook((radar) => { window.radarParts = radar; }); }"""
+
+
+def test_the_traffic_glows_by_its_own_number_and_not_the_maps(page):
+    """glow_traffic, 0 to 100, is 0 to 12 px of blur about the aircraft's
+    lines and tags; glow_map leaves them as they are."""
+    wait_for_traffic(page)
+    draw(page, display="OFF", tag_fields=[], glow_traffic=50, glow_map=0)
+    assert radar_debug(page)["blur_traffic"] == pytest.approx(6)
+    block = chevron_block(page, -10, 5)
+    hold_traffic(page, plane("a1", -10, 5))
+    frames(page)
+    glowing = light_of(page, block)
+    draw(page, glow_traffic=0, glow_map=100)
+    assert radar_debug(page)["blur_traffic"] == 0
+    bare = light_of(page, block)
+    assert bare > 0
+    assert glowing > bare * 1.2, "the traffic does not glow by glow_traffic"
+    draw(page, glow_traffic=0, glow_map=0)
+    assert light_of(page, block) == bare, "the map's glow reaches the traffic"
+
+
+SIZED = """() => { const c = document.getElementById("radar"); const r = c.getBoundingClientRect();
+    return { box: [r.width, r.height], dpr: devicePixelRatio, rendering: getComputedStyle(c).imageRendering,
+             all: window.radarParts.canvases.map((x) => [x.width, x.height]) }; }"""
+
+
+@pytest.mark.parametrize("aa, k", [("OFF", 0.5), ("ON", 1), ("SUPER", 2)])
+def test_every_radar_canvas_is_drawn_at_the_render_scale(page, aa, k):
+    """OFF half the display's resolution, scaled up stepped; ON its own;
+    SUPER twice. A click still lands where it is pointed."""
+    wait_for_traffic(page)
+    page.evaluate(PARTS)
+    draw(page, aa=aa)
+    sized = page.evaluate(SIZED)
+    want = [round(side * sized["dpr"] * k) for side in sized["box"]]
+    assert len(sized["all"]) >= 4  # the radar, the map, the aircraft's lines, their tags
+    assert sized["all"] == [want] * len(sized["all"])
+    assert (sized["rendering"] == "pixelated") == (aa == "OFF")
+    hold_traffic(page, plane("a1", -10, 5))
+    hit = hit_of(page, "a1")
+    left, top = page.eval_on_selector("#radar", "e => { const r = e.getBoundingClientRect(); return [r.left, r.top]; }")
+    per = sized["dpr"] * k
+    page.mouse.click(left + hit["x"] / per, top + hit["y"] / per)
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+
+
+def test_the_radar_is_drawn_at_the_pages_zoom_in_either_engine(page):
+    """UI zoom 150: the canvas is drawn at 1.5 times its CSS size (WebKit's
+    getBoundingClientRect leaves the zoom out), so it is as sharp as ever."""
+    wait_for_traffic(page)
+    page.evaluate(PARTS)
+    set_prefs(page, ui_zoom=150)
+    page.wait_for_function("getComputedStyle(document.querySelector('.page')).zoom === '1.5'")
+    frames(page)
+    width, height, css_w, css_h, dpr = page.evaluate(
+        "() => { const c = document.getElementById('radar'); return [c.width, c.height, c.offsetWidth, c.offsetHeight, devicePixelRatio]; }"
+    )
+    assert width == pytest.approx(css_w * 1.5 * dpr, abs=1.5)
+    assert height == pytest.approx(css_h * 1.5 * dpr, abs=1.5)
+    assert {tuple(s) for s in page.evaluate("() => window.radarParts.canvases.map((x) => [x.width, x.height])")} == {(width, height)}
+
+
+# The moving layer's fade, measured: a mark put on it after a frame, and
+# what is left of it after the frames of the next `ms` or so, [ms, alpha]
+# for each of `count` marks. Read once at the end of each, as a reading
+# every frame would slow WebKit's frames down while it measured them.
+FADING = """async ([count, ms]) => {
+    const trace = window.radarParts.trace.getContext("2d");
+    const runs = [];
+    let at = null;
+    const off = window.kcgx.radar.hook(() => ({ post(now) {
+        if (at !== null) {
+            if (now - at < ms) return;
+            runs.push([now - at, trace.getImageData(2, 2, 1, 1).data[3]]);
+            at = null;
+            return;
+        }
+        trace.save(); trace.setTransform(1, 0, 0, 1, 0, 0); trace.globalCompositeOperation = "source-over";
+        trace.fillStyle = "#ffffff"; trace.fillRect(0, 0, 6, 6); trace.restore();
+        at = now;
+    } }));
+    while (runs.length < count) await new Promise(requestAnimationFrame);
+    off();
+    return runs;
+}"""
+
+
+def half_life(page, ms=55, count=11):
+    """The fade's half-life in ms, the median of `count` marks' (0: gone in
+    a frame)."""
+    lives = [0 if a == 0 else t * math.log(0.5) / math.log(a / 255) for t, a in page.evaluate(FADING, [count, ms])]
+    return sorted(lives)[len(lives) // 2]
+
+
+def test_burn_in_is_a_half_life_in_ms_whatever_the_frame_rate(page):
+    """The default, 19 ms, is what fading 0.45 a frame at 60 Hz was."""
+    wait_for_traffic(page)
+    page.evaluate(PARTS)
+    hold_traffic(page)
+    lives = {}
+    for fps in (60, 30):
+        set_prefs(page, fps_max=fps)
+        frames(page, 40)  # the fade goes by the mean of the last 30 frames
+        lives[fps] = half_life(page)
+    assert lives[60] == pytest.approx(19, rel=0.15)
+    # Within a fifth (a frame at 30 is 33 ms): WebKit's frames come 10 ms
+    # apart, so its marks are read up to 10 ms off the frames' mean.
+    assert lives[30] == pytest.approx(lives[60], rel=0.2)
+    set_prefs(page, fps_max=60, burn_in=80)
+    frames(page, 40)
+    assert half_life(page, ms=200) == pytest.approx(80, rel=0.15)
+    # 0: nothing persists; the next frame has cleared the mark.
+    draw(page, burn_in=0)
+    assert half_life(page) == 0
+
+
+def test_burn_in_0_leaves_no_trace_of_a_moved_aircraft(page):
+    wait_for_traffic(page)
+    draw(page, tag_fields=[], tail_secs=0, burn_in=0)  # no tail back to where it was
+    before = chevron_block(page, -10, 5)
+    hold_traffic(page, plane("a1", -10, 5))
+    frames(page)
+    assert light_of(page, before) > 0
+    hold_traffic(page, plane("a1", 10, -5))
+    frames(page, 1)
+    assert light_of(page, before) == 0
+
+
+# whereNow and the hit, read in the same frame.
+WHERE_NOW = """hex => import('/static/js/radar/moving.js').then((m) => {
+    const hit = window.kcgx.radar.debug().hits.find((h) => h.hex === hex);
+    return [m.whereNow(window.radarParts, hex), hit ? [hit.x, hit.y] : null]; })"""
+
+
+def test_step_draws_an_aircraft_where_it_was_polled_and_glide_where_it_has_got_to(page):
+    wait_for_traffic(page)
+    page.evaluate(PARTS)
+    set_prefs(page, motion="STEP")
+    home, s = scale(page)
+    hold_traffic(page, plane("a1", -10, 5, trk=90, gs=400, age=10))
+    first = hit_of(page, "a1")
+    assert first["x"] == pytest.approx(home["x"] - 10 * s, abs=1.5)
+    assert first["y"] == pytest.approx(home["y"] - 5 * s, abs=1.5)
+    frames(page, 20)
+    later = hit_of(page, "a1")
+    assert (later["x"], later["y"]) == (first["x"], first["y"])
+    assert page.evaluate(WHERE_NOW, "a1") == [[later["x"], later["y"]]] * 2
+    # GLIDE: reckoned on from there, 400 kt for 10 s and more, east.
+    draw(page, motion="GLIDE")
+    glide = hit_of(page, "a1")
+    assert glide["x"] - first["x"] > 0.8 * s
+    where, hit = page.evaluate(WHERE_NOW, "a1")
+    assert where == hit
+    assert page.evaluate(WHERE_NOW, "zz") == [None, None]
+
+
+def test_under_step_a_tail_is_cut_by_the_newest_reports_time(page):
+    """The newest report is 20 s old: a 60 s tail runs back to 80 s ago,
+    two thirds of the way from 40 s ago's position to 100 s ago's, and holds
+    still between polls."""
+    wait_for_traffic(page)
+    draw(page, motion="STEP", tail_secs=60)
+    ago(page, "a1", 500, 300, 100, 40, 20)
+    frames(page)
+    _, s = scale(page)
+    hit = hit_of(page, "a1")
+    trail = hit["trail"]
+    # The chevron (its newest report), that report, 40 s ago's, and the cut.
+    assert len(trail) == 4
+    y40, y100 = hit["y"] + s, hit["y"] + 2 * s
+    assert trail[-1][1] == pytest.approx(y40 + (y100 - y40) * 2 / 3, abs=0.1 * s)
+    frames(page, 20)
+    assert hit_of(page, "a1")["trail"] == trail
+
+
+CULLED = "() => window.kcgx.radar.debug().culled"
+
+
+def test_traffic_off_the_screen_is_not_drawn_unless_its_tag_or_tail_reaches_in(page):
+    wait_for_traffic(page)
+    draw(page, **glow(0), display="OFF", tag_fields=["CALLSIGN"])
+    width, height = canvas_size(page)
+    ratio = page.evaluate("devicePixelRatio")
+    home, s = scale(page)
+    mid = north_of(page, height / 2)
+    # a1 far off; a2 just off the left edge, its tag reaching in; a3 gone
+    # off the bottom, its tail running back up into the screen.
+    a2 = plane("a2", east_of(page, -30 * ratio), mid, label="ABCDEFGHIJ")
+    below = north_of(page, height + 60 * ratio)
+    hold_traffic(page, plane("a1", 120, 0), a2, plane("a3", 0, below + 20, trk=180))
+    hold_traffic(page, plane("a1", 120, 0), a2, plane("a3", 0, below, trk=180))
+    frames(page)
+    culled = page.evaluate(CULLED)
+    assert culled["aircraft"] == ["a1"]
+    hits = {h["hex"]: h for h in radar_debug(page)["hits"]}
+    assert hits["a1"]["tag"] is None and hits["a3"]["tag"] is None
+    tag = hits["a2"]["tag"]
+    assert tag is not None and tag["x"] < width
+    assert light_of(page, {"x": 0, "y": tag["y"], "w": tag["x"] + tag["w"], "h": tag["h"]}, "tags") > 0
+    # The tail, on the screen above the bottom edge.
+    x = home["x"]
+    assert light_of(page, {"x": x - 3 * ratio, "y": height - 20 * ratio, "w": 6 * ratio, "h": 20 * ratio}) > 0
+    assert culled["segments"] >= 1  # its part off the screen
+
+
+def test_a_tail_follows_the_view_and_the_polls(page):
+    """The tails' points are kept from frame to frame: a pan moves them with
+    the map, and a poll adds to them."""
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    draw(page, tail_secs=180)
+    ago(page, "a1", 60, 40, 20, 0, nm=2)
+    frames(page)
+    before = hit_of(page, "a1")["trail"]
+    width, height = canvas_size(page)
+    pan(page, *on_screen(page, width * 0.8, height * 0.8))
+    radar_drawn(page)
+    frames(page)
+    after = hit_of(page, "a1")["trail"]
+    assert len(after) == len(before)
+    dx, dy = after[0][0] - before[0][0], after[0][1] - before[0][1]
+    assert dx == pytest.approx(120 * ratio, abs=2) and dy == pytest.approx(60 * ratio, abs=2)
+    for (x0, y0), (x1, y1) in zip(before, after):
+        assert (x1 - x0, y1 - y0) == pytest.approx((dx, dy), abs=0.01)
+    hold_traffic(page, plane("a1", -10, 10, trk=0, gs=None, age=0))
+    frames(page)
+    assert len(hit_of(page, "a1")["trail"]) == len(after) + 1
