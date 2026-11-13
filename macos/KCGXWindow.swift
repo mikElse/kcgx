@@ -103,6 +103,8 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     private var loaded = false  // and the cockpit's page is in the window
     private var asked = 0  // counts shows and starts, so a late answer to an old one is dropped
     private var ended = false  // the page shut the cockpit down itself
+    private var launcher: Process?  // bin/kcgx, while it is starting the cockpit
+    private var leaving = false  // Quit was asked for while it was, and waits for it
 
     init(direct: Target?) {
         self.direct = direct
@@ -121,6 +123,10 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         reveal()
         if let direct {
             show(direct)
+        } else if openedByLink() {
+            // The link has reached application(_:open:) or is on its way
+            // there. Whatever it turns out to ask for, a launch by a link
+            // never starts the cockpit.
         } else if notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true {
             if !linked { start() }
         } else {
@@ -129,6 +135,14 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
             // all, this was an ordinary launch.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if !self.linked { self.start() } }
         }
+    }
+
+    /// Whether what opened the app was a link. While the app finishes
+    /// launching, the current Apple event is the one that launched it, and
+    /// a link comes as a GetURL.
+    private func openedByLink() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        return event.eventClass == AEEventClass(kInternetEventClass) && event.eventID == AEEventID(kAEGetURL)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -153,14 +167,37 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
 
     /// Quit stops the cockpit, unless the page has stopped it already.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if let showing, !ended {
-            var request = URLRequest(url: showing.api("shutdown"), timeoutInterval: 2)
-            request.httpMethod = "POST"
-            let answered = DispatchSemaphore(value: 0)
-            session.dataTask(with: request) { _, _, _ in answered.signal() }.resume()
-            _ = answered.wait(timeout: .now() + 2)
+        if let showing, !ended { stop(showing) }
+        guard launcher != nil else { return .terminateNow }
+        // The launcher is still starting a cockpit. There is nothing to
+        // stop until it has, and left to itself that cockpit would come up
+        // playing with no window. So Quit waits for the launcher, and
+        // start() then stops what it started.
+        leaving = true
+        say("STOPPING THE COCKPIT")
+        // The launcher gives a server 20 s to answer (kcgx.launcher). Past
+        // that something is stuck, and Quit still has to quit.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            if let launcher = self.launcher, launcher.isRunning { launcher.terminate() }
+            self.leave()
         }
-        return .terminateNow
+        return .terminateLater
+    }
+
+    /// Ask the cockpit on `target`'s port to shut down, and give it 2 s to answer.
+    private func stop(_ target: Target) {
+        var request = URLRequest(url: target.api("shutdown"), timeoutInterval: 2)
+        request.httpMethod = "POST"
+        let answered = DispatchSemaphore(value: 0)
+        session.dataTask(with: request) { _, _, _ in answered.signal() }.resume()
+        _ = answered.wait(timeout: .now() + 2)
+    }
+
+    /// Let a Quit that was waiting for the launcher go ahead.
+    private func leave() {
+        guard leaving else { return }
+        leaving = false
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     // -- the window ------------------------------------------------------------
@@ -307,19 +344,23 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     }
 
     /// Opened with no link: start the cockpit as `kcgx --no-open` would,
-    /// then show the one it recorded.
+    /// then show the one it recorded. One launcher at a time: a second
+    /// beside the first (Reload while it says STARTING) could start a
+    /// second server.
     private func start() {
+        guard launcher == nil else { return }
         asked += 1
         let mine = asked
         let repo = Bundle.main.object(forInfoDictionaryKey: "KCGXRepo") as? String ?? ""
-        let launcher = URL(fileURLWithPath: repo).appendingPathComponent("bin/kcgx")
-        guard !repo.isEmpty, FileManager.default.isExecutableFile(atPath: launcher.path) else {
-            say("NO KCGX AT \(launcher.path)\n\nRUN setup.sh AGAIN TO REBUILD THIS WINDOW.")
+        let script = URL(fileURLWithPath: repo).appendingPathComponent("bin/kcgx")
+        guard !repo.isEmpty, FileManager.default.isExecutableFile(atPath: script.path) else {
+            say("NO KCGX AT \(script.path)\n\nRUN setup.sh AGAIN TO REBUILD THIS WINDOW.")
             return
         }
         say("STARTING THE COCKPIT")
         let process = Process()
-        process.executableURL = launcher
+        launcher = process
+        process.executableURL = script
         process.arguments = ["--no-open"]
         var environment = ProcessInfo.processInfo.environment
         if let path = Bundle.main.object(forInfoDictionaryKey: "KCGXPath") as? String, !path.isEmpty {
@@ -343,7 +384,15 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
             } catch {
                 said = error.localizedDescription
             }
-            DispatchQueue.main.async { if mine == self.asked { self.started(status, said) } }
+            DispatchQueue.main.async {
+                self.launcher = nil
+                if self.leaving {  // Quit has been waiting for this
+                    if status == 0, let target = self.recorded() { self.stop(target) }
+                    self.leave()
+                } else if mine == self.asked {
+                    self.started(status, said)
+                }
+            }
         }
     }
 
@@ -373,7 +422,8 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         return Target(port: String(port))
     }
 
-    /// View > Reload. With no cockpit in the window, it starts one.
+    /// View > Reload. With no cockpit in the window, it starts one, unless
+    /// one is being started already.
     @objc private func reload(_ sender: Any?) {
         if showing != nil {
             loaded = false  // so that a reload that fails says so

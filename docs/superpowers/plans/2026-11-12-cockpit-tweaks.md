@@ -780,6 +780,13 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
   beside the destination and moved into place once it is signed, so a
   failed build leaves the app that was there and a rebuild never writes
   into a running one.
+  *After review, 2026-11-12:* the destination is the app itself and
+  whatever is there is replaced, so `build.sh ~/Applications` would have
+  emptied that folder. Now the destination must be named `something.app`
+  (a trailing slash is allowed), and anything already there must be a
+  bundle this script built, known by `com.kcgx.cockpit` in its
+  `Info.plist`. Anything else is refused with exit 2 before a file is
+  made, compiled or removed.
 - [x] **`Info.plist.in`:** bundle id `com.kcgx.cockpit`, name KCGX,
   `CFBundleURLTypes` registering `kcgx`, `NSAppTransportSecurity` with
   `NSAllowsLocalNetworking`, and two keys of our own filled at build:
@@ -818,6 +825,12 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
     `KCGX --port N` shows the cockpit on that port as a link would, and
     `KCGX --check <link>` prints the page a link would show, or
     `refused`, and exits before there is an app or a window.
+  - *After review:* one launcher at a time. While `bin/kcgx --no-open` is
+    starting the cockpit, Reload does nothing (a second launcher could
+    start a second server), and Quit says STOPPING THE COCKPIT, waits for
+    the launcher (30 s at most; the launcher's own limit is 20 s), then
+    shuts down the cockpit it recorded and exits. Before, Quit left at
+    once and the cockpit came up with no window.
 - [x] **Security:** any web page can open a `kcgx://` link. So the scheme
   carries a port and a fragment and nothing else, the host is always
   `127.0.0.1`, the port must be an integer from 1024 to 65535, and the
@@ -830,15 +843,28 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
   that is refused, or whose port does not answer as kcgx, never starts the
   cockpit, even if it is what opened the app. The `ended` message is taken
   only from the main frame of the page on the port being shown.
+  *After review:* "even if it is what opened the app" rested on the link
+  arriving before the app had finished launching, or within a second of
+  it. It now also rests on what launched the app: if the launch's Apple
+  event is a GetURL, the cockpit is not started, however late the link
+  itself arrives. The page's side: a fragment may hold an escape that
+  is no character (`airport=%E9`), which the window hands on as it came;
+  `fromLink` in `main.js` threw on it and the rest of the page never ran.
+  It now takes such a query as written.
 - [x] `main.js`, in `onEnded`:
   `window.webkit?.messageHandlers?.kcgx?.postMessage("ended")`. A no-op
   in a browser.
-- [x] No unit tests reach Swift. Check by hand, and list each row of the
+- [ ] No unit tests reach Swift. Check by hand, and list each row of the
   table above as checked in the "Built" section.
+  **Open, and the owner's:** the rows are listed there, most of them as
+  not seen. Nobody has looked at the window, and the app as committed
+  has never been started. The thirteen steps under "For the owner" are
+  this check; do them, at least 1, 2, 4, 8, 9 and 10, before Task 12
+  makes `kcgx` depend on the window.
   *Changed, 2026-11-12:* one kind does. `tests/test_window.py` builds the
   real app into the test's own folder (on a Mac with `swiftc`; elsewhere
   it skips), checks `codesign --verify`, and asks the binary with
-  `--check` what 43 links would show: 13 it shows, 30 it refuses. The
+  `--check` what 44 links would show: 14 it shows, 30 it refuses. The
   same file drives `build.sh` with a fake `swiftc` and `codesign`, which
   runs anywhere. Nothing in it opens a window or registers the app. The
   page's half of `ended` is tested in both browsers (`test_page.py`).
@@ -1084,11 +1110,17 @@ plain one; the saved frame applied by name before the window is centred;
 Reload reloading whatever page of the server is showing; and a reload
 after a crash of the page leaving out the fragment.
 
+The review's fixes came after those, and are likewise compiled, signed
+and unstarted: a launch by a link told by its Apple event; Reload ignored
+while the launcher runs; and Quit waiting for the launcher. **So nothing
+below the `--check` tests is verified at run time.** What the window does
+is known from one 13 s run of an earlier build and from reading.
+
 **The table, row by row.**
 
 | Event | Checked |
 |---|---|
-| `kcgx://show?port=...&fragment=...` | What a link may ask for: by the tests, through `--check` (13 links shown, 30 refused). The health check and the load: by the one run, which takes the same path after the link is read. **Not seen:** a link arriving through `open`; the fragment set on a page already loaded, with the socket kept; the window shown and brought to the front. |
+| `kcgx://show?port=...&fragment=...` | What a link may ask for: by the tests, through `--check` (14 links shown, 30 refused). The health check and the load: by the one run, which takes the same path after the link is read. **Not seen:** a link arriving through `open`; the fragment set on a page already loaded, with the socket kept; the window shown and brought to the front. |
 | launched with no URL | **Not run:** it would have started the real cockpit. Its parts were: `bin/kcgx --demo --no-open`, read through a pipe as the app reads it, ends the pipe in 1 s and leaves the server running, and `server.json` holds the port as the app expects. |
 | red close button | **Not seen.** |
 | Quit | **Not seen.** The run was ended with a kill, which is not a Quit: the demo server was still answering after it, as it should be. |
@@ -1123,6 +1155,14 @@ like (`macos/build.sh` alone builds `~/Applications/KCGX.app`), start
     `kcgx status` still says not running.
 11. Last, with real feeds: quit everything and open KCGX from the Dock or
     Spotlight. It says STARTING THE COCKPIT, then shows it, with audio.
+12. The same again, and Cmd-R while it says STARTING THE COCKPIT: nothing
+    happens, and `kcgx status` afterwards names one server.
+13. The same again, and Cmd-Q while it says STARTING THE COCKPIT: it says
+    STOPPING THE COCKPIT, exits once the cockpit has come up (30 s at
+    most), and `kcgx status` says not running.
+
+Step 10 is the one that matters most: a refused link must never start the
+cockpit, and no test can open the app through a link.
 
 **Two things found on the way.**
 
@@ -1135,7 +1175,8 @@ like (`macos/build.sh` alone builds `~/Applications/KCGX.app`), start
   unlisted for the ten minutes of the suite. The copies the tests build
   under the system's temporary folder were never listed. Once setup has built
   `~/Applications/KCGX.app`, a copy left in `build/` is a second app with
-  the same identifier; delete it.
+  the same identifier; delete it. *After review:* the one this task left
+  in `build/` has been deleted; it was not listed by `lsregister -dump`.
 - *There is already a `~/Desktop/KCGX.app`* on this Mac (identifier
   `com.mikelse.kcgx`, not from this plan, left alone). It does not claim
   the `kcgx:` scheme, but Spotlight will offer two apps called KCGX.

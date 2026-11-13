@@ -2469,3 +2469,26 @@ def test_a_link_with_a_query_opens_the_search_with_it_typed(browser, server):
     assert page.input_value("#airport-query") == "san francisco"
     page.wait_for_selector("#airport-results .choice:has-text('KSFO')")
     page.close()
+
+
+def test_a_link_with_a_query_that_cannot_be_decoded_still_opens_the_search(browser, server):
+    # %E9 alone is no character, and KCGX.app hands a link's escapes on as
+    # they came (Target.legal in macos/KCGXWindow.swift). The page takes the
+    # text as written, and the rest of it runs.
+    page = browser.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(server + "/#airport=%E9")
+    page.wait_for_selector("#airport-sheet[open]")
+    assert page.input_value("#airport-query") == "%E9"
+    assert page.evaluate("location.hash") == ""
+    page.wait_for_selector(".feed.expanded")  # the page went on to connect and draw
+    assert page.evaluate("typeof window.kcgx") == "object"
+    # The same link, to a page that is already open (the window sets the fragment).
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#airport-sheet", state="hidden")
+    page.evaluate("location.hash = 'airport=100%'")
+    page.wait_for_selector("#airport-sheet[open]")
+    assert page.input_value("#airport-query") == "100%"
+    assert errors == [], errors
+    page.close()

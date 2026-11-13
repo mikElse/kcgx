@@ -25,7 +25,7 @@ BUILD = REPO / "macos" / "build.sh"
 TEMPLATE = REPO / "macos" / "Info.plist.in"
 
 # Everything build.sh itself runs, beside swiftc and codesign.
-TOOLS = ("bash", "env", "dirname", "basename", "mkdir", "rm", "mv", "sed", "uname")
+TOOLS = ("bash", "env", "dirname", "basename", "mkdir", "rm", "mv", "sed", "grep", "uname")
 
 # Writes the "binary" where -o says, and records how it was asked.
 FAKE_SWIFTC = """#!/bin/sh
@@ -58,12 +58,12 @@ def tools(tmp_path, **scripts) -> Path:
     return folder
 
 
-def build(tmp_path, *arguments, path, home=None):
+def build(tmp_path, *arguments, path, home=None, cwd=None):
     calls = tmp_path / "calls"
     calls.mkdir(exist_ok=True)
     env = {"PATH": str(path), "HOME": str(home or tmp_path / "home"), "CALLS": str(calls)}
     return subprocess.run(
-        [shutil.which("bash"), str(BUILD), *arguments], env=env, cwd=tmp_path,
+        [shutil.which("bash"), str(BUILD), *arguments], env=env, cwd=cwd or tmp_path,
         capture_output=True, text=True, timeout=60,
     )
 
@@ -144,25 +144,98 @@ def test_build_goes_to_applications_in_the_home_folder_unless_told(tmp_path):
 
 def test_a_rebuild_replaces_the_whole_bundle(tmp_path):
     app = tmp_path / "KCGX.app"
-    stale = app / "Contents" / "Resources" / "old.txt"
-    stale.parent.mkdir(parents=True)
-    stale.write_text("from a build before")
     path = tools(tmp_path, swiftc=FAKE_SWIFTC, codesign=FAKE_CODESIGN)
     assert build(tmp_path, str(app), path=path).returncode == 0
+    stale = app / "Contents" / "Resources" / "old.txt"
+    stale.parent.mkdir()
+    stale.write_text("from the build before")
+    result = build(tmp_path, str(app), path=path)
+    assert result.returncode == 0, result.stderr
     assert not stale.exists()
     assert (app / "Contents" / "MacOS" / "KCGX").exists()
+    assert len(said(tmp_path, "swiftc")) == 2
+
+
+def test_a_destination_written_as_a_folder_is_the_app_all_the_same(tmp_path):
+    app = tmp_path / "out" / "KCGX.app"
+    path = tools(tmp_path, swiftc=FAKE_SWIFTC, codesign=FAKE_CODESIGN)
+    for _ in range(2):  # a first build, and one over it
+        result = build(tmp_path, f"{app}/", path=path)
+        assert result.returncode == 0, result.stderr
+    assert (app / "Contents" / "MacOS" / "KCGX").exists()
+    assert sorted(p.name for p in app.parent.iterdir()) == ["KCGX.app"]
+
+
+def earlier(app: Path, identifier: str = "com.kcgx.cockpit") -> Path:
+    """A bundle at `app` from a build before, with `identifier` in its
+    Info.plist; returns its binary."""
+    binary = app / "Contents" / "MacOS" / "KCGX"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("the build before")
+    (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": identifier}))
+    return binary
 
 
 def test_a_build_that_fails_says_so_and_leaves_the_app_that_was_there(tmp_path):
     app = tmp_path / "out" / "KCGX.app"
-    binary = app / "Contents" / "MacOS" / "KCGX"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("the build before")
+    binary = earlier(app)
     result = build(tmp_path, str(app), path=tools(tmp_path, swiftc=FAILS, codesign=FAKE_CODESIGN))
     assert result.returncode != 0
     assert "no such module" in result.stderr
     assert binary.read_text() == "the build before"
     assert sorted(p.name for p in app.parent.iterdir()) == ["KCGX.app"]  # and nothing half built
+
+
+def kept(folder: Path) -> list[str]:
+    return sorted(str(p.relative_to(folder)) for p in folder.rglob("*") if p.is_file())
+
+
+@pytest.mark.parametrize("written", ["Applications", "Applications/", "Applications//", "Documents/", "."])
+def test_a_folder_given_as_the_destination_is_refused_and_left_alone(tmp_path, written):
+    # The destination is the app itself. `build.sh ~/Applications` is an easy
+    # slip, and build.sh replaces whatever is at its destination.
+    home = tmp_path / "home"
+    (home / "Applications" / "Other.app" / "Contents").mkdir(parents=True)
+    (home / "Applications" / "Other.app" / "Contents" / "Info.plist").write_text("another app")
+    (home / "Documents").mkdir()
+    (home / "Documents" / "thesis.txt").write_text("years of work")
+    before = kept(home)
+    path = tools(tmp_path, swiftc=FAKE_SWIFTC, codesign=FAKE_CODESIGN)
+    # Not joined by pathlib, which would tidy the trailing slash away.
+    result = build(tmp_path, written if written == "." else f"{home}/{written}", path=path, home=home, cwd=home)
+    assert result.returncode != 0
+    assert ".app" in result.stderr and "built" not in result.stdout
+    assert kept(home) == before
+    assert sorted(p.name for p in home.iterdir()) == ["Applications", "Documents"]  # nothing half built
+    assert not (tmp_path / "calls" / "swiftc").exists()  # nothing was compiled
+
+
+def test_an_app_that_is_not_this_one_is_refused_and_left_alone(tmp_path):
+    # Somebody else's KCGX.app, or anything else that happens to be there.
+    path = tools(tmp_path, swiftc=FAKE_SWIFTC, codesign=FAKE_CODESIGN)
+    another = tmp_path / "another" / "KCGX.app"
+    binary = earlier(another, "com.example.kcgx")
+    folder = tmp_path / "folder" / "KCGX.app"
+    folder.mkdir(parents=True)
+    (folder / "notes.txt").write_text("not an app at all")
+    file = tmp_path / "file" / "KCGX.app"
+    file.parent.mkdir()
+    file.write_text("a file by that name")
+    for destination in (another, folder, file):
+        result = build(tmp_path, str(destination), path=path)
+        assert result.returncode != 0, destination
+        assert "com.kcgx.cockpit" in result.stderr and "built" not in result.stdout
+        assert sorted(p.name for p in destination.parent.iterdir()) == ["KCGX.app"]
+    assert binary.read_text() == "the build before"
+    assert plist(another)["CFBundleIdentifier"] == "com.example.kcgx"
+    assert (folder / "notes.txt").read_text() == "not an app at all"
+    assert file.read_text() == "a file by that name"
+    assert not (tmp_path / "calls" / "swiftc").exists()
+
+
+def test_the_real_template_marks_a_bundle_as_one_a_rebuild_may_replace():
+    # build.sh knows its own bundles by this line of their Info.plist.
+    assert "<string>com.kcgx.cockpit</string>" in TEMPLATE.read_text()
 
 
 def test_a_bundle_that_cannot_be_signed_is_not_put_in_place(tmp_path):
@@ -237,6 +310,9 @@ def test_a_link_shows_a_port_on_this_machine_and_a_fragment(app, link, page):
     ("kcgx://show?port=8473&fragment=100%25", "100%25"),
     ("kcgx://show?port=8473&fragment=%2F%2Fevil.example%2F%3Fa%3Db", "//evil.example/?a=b"),
     ("kcgx://show?port=8473&fragment=caf%C3%A9", "caf%C3%A9"),
+    # An escape that is no character is handed on as it came; the page copes
+    # (test_a_link_with_a_query_that_cannot_be_decoded_still_opens_the_search).
+    ("kcgx://show?port=8473&fragment=airport%3D%25E9", "airport=%E9"),
 ])
 def test_whatever_the_fragment_holds_it_stays_a_fragment(app, link, fragment):
     assert check(app, link) == f"http://127.0.0.1:8473/#{fragment}"
