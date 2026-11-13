@@ -484,8 +484,12 @@ label.field-row { flex-wrap: nowrap; }
    height, or the page's least, less the padding), and the row is the pane
    and the gap above it. A percent and not vh: under UI zoom (CSS zoom on
    .page) Chromium scales vh and WebKit does not, where a percent of the page
-   is the same share of the window in both. This is first paint's, the default. */
-.page { --tracks-row: 24%; }
+   is the same share of the window in both. This is first paint's, the default.
+   minmax(0, ...): the row takes its percent only from what the other rows'
+   floors leave (the radar's own row's 48 px among them), so a percent too
+   tall for this window, as one set in a taller, makes the pane shorter and
+   never the page taller (tracks.js stops a drag and the keys there too). */
+.page { --tracks-row: minmax(0, 24%); }
 /* The grip is the pane's top 6 px, a strip of its own over the header. */
 .screen-tracks { padding-top: 6px; }
 .tracks-grip { position: absolute; top: 0; left: 0; right: 0; height: 6px; z-index: 3; cursor: row-resize; touch-action: none; }
@@ -500,9 +504,12 @@ label.field-row { flex-wrap: nowrap; }
 .screen-tracks.folded { padding-top: 0; }
 .screen-tracks.folded .tracks-body, .screen-tracks.folded .tracks-grip { display: none; }
 .screen-tracks.folded .tracks-fold svg { transform: rotate(180deg); }
-/* The teletype shares the row: its lines must not make the folded row taller. */
+/* The teletype shares the row: folded, it too is its title bar, its lines
+   hidden (tracks.js scrolls them to the last when the pane opens again), and
+   each title bar fills its screen, so the two are level whichever is taller. */
 @media not all and (max-width: 1100px) {
-  .page[data-tracks="folded"] > .screen-log { contain: size; }
+  .page[data-tracks="folded"] > .screen-log .log { display: none; }
+  .page[data-tracks="folded"] > .screen-log .screen-title, .screen-tracks.folded .screen-title { flex: 1 1 auto; }
 }
 /* In one column the rows are as tall as what is in them: no grip. */
 @media (max-width: 1100px) {

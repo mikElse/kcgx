@@ -420,84 +420,149 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
 //
 // The grip along the pane's top edge sets prefs.tracks_pct, the button in its
 // title bar prefs.tracks_open; both are settings, so every tab follows. A
-// drag shows here as it goes and is sent on release; nothing else changes
-// the page before the server answers. What they set is --tracks-row on
-// .page, the grid's last row: tracks_pct percent of the page's content box
-// (the window's height, or the page's least, less its padding), the row being
-// the pane and the gap above it; or, folded, as tall as the title bar.
+// drag shows here as it goes and is sent on release (Escape puts it back and
+// sends nothing); nothing else changes the page before the server answers.
+// What they set is --tracks-row on .page, the grid's last row: tracks_pct
+// percent of the page's content box (the window's height, or the page's
+// least, less its padding), the row being the pane and the gap above it; or,
+// folded, as tall as the title bar.
+//
+// The drag and the keys stay between two ends, read from the page as it is
+// laid out: at the most, what leaves the radar's own row its floor (the page
+// does not scroll); at the least, 10 % or what shows the header, the filter
+// row and two rows of the table, whichever is more. A percent set where the
+// window was taller is held to the first by the grid itself (cockpit.css).
 
 const PCT_LOW = 10;
 const PCT_HIGH = 80;
-const PCT_KEY = 2; // an arrow key's step
+const STEP = { ArrowUp: 2, ArrowDown: -2, PageUp: 10, PageDown: -10 }; // up for a taller pane, as dragging up makes it
+const RADAR_ROW_LEAST = 48; // px: the radar's own row's floor, minmax(48px, 1fr) in cockpit.css's .page rule
+const TABLE_ROWS_LEAST = 2; // rows of the table the pane always has room for
 
 function mountPane(pane, store, send) {
   const { state } = store;
   const page = pane.closest(".page");
   const grip = pane.querySelector("#tracks-grip");
   const fold = pane.querySelector("#tracks-fold");
-  let drag = null; // { id, y, from, perPct, pct } while the grip is held
+  const scroller = pane.querySelector("#tracks-scroll");
+  const thead = scroller.querySelector("thead");
+  const headRow = thead.querySelector("#tracks-head");
+  const body = scroller.querySelector("#tracks-body");
+  const log = page.querySelector(".screen-log .log");
+  let drag = null; // { id, y, from, perPct, low, high, pct } while the grip is held
   let dropped = null; // the percent sent on release, shown until the server answers
-  let askedPct = null; // the last an arrow key asked for, for the next to build on
+  let askedPct = null; // the last a key asked for, for the next to build on
   let askedOpen = null; // as for the fold button
+  let wasOpen = true;
 
-  const clampPct = (pct) => Math.min(PCT_HIGH, Math.max(PCT_LOW, pct));
   const pctNow = () => (drag ? drag.pct : dropped ?? state.prefs.tracks_pct);
+  // What was given connection.js and not dropped (it drops all while the socket is closed).
+  const sent = (message) => send(message) !== false;
+
+  // The page as laid out now, in its own px (offsetHeight and the computed
+  // tracks are in an element's own px in both engines, and the pane is in
+  // the page's): its content box, the percent the row shows, and the ends.
+  function measure() {
+    const style = getComputedStyle(page);
+    const content = page.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const tracks = style.gridTemplateRows.split(" ").map(parseFloat);
+    const row = tracks[tracks.length - 1];
+    const radar = tracks[3]; // bar, banner, status, then the radar's own
+    const most = ((row + Math.max(0, radar - RADAR_ROW_LEAST)) / content) * 100;
+    // The pane less its scroller, and the scroller's padding, header, filters and rows.
+    const pad = getComputedStyle(scroller);
+    const tr = body.querySelector("tr:not(.focused)") || body.firstElementChild || headRow;
+    const least = row - scroller.clientHeight + parseFloat(pad.paddingTop) + parseFloat(pad.paddingBottom)
+      + thead.offsetHeight + TABLE_ROWS_LEAST * tr.offsetHeight;
+    // Whole percents inside the ends (the setting is one), with a hair for rounding.
+    const low = Math.max(PCT_LOW, Math.ceil((least / content) * 100 - 0.05));
+    const high = Math.max(low, Math.min(PCT_HIGH, Math.floor(most + 0.05)));
+    return { content, shown: (row / content) * 100, low, high };
+  }
 
   function show() {
     const open = state.prefs.tracks_open !== false;
     const pct = pctNow();
-    page.style.setProperty("--tracks-row", open ? `${pct}%` : "min-content");
+    page.style.setProperty("--tracks-row", open ? `minmax(0, ${pct}%)` : "min-content");
     page.dataset.tracks = open ? "open" : "folded";
     pane.classList.toggle("folded", !open);
     fold.setAttribute("aria-expanded", String(open));
     fold.title = open ? "FOLD" : "UNFOLD";
     grip.setAttribute("aria-valuenow", String(Math.round(pct)));
+    // Folded, the teletype's lines are hidden, and a hidden scroller forgets
+    // where it was: open again, it shows the last, as it would have.
+    if (open && !wasOpen && log) log.scrollTop = log.scrollHeight;
+    wasOpen = open;
   }
 
   // The pointer moves in the window's px; a percent is of the page's content
-  // box, in its own px, which the page's zoom makes the window's.
+  // box, in its own px, which the page's zoom makes the window's. The drag
+  // moves from what the row shows, which is less than the setting when the
+  // setting is more than this window has room for.
   grip.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || drag) return;
     event.preventDefault();
-    const style = getComputedStyle(page);
-    const content = page.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    const from = pctNow();
-    drag = { id: event.pointerId, y: event.clientY, from, perPct: (content * zoomOf(page)) / 100, pct: from };
+    const { content, shown, low, high } = measure();
+    const pct = pctNow();
+    const from = shown < pct - 0.5 ? shown : pct;
+    drag = { id: event.pointerId, y: event.clientY, from, perPct: (content * zoomOf(page)) / 100, low, high, pct };
     grip.setPointerCapture(event.pointerId);
     grip.classList.add("dragging");
+    document.addEventListener("keydown", escape, true);
   });
   // A style written per move; the browser lays it out, and the radar's
   // canvas follows, once a frame however many moves come in it.
   grip.addEventListener("pointermove", (event) => {
     if (!drag || event.pointerId !== drag.id) return;
-    drag.pct = clampPct(drag.from + (drag.y - event.clientY) / drag.perPct);
+    drag.pct = Math.min(drag.high, Math.max(drag.low, drag.from + (drag.y - event.clientY) / drag.perPct));
     show();
   });
+  function endDrag() {
+    const { id } = drag;
+    drag = null;
+    grip.classList.remove("dragging");
+    document.removeEventListener("keydown", escape, true);
+    return id;
+  }
+  // Sent on release when it changed the setting. One that sends nothing
+  // (the same percent, or the socket closed) shows the server's value, not
+  // an earlier release's that the server may never answer.
   function release(event, keep) {
     if (!drag || event.pointerId !== drag.id) return;
     const pct = Math.round(drag.pct); // the setting is a whole percent
-    drag = null;
-    grip.classList.remove("dragging");
-    if (keep && pct !== state.prefs.tracks_pct) {
-      dropped = pct;
-      send({ t: "prefs", tracks_pct: pct });
-    }
+    endDrag();
+    dropped = keep && pct !== state.prefs.tracks_pct && sent({ t: "prefs", tracks_pct: pct }) ? pct : null;
+    if (dropped !== null) askedPct = null;
     show();
   }
   grip.addEventListener("pointerup", (event) => release(event, true));
   grip.addEventListener("lostpointercapture", (event) => release(event, true));
   grip.addEventListener("pointercancel", (event) => release(event, false));
-
-  // Up for a taller pane, as dragging up makes it.
-  grip.addEventListener("keydown", (event) => {
-    const step = { ArrowUp: PCT_KEY, ArrowDown: -PCT_KEY }[event.key];
-    if (!step || drag) return;
+  // Escape puts the pane back as it was before the drag, and lets the pointer go.
+  function escape(event) {
+    if (event.key !== "Escape" || !drag) return;
     event.preventDefault();
+    event.stopPropagation();
+    const id = endDrag();
+    if (grip.hasPointerCapture(id)) grip.releasePointerCapture(id);
+    show();
+  }
+
+  // Arrow keys by 2 %, Page Up and Down by 10, Home and End to the ends.
+  grip.addEventListener("keydown", (event) => {
+    if (drag || !(event.key in STEP || event.key === "Home" || event.key === "End")) return;
+    event.preventDefault();
+    const { low, high } = measure();
     const now = askedPct ?? pctNow();
-    const next = clampPct(now + step);
-    if (next === now) return;
-    askedPct = next;
-    send({ t: "prefs", tracks_pct: next });
+    const next = event.key === "Home" ? low : event.key === "End" ? high
+      : Math.min(high, Math.max(low, now + STEP[event.key]));
+    if (next !== now && sent({ t: "prefs", tracks_pct: next })) {
+      askedPct = next;
+      return;
+    }
+    if (next !== now) askedPct = null;
+    dropped = null;
+    show();
   });
 
   fold.addEventListener("click", () => {

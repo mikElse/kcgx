@@ -33,8 +33,11 @@ export function connect(store) {
   open();
 
   return {
+    // Whether it was sent: while the socket is closed, what is given is dropped.
     send(message) {
-      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(message));
+      return true;
     },
     stop() {
       stopped = true;

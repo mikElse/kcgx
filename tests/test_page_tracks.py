@@ -539,7 +539,12 @@ def test_dragging_the_top_edge_up_100_px_makes_tracks_100_px_taller_and_reaches_
     assert abs(after["freq"]["bottom"] - after["tracks"]["bottom"]) <= 1
 
 
-def test_the_drag_stops_at_10_and_80_percent(page):
+def test_in_a_tall_window_the_drag_stops_at_10_and_80_percent(page):
+    # Tall enough that 80 % leaves the other rows their room, and 10 % holds
+    # the header, the filter row and two rows of the table.
+    page.set_viewport_size({"width": 1440, "height": 1700})
+    hold_traffic(page, *THREE)
+    settle(page)
     content = content_px(page)
     spy_on_sends(page)
     x, _ = grab(page)
@@ -551,13 +556,242 @@ def test_the_drag_stops_at_10_and_80_percent(page):
     assert wait_for_sent(page) == [{"t": "prefs", "tracks_pct": 80}]
     pref_is(page, "tracks_pct", 80)
     x, _ = grab(page)
-    page.mouse.move(x, 898, steps=6)
+    page.mouse.move(x, 1698, steps=6)
     settle(page)
     row = window_box(page, ".screen-tracks")["height"] + 10
     assert abs(row - 0.1 * content) <= 2, (row, content)
     page.mouse.up()
     assert wait_for_sent(page, 2)[-1] == {"t": "prefs", "tracks_pct": 10}
     pref_is(page, "tracks_pct", 10)
+
+
+def radar_row(tab):
+    """The radar's own row, under the airport status's: the radar's bottom less the status's."""
+    shown = panes(tab)
+    return shown["radar"]["bottom"] - window_box(tab, ".screen-status")["bottom"]
+
+
+def no_overflow(tab, height, why):
+    assert tab.evaluate("document.documentElement.scrollHeight") <= height, why
+    assert tab.evaluate("document.documentElement.scrollWidth") <= tab.evaluate("innerWidth"), why
+    assert radar_row(tab) >= 48 - 1, (why, radar_row(tab))  # the radar row's floor (cockpit.css)
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1280, 720)])
+@pytest.mark.parametrize("lamps, teletype", [(False, False), (True, False), (False, True), (True, True)])
+def test_at_its_tallest_the_pane_leaves_the_other_rows_their_room(page, size, lamps, teletype):
+    width, height = size
+    page.set_viewport_size({"width": width, "height": height})
+    set_prefs(page, lamps=lamps, teletype=teletype)
+    settle(page)
+    content = content_px(page)
+    spy_on_sends(page)
+    x, _ = grab(page)
+    page.mouse.move(x, 2, steps=6)
+    settle(page)
+    no_overflow(page, height, "dragged")
+    # As tall as fits: the radar's row is at its floor, within a whole percent.
+    assert radar_row(page) <= 48 + content / 100 + 2, radar_row(page)
+    page.mouse.up()
+    most = wait_for_sent(page)[-1]["tracks_pct"]
+    assert most < 80, most
+    pref_is(page, "tracks_pct", most)
+    page.wait_for_selector(f"#tracks-grip[aria-valuenow='{most}']")
+    settle(page)
+    no_overflow(page, height, "released")
+    # End goes as far, and an arrow key no farther.
+    set_prefs(page, tracks_pct=24)
+    page.evaluate("window.sent = []")
+    page.focus("#tracks-grip")
+    page.keyboard.press("End")
+    assert wait_for_sent(page) == [{"t": "prefs", "tracks_pct": most}]
+    pref_is(page, "tracks_pct", most)
+    page.keyboard.press("ArrowUp")
+    page.keyboard.press("PageUp")
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.sent") == [{"t": "prefs", "tracks_pct": most}]
+    # A stored 80, from a taller window, overflows no window either.
+    set_prefs(page, tracks_pct=80)
+    settle(page)
+    no_overflow(page, height, "stored 80")
+
+
+@pytest.mark.parametrize("height", [900, 720])
+def test_at_its_shortest_the_pane_shows_the_header_the_filters_and_two_rows(page, height):
+    page.set_viewport_size({"width": 1440, "height": height})
+    hold_traffic(page, *THREE)
+    settle(page)
+    content = content_px(page)
+    spy_on_sends(page)
+    x, _ = grab(page)
+    page.mouse.move(x, height - 2, steps=6)
+    settle(page)
+
+    def two_rows_show():
+        scroller = window_box(page, "#tracks-scroll")
+        second = window_box(page, "#tracks-body tr:nth-child(2)")
+        head = window_box(page, "#tracks-head")
+        assert head["top"] >= scroller["top"] - 0.5, (head, scroller)
+        assert second["bottom"] <= scroller["bottom"] + 0.5, (second, scroller)
+        # And no more than a percent besides: the floor is theirs, not 10 %'s.
+        assert scroller["bottom"] - second["bottom"] <= content / 100 + 3, (second, scroller)
+
+    two_rows_show()
+    page.mouse.up()
+    least = wait_for_sent(page)[-1]["tracks_pct"]
+    assert least > 10, least
+    pref_is(page, "tracks_pct", least)
+    settle(page)
+    two_rows_show()
+    # An arrow key goes no lower; Home goes as low.
+    page.evaluate("window.sent = []")
+    page.focus("#tracks-grip")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("PageDown")
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.sent") == []
+    set_prefs(page, tracks_pct=50)
+    page.evaluate("window.sent = []")
+    page.keyboard.press("Home")
+    assert wait_for_sent(page) == [{"t": "prefs", "tracks_pct": least}]
+    pref_is(page, "tracks_pct", least)
+
+
+def test_page_keys_move_the_grip_10_percent_and_home_and_end_to_its_ends(page):
+    page.set_viewport_size({"width": 1440, "height": 1700})
+    hold_traffic(page, *THREE)
+    settle(page)
+    spy_on_sends(page)
+    page.focus("#tracks-grip")
+    page.keyboard.press("PageUp")
+    pref_is(page, "tracks_pct", 34)
+    page.keyboard.press("PageDown")
+    page.keyboard.press("PageDown")
+    pref_is(page, "tracks_pct", 14)
+    page.keyboard.press("End")
+    pref_is(page, "tracks_pct", 80)
+    page.keyboard.press("Home")
+    pref_is(page, "tracks_pct", 10)
+    page.wait_for_selector("#tracks-grip[aria-valuenow='10']")
+    assert [m["tracks_pct"] for m in page.evaluate("window.sent")] == [34, 24, 14, 80, 10]
+
+
+def test_escape_during_a_drag_puts_the_pane_back_and_sends_nothing(page):
+    before = panes(page)
+    spy_on_sends(page)
+    x, y = grab(page)
+    page.mouse.move(x, y - 100, steps=6)
+    settle(page)
+    assert panes(page)["tracks"]["height"] > before["tracks"]["height"] + 90
+    page.keyboard.press("Escape")
+    settle(page)
+    assert abs(panes(page)["tracks"]["height"] - before["tracks"]["height"]) <= 1
+    assert page.get_attribute("#tracks-grip", "aria-valuenow") == "24"
+    assert not page.eval_on_selector("#tracks-grip", "g => g.classList.contains('dragging')")
+    # The pointer is let go of: moving it and releasing changes nothing.
+    page.mouse.move(x, y - 200, steps=4)
+    page.mouse.up()
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.sent") == []
+    assert abs(panes(page)["tracks"]["height"] - before["tracks"]["height"]) <= 1
+    pref_is(page, "tracks_pct", 24)
+
+
+# What is sent goes nowhere: as if the server never answered.
+SWALLOW = "() => { window.sent = []; WebSocket.prototype.send = function (data) { window.sent.push(JSON.parse(data)); }; }"
+# The socket is closed, as connection.js sees it: it drops what it is given.
+CLOSE = """() => { window.readyState = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'readyState');
+                   Object.defineProperty(WebSocket.prototype, 'readyState', { configurable: true, get: () => 3 }); }"""
+REOPEN = "() => Object.defineProperty(WebSocket.prototype, 'readyState', window.readyState)"
+
+
+def drag_by(tab, dy):
+    x, y = grab(tab)
+    tab.mouse.move(x, y + dy, steps=6)
+    tab.mouse.up()
+    settle(tab)
+
+
+def test_a_release_that_sends_nothing_shows_the_server_s_value(page):
+    before = panes(page)["tracks"]["height"]
+    content = content_px(page)
+    # The socket closed: connection.js drops the release's message.
+    page.evaluate(CLOSE)
+    drag_by(page, -100)
+    assert page.get_attribute("#tracks-grip", "aria-valuenow") == "24"
+    assert abs(panes(page)["tracks"]["height"] - before) <= 1
+    page.evaluate(REOPEN)
+    # Sent and not answered, a release shows what it sent...
+    page.evaluate(SWALLOW)
+    drag_by(page, -100)
+    held = int(page.get_attribute("#tracks-grip", "aria-valuenow"))
+    assert held > 24 and page.evaluate("window.sent") == [{"t": "prefs", "tracks_pct": held}]
+    # ...until one at the server's value, which sends nothing and shows it.
+    drag_by(page, -(24 - held) * content / 100)
+    assert page.evaluate("window.sent") == [{"t": "prefs", "tracks_pct": held}]
+    assert page.get_attribute("#tracks-grip", "aria-valuenow") == "24"
+    assert abs(panes(page)["tracks"]["height"] - before) <= 1
+
+
+def test_a_key_that_sends_nothing_shows_the_server_s_value(page):
+    before = panes(page)["tracks"]["height"]
+    page.evaluate(SWALLOW)
+    # A release sent and not answered: the pane shows it, at the most.
+    x, _ = grab(page)
+    page.mouse.move(x, 2, steps=6)
+    page.mouse.up()
+    held = int(page.get_attribute("#tracks-grip", "aria-valuenow"))
+    assert held > 24
+    # An arrow key at the most sends nothing, and the server's value shows.
+    page.focus("#tracks-grip")
+    page.keyboard.press("ArrowUp")
+    assert page.evaluate("window.sent") == [{"t": "prefs", "tracks_pct": held}]
+    assert page.get_attribute("#tracks-grip", "aria-valuenow") == "24"
+    settle(page)
+    assert abs(panes(page)["tracks"]["height"] - before) <= 1
+    # Again from a release held, with the socket closed: the key's message is dropped.
+    drag_by(page, -100)
+    assert int(page.get_attribute("#tracks-grip", "aria-valuenow")) > 24
+    page.evaluate(CLOSE)
+    page.keyboard.press("ArrowUp")
+    assert page.get_attribute("#tracks-grip", "aria-valuenow") == "24"
+    page.evaluate(REOPEN)
+    # And what the dropped key asked for is not built on: the next asks for 26.
+    page.evaluate("window.sent = []")
+    page.keyboard.press("ArrowUp")
+    assert page.evaluate("window.sent") == [{"t": "prefs", "tracks_pct": 26}]
+
+
+@pytest.mark.parametrize("lines", [0, 40])
+def test_folded_with_the_teletype_both_title_bars_are_level_and_whole(page, lines):
+    set_prefs(page, teletype=True)
+    page.evaluate(
+        """n => { document.getElementById('log').replaceChildren();
+                  for (let i = 0; i < n; i++) window.kcgx.store.apply({t: 'message', z: '1200Z', text: 'line ' + i}); }""",
+        lines,
+    )
+    set_prefs(page, tracks_open=False)
+    page.wait_for_selector("#tracks-scroll", state="hidden")
+    settle(page)
+    shown = panes(page)
+    log_title = window_box(page, ".screen-log .screen-title")
+    tracks_title = window_box(page, ".screen-tracks .screen-title")
+    assert abs(log_title["top"] - tracks_title["top"]) <= 1, (log_title, tracks_title)
+    assert abs(log_title["bottom"] - tracks_title["bottom"]) <= 1, (log_title, tracks_title)
+    for title, pane in ((log_title, shown["log"]), (tracks_title, shown["tracks"])):
+        assert title["top"] >= pane["top"] - 0.5 and title["bottom"] <= pane["bottom"] + 0.5, (title, pane)
+    text = window_box(page, ".screen-log .title-text")
+    assert log_title["top"] - 0.5 <= text["top"] and text["bottom"] <= log_title["bottom"] + 0.5, (text, log_title)
+    assert abs(shown["log"]["bottom"] - shown["tracks"]["bottom"]) <= 1, shown
+    assert page.evaluate("document.documentElement.scrollHeight") <= 900
+    # Open again, the teletype shows its last line.
+    set_prefs(page, tracks_open=True)
+    page.wait_for_selector("#tracks-scroll", state="visible")
+    settle(page)
+    if lines:
+        last = window_box(page, "#log > :last-child")
+        log = window_box(page, "#log")
+        assert last["bottom"] <= log["bottom"] + 1 and last["top"] >= log["top"] - 1, (last, log)
 
 
 def test_the_grip_is_a_separator_and_arrow_keys_move_it_2_percent(page):
@@ -581,7 +815,9 @@ def test_the_grip_is_a_separator_and_arrow_keys_move_it_2_percent(page):
     pref_is(page, "tracks_pct", 22)
     page.wait_for_selector("#tracks-grip[aria-valuenow='22']")
     assert [m["tracks_pct"] for m in page.evaluate("window.sent")] == [26, 24, 22]
-    set_prefs(page, tracks_pct=80)
+    page.keyboard.press("End")
+    most = wait_for_sent(page, 4)[-1]["tracks_pct"]
+    pref_is(page, "tracks_pct", most)
     page.evaluate("window.sent = []")
     page.keyboard.press("ArrowUp")
     page.wait_for_timeout(200)
