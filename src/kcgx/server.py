@@ -217,10 +217,11 @@ def create_app(
             asyncio.create_task(_close(websocket, 1013))
 
         client = Client(websocket.send_text, on_evict=evicted)
-        # Queued before joining the hub, with no await between: the snapshot
-        # is always the first frame, and nothing is broadcast in between.
-        client.offer(protocol.encode(station.snapshot()))
-        hub.add(client)
+        # The snapshot is queued before the page joins the hub, with no await
+        # between, and says whether to play the boot animation (Hub.welcome):
+        # only ever to the cockpit, which connects to /ws?page=cockpit.
+        cockpit = websocket.query_params.get("page") == "cockpit"
+        hub.welcome(client, station.snapshot(), cockpit=cockpit)
         pump = asyncio.create_task(client.pump())
         try:
             while True:

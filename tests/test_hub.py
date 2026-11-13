@@ -134,3 +134,51 @@ async def test_the_log_is_capped():
 def test_zulu_is_hours_and_minutes_utc():
     assert zulu(0) == "0000Z"
     assert zulu(19 * 3600 + 55 * 60) == "1955Z"
+
+
+# -- the boot animation (phase G decision 1) -----------------------------------
+
+
+async def test_only_the_first_page_a_hub_welcomes_is_told_to_boot():
+    """Once per launch: the first page the server serves after it starts
+    plays the boot animation; every later one, a reconnect included, does not."""
+    hub = Hub()
+    first, _, _ = sink()
+    second, _, _ = sink()
+    hub.welcome(first, {"t": "snapshot", "boot": False}, cockpit=True)
+    hub.welcome(second, {"t": "snapshot"}, cockpit=True)
+    hub.remove(first)
+    again, _, _ = sink()  # the first page, reconnected
+    hub.welcome(again, {"t": "snapshot"}, cockpit=True)
+    assert [queued(c)[0]["boot"] for c in (first, second, again)] == [True, False, False]
+
+
+async def test_only_the_cockpit_page_uses_up_the_boot():
+    """/debug (or anything else on /ws) that connects first is told no, and
+    leaves the boot for the first cockpit page: only the cockpit says it is
+    one (it connects to /ws?page=cockpit), and the default is not."""
+    hub = Hub()
+    debug, _, _ = sink()
+    hub.welcome(debug, {"t": "snapshot"})
+    cockpit, _, _ = sink()
+    hub.welcome(cockpit, {"t": "snapshot"}, cockpit=True)
+    later, _, _ = sink()
+    hub.welcome(later, {"t": "snapshot"})
+    assert [queued(c)[0]["boot"] for c in (debug, cockpit, later)] == [False, True, False]
+
+
+async def test_a_welcome_queues_the_snapshot_first_then_joins():
+    hub = Hub()
+    client, _, _ = sink()
+    hub.welcome(client, {"t": "snapshot"})
+    hub.broadcast({"t": "feed"})
+    assert client in hub.clients
+    assert [f["t"] for f in queued(client)] == ["snapshot", "feed"]
+
+
+async def test_a_welcome_does_not_change_the_snapshot_it_is_given():
+    hub = Hub()
+    client, _, _ = sink()
+    frame = {"t": "snapshot", "boot": False}
+    hub.welcome(client, frame)
+    assert frame == {"t": "snapshot", "boot": False}

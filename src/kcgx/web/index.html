@@ -1,14 +1,26 @@
 <!doctype html>
-<html lang="en" data-palette="WOPR" data-display="CRT" data-lamps="OFF" data-teletype="OFF">
+<html lang="en" data-palette="WOPR" data-display="CRT" data-lamps="OFF" data-teletype="OFF" data-booting>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KCGX</title>
 <link rel="stylesheet" href="/static/cockpit.css">
+<script>
+// data-booting keeps the page hidden until boot.js decides about the boot
+// animation. Should it never (main.js fails to load, or throws first), the
+// page shows anyway after 3 s rather than staying black. boot.js calls this
+// off when it decides.
+window.kcgxBootFallback = setTimeout(function () {
+  document.documentElement.removeAttribute("data-booting");
+}, 3000);
+</script>
 <script type="module" src="/static/js/main.js"></script>
 </head>
 <body>
 <!-- G:boot -->
+<!-- The boot animation's cover (boot.js): over the whole window, outside the
+     UI zoom, with the page's scanlines and vignette over the scene. -->
+<div class="boot" id="boot" hidden aria-hidden="true"><canvas></canvas><div class="ovl"></div></div>
 <!-- The icons are our own line drawings: no icon font, no licence to carry.
      They are stroked in currentColor, so they take the palette. Each button
      says what it is in aria-label and title. -->

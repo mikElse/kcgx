@@ -110,6 +110,9 @@ export function createStore() {
     // tracks.js fills it and emits "rank"; the radar shades by it (Task 13).
     // Empty until then, and an aircraft missing from it is ranked first.
     rank: new Map(),
+    // Whether the last snapshot said to play the boot animation: true only
+    // in the first page's first one since the server started (kcgx.hub).
+    boot: false,
   };
   const listeners = new Set();
   const emit = (kind, detail) => { for (const fn of listeners) fn(kind, detail, state); };
@@ -154,6 +157,7 @@ export function createStore() {
         state.audioOk = frame.audio_ok;
         state.prefs = { ...state.prefs, ...(frame.prefs || {}) };
         state.log = frame.log.slice(-200);
+        state.boot = Boolean(frame.boot); // the first page since the server started (boot.js)
         if (frame.radar) takeRadar(frame.radar);
         for (const ident of [...state.history.keys()]) {
           if (!state.feeds.has(ident)) state.history.delete(ident);
