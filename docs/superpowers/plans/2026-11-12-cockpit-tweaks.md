@@ -700,16 +700,56 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
 **Files:** `tests/test_page.py`, `pyproject.toml` comment, `README.md`
 (Development), `radar.js` if needed
 
-- [ ] Parametrise the `browser` fixture over `chromium` and `webkit`
+- [x] Parametrise the `browser` fixture over `chromium` and `webkit`
   (`uv run playwright install webkit`); each skips when its browser is
   not installed, as Chromium does today.
-- [ ] Run the page tests in WebKit and fix what differs. Look first at:
+- [x] Run the page tests in WebKit and fix what differs. Look first at:
   `ctx.letterSpacing` on the canvas (if WebKit ignores it, labels are
   measured and drawn without it, which is consistent, but check the home
   name's spacing by eye); `<dialog>` and `::backdrop`; the `.jit`
   `drop-shadow` filter on a full-size canvas (frame rate); wheel deltas
   on the radar; `<select>` styling in the config sheet.
-- [ ] Commit `test(web): the page in WebKit as well as Chromium`.
+  **Done 2026-11-12, in Playwright's WebKit 26.0 (build 2215), headless.**
+  The 188 page tests of Task 9 passed in it unchanged. What was looked at,
+  beside Chromium at 1440 by 900, at 1x and 2x:
+  - *`ctx.letterSpacing`:* this WebKit has it, measures with it and draws
+    with it; the home name, the places and the tags are spaced as in
+    Chromium, and the boxes are the same size to the pixel.
+  - *`<dialog>` and `::backdrop`:* the same. The config sheet docks right
+    with a clear backdrop, the airport sheet is centred over 70 % black.
+    One difference, the browsers' own: with a query typed, Escape closes
+    the airport sheet at once in WebKit; Chromium clears the field first.
+  - *The `.jit` filter:* no cost that could be measured (10.0 ms a frame
+    with and without it, at 1x and 2x; twelve blurred shadows in its place
+    took 12.2, so the measure does see a filter).
+  - *Frame rate, which was the real difference.* The glow was a canvas
+    shadow on every trail segment and every chevron, and a shadow costs
+    by the draw. With full trails, glow LOW, range 40: 25 ms a frame for
+    the demo's eleven aircraft, 63 ms for 30, 118 ms for 60, and 1.1 s for
+    Task 7's 600 at 250 nm. Chromium drawing on the GPU (the full build
+    with `--enable-gpu`, which is what the owner's Chrome does) was as
+    slow: 25, 67 and 140 ms. Task 7's 34.7 ms was the headless shell,
+    which draws in software and pays by the pixel instead. **Fixed here,
+    in `radar.js`:** the aircraft's lines are drawn bare on a canvas of
+    their own, a colour at a time, and that canvas is drawn onto the moving
+    layer once with the shadow. After: WebKit 10.0 ms a frame (its headless
+    100 Hz) at 11, 30, 60 and 120 aircraft and 10.7 ms with 600 at 250 nm;
+    Chromium on the GPU 8.3 ms (120 Hz) at every count. The headless shell
+    holds 16.7 ms at 1x and pays for the one large shadow at 2x (33 ms).
+    The picture is the same to the eye; where lines cross, a few hundred
+    pixels in 600 000 differ, and a tag is now always over a trail. This
+    is the first half of the follow up under "Not in this plan"; the second
+    (skip what is off the screen) is not done.
+  - *Wheel deltas:* the same numbers reach the page in both (pixel mode,
+    the delta as sent). A real trackpad was not tried.
+  - *`<select>`, and the sliders:* WebKit drew its own dropdown, rounded
+    and 21 px high whatever the stylesheet said, and its own sliders,
+    whose track does not show on black and which ignore `accent-color`.
+    Both are now drawn by the stylesheet (`appearance: none`): a square
+    dropdown with an arrow in the text's colour, and a slider that is a
+    line in `--dim` with a block in `--cyan`. The same in both browsers,
+    so the sliders changed in Chromium too (no filled part).
+- [x] Commit `test(web): the page in WebKit as well as Chromium`.
 
 ### Task 11: KCGX.app
 
@@ -853,6 +893,14 @@ needs only Part 1's `main.js`, and Task 10 can start any time after 5.
   as one stroke, or a few, instead of a stroke and a shadow for every
   segment, or draw trails without the shadow; and skip aircraft and trail
   points that are off the screen.
+  *Changed by Task 10, 2026-11-12:* the shadow for every segment turned
+  out to be what WebKit, and Chromium on a GPU, could not afford at any
+  range (63 ms a frame for 30 aircraft), so the glow became one shadow for
+  each colour there, and the 250 nm picture came with it: 10.7 ms in
+  WebKit, 8.3 ms in Chromium on the GPU. Skipping what is off the screen
+  is still not done, and the static layer still redraws with a shadow on
+  every map line and symbol while the map is panned or zoomed (30 to 40 ms
+  a frame in WebKit).
 - Per-item box styles: one fill, padding and border for every boxed item.
 - A sticky header on the tracks table.
 
@@ -941,7 +989,8 @@ teletype.
 4. **Escape in the airport search, with text typed, clears the text and
    leaves the sheet open.** The field is `type="search"`, and that is what
    Chromium does with one. Left as it is; Task 10 will show what WebKit
-   does.
+   does. *Task 10:* WebKit closes the sheet at the first Escape, text or
+   no text.
 
 **For the owner, on the Mac (Task 9's third step, not run).** `kcgx` at
 KPDX: the range to 250 and back; a 2.5 nm zoom on the runways; boxes on

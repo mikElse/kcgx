@@ -279,10 +279,24 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .field input[type="search"]:focus { outline: none; border-color: var(--pink); }
 .field-row, .field.field-row { display: flex; flex-direction: row; align-items: center; gap: 4px 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .field-row > span:first-child { min-width: 150px; }
-.field-row input[type="range"] { flex: 1 1 100px; min-width: 0; accent-color: var(--cyan); }
 .field-row .num { min-width: 52px; text-align: right; }
-.field-row select { flex: 1 1 120px; min-width: 0; min-height: 26px; padding: 0 8px; background: #000;
-  border: 1px solid var(--frame); border-radius: 0; cursor: pointer; }
+/* The sliders and the dropdown are drawn here and not by the browser, so
+   that they are the same in each: WebKit's own slider has a track that does
+   not show on black, and its dropdown is rounded and as short as it likes.
+   A slider is a line with a block on it; the dropdown is a square frame
+   with an arrow made of two gradients, which take the text's colour. */
+.field-row input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1 1 100px; min-width: 0;
+  height: 18px; margin: 0; background: transparent; cursor: pointer; }
+.field-row input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--dim); }
+.field-row input[type="range"]::-moz-range-track { height: 2px; background: var(--dim); }
+.field-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 10px; height: 18px; margin-top: -8px; border: 0; border-radius: 0; background: var(--cyan); }
+.field-row input[type="range"]::-moz-range-thumb { width: 10px; height: 18px; border: 0; border-radius: 0; background: var(--cyan); }
+.field-row select { -webkit-appearance: none; appearance: none; flex: 1 1 120px; min-width: 0; min-height: 26px;
+  padding: 0 28px 0 8px; border: 1px solid var(--frame); border-radius: 0; cursor: pointer;
+  background-color: #000; background-repeat: no-repeat; background-size: 5px 5px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 13px center, right 8px center; }
 .field-row select:hover { border-color: var(--cyan); }
 .field-row select:focus-visible, .field-row input[type="range"]:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
 /* A control that does nothing as things are set (the scanlines, unless the display is CRT). */

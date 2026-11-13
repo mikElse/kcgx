@@ -32,8 +32,9 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
-# The page's own tests drive a real browser: `uv sync --group browser` and
-# `uv run playwright install chromium`. Without them those tests skip.
+# The page's own tests drive real browsers, Chromium and WebKit:
+# `uv sync --group browser` and `uv run playwright install chromium webkit`.
+# Without the group those tests skip; without one browser, its half of them.
 browser = [
     "playwright==1.56.0",
 ]

@@ -11,6 +11,12 @@
 // the moving layer fades instead of clearing, which is the phosphor
 // persistence.
 //
+// The glow is a canvas shadow, and a shadow costs by the draw, not by the
+// pixel: with one on every trail segment and chevron, WebKit, and Chromium
+// drawing on a GPU, took 2 ms an aircraft a frame. So the aircraft's lines
+// are drawn bare on a third canvas, a colour at a time, and that canvas is
+// drawn onto the moving layer once with the shadow on.
+//
 // Both layers are light added to light, so black over them changes
 // nothing. A label's box (prefs.box_items) is therefore painted on its own,
 // replacing what is under it: a still label's on the static layer before
@@ -235,6 +241,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   const pointer = { down: null, moved: false, before: false, at: [0, 0] };
   const still = document.createElement("canvas");
   const trace = document.createElement("canvas"); // the moving layer, for persistence
+  const bare = document.createElement("canvas"); // the aircraft's lines in one colour, before their glow
   const boxed = (item) => store.state.prefs.box_items.includes(item);
 
   // -- sizes and the transform --
@@ -244,7 +251,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const box = canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(box.width * ratio));
     const height = Math.max(1, Math.round(box.height * ratio));
-    for (const c of [canvas, still, trace]) {
+    for (const c of [canvas, still, trace, bare]) {
       if (c.width !== width || c.height !== height) { c.width = width; c.height = height; staticDirty = true; }
     }
     return { ratio, width, height };
@@ -682,6 +689,38 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     });
   }
 
+  // One aircraft's lines, in the pen's colour and at its width: the trail,
+  // the chevron and, about the focused one, a ring.
+  function strokeAircraft(pen, { ac, isFocus, alpha, head, points }, ratio) {
+    // The trail fades from full at the arrow to nothing at its oldest point.
+    for (let i = 1; i < points.length; i += 1) {
+      pen.globalAlpha = alpha * 0.95 * (1 - (i - 1) / (points.length - 1));
+      pen.beginPath();
+      pen.moveTo(points[i - 1][0], points[i - 1][1]);
+      pen.lineTo(points[i][0], points[i][1]);
+      pen.stroke();
+    }
+    pen.globalAlpha = alpha;
+    // The chevron, pointing along track.
+    pen.save();
+    pen.translate(head[0], head[1]);
+    pen.rotate(((ac.trk || 0) * Math.PI) / 180);
+    pen.beginPath();
+    const u = ratio;
+    pen.moveTo(0, -9 * u); pen.lineTo(0, 9 * u);
+    pen.moveTo(-7 * u, 4 * u); pen.lineTo(0, -9 * u); pen.lineTo(7 * u, 4 * u);
+    pen.stroke();
+    pen.restore();
+    if (isFocus) {
+      pen.save();
+      pen.lineWidth = 1.4 * ratio;
+      pen.beginPath();
+      pen.arc(head[0], head[1], 16 * ratio, 0, Math.PI * 2);
+      pen.stroke();
+      pen.restore();
+    }
+  }
+
   // Draws the aircraft and returns them, with the boxes their tags are to
   // stand on: [{ box, colour, alpha }], each as dim as its aircraft. The
   // boxes cannot be drawn here; `frame` puts them under this layer.
@@ -692,10 +731,9 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const focused = focus.hex;
     const list = aircraftNow();
     if (focused && !list.some((ac) => ac.hex === focused)) focus.set(null);
-    for (const ac of list) {
-      const emergency = EMERGENCY.has(ac.sq);
+    const seen = list.map((ac) => {
       const isFocus = ac.hex === focused;
-      const colour = isFocus ? c.pink : emergency ? c.alarm : c.cyan;
+      const colour = isFocus ? c.pink : EMERGENCY.has(ac.sq) ? c.alarm : c.cyan;
       const stale = Math.max(0, Math.min(1, (ac.age - STALE_FADE_FROM) / 30));
       let alpha = 1 - 0.7 * stale;
       if (focused && !isFocus) alpha *= DIM_ALPHA;
@@ -703,47 +741,43 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
       const trail = (store.state.trails.get(ac.hex) || [])
         .map((p) => toScreen(project(p.lat, p.lon), s, width, height))
         .reverse();
-      const points = [head, ...trail];
+      return { ac, isFocus, colour, alpha, head, points: [head, ...trail] };
+    });
 
+    // The lines, a colour at a time: bare, then onto the layer under one
+    // shadow, which is their glow. The focused aircraft's colour is last and
+    // so on top. With no glow they go straight onto the layer.
+    const blur = glowBlur() * ratio;
+    const pen = blur ? bare.getContext("2d") : ctx;
+    for (const colour of new Set([c.cyan, c.alarm, c.pink])) {
+      const mine = seen.filter((one) => one.colour === colour);
+      if (!mine.length) continue;
+      if (blur) pen.clearRect(0, 0, width, height);
+      pen.save();
+      pen.lineWidth = 1.8 * ratio;
+      pen.strokeStyle = colour;
+      for (const one of mine) strokeAircraft(pen, one, ratio);
+      pen.restore();
+      if (!blur) continue;
       ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.lineWidth = 1.8 * ratio;
-      ctx.strokeStyle = colour;
-      glow(ctx, colour, ratio);
-      // The trail fades from full at the arrow to nothing at its oldest point.
-      for (let i = 1; i < points.length; i += 1) {
-        ctx.globalAlpha = alpha * 0.95 * (1 - (i - 1) / (points.length - 1));
-        ctx.beginPath();
-        ctx.moveTo(points[i - 1][0], points[i - 1][1]);
-        ctx.lineTo(points[i][0], points[i][1]);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = alpha;
-      // The chevron, pointing along track.
-      ctx.save();
-      ctx.translate(head[0], head[1]);
-      ctx.rotate(((ac.trk || 0) * Math.PI) / 180);
-      ctx.beginPath();
-      const u = ratio;
-      ctx.moveTo(0, -9 * u); ctx.lineTo(0, 9 * u);
-      ctx.moveTo(-7 * u, 4 * u); ctx.lineTo(0, -9 * u); ctx.lineTo(7 * u, 4 * u);
-      ctx.stroke();
+      ctx.shadowColor = colour;
+      ctx.shadowBlur = blur;
+      ctx.drawImage(bare, 0, 0);
       ctx.restore();
-      if (isFocus) {
-        ctx.lineWidth = 1.4 * ratio;
-        ctx.beginPath();
-        ctx.arc(head[0], head[1], 16 * ratio, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      // The tag, up and right of the chevron. Its last line is where the
-      // one line has always been; a line above it stands higher.
+    }
+
+    // The tags, over every aircraft's lines and without a glow. A tag is up
+    // and right of its chevron. Its last line is where the one line has
+    // always been; a line above it stands higher.
+    ctx.save();
+    ctx.font = `${TAG_PX * ratio}px ${FONT}`;
+    ctx.letterSpacing = `${1.5 * ratio}px`;
+    for (const { ac, colour, alpha, head, points } of seen) {
       const lines = tagLines(ac, prefs.tag_fields);
       let tag = null;
       if (lines.length) {
-        ctx.font = `${TAG_PX * ratio}px ${FONT}`;
-        ctx.letterSpacing = `${1.5 * ratio}px`;
+        ctx.globalAlpha = alpha;
         ctx.fillStyle = colour;
-        ctx.shadowBlur = 0;
         const left = head[0] + 14 * ratio;
         const first = head[1] - 10 * ratio - (lines.length - 1) * step; // the top line's baseline
         let w = 0;
@@ -756,9 +790,9 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
         tag = { lines, ...claim(text, ink, boxed("AIRCRAFT"), ratio, prefs) };
         if (tag.box) boxes.push({ box: tag.box, colour, alpha });
       }
-      ctx.restore();
       hits.push({ hex: ac.hex, x: head[0], y: head[1], tag, trail: points });
     }
+    ctx.restore();
     return { list, boxes };
   }
 

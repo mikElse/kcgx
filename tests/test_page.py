@@ -1,9 +1,11 @@
-"""The cockpit page in a real browser, against `kcgx-web --demo`.
+"""The cockpit page in real browsers, against `kcgx-web --demo`.
 
-These need Playwright and its Chromium (`uv sync --group browser`, then
-`uv run playwright install chromium`); without them they skip. The server
-runs as a subprocess with its state in a temporary folder, so nothing here
-touches ~/.local/state/kcgx.
+Every test that opens the page runs twice, in Chromium and in WebKit. They
+need Playwright and its builds of the two (`uv sync --group browser`, then
+`uv run playwright install chromium webkit`); without Playwright they all
+skip, and without one of the browsers its half does. The server runs as a
+subprocess with its state in a temporary folder, so nothing here touches
+~/.local/state/kcgx.
 """
 
 from __future__ import annotations
@@ -65,13 +67,15 @@ def server(tmp_path_factory):
     process.wait(timeout=10)
 
 
-@pytest.fixture(scope="module")
-def browser():
+@pytest.fixture(scope="module", params=["chromium", "webkit"])
+def browser(request):
+    """Each browser in turn, one at a time: every test of the page runs in
+    Chromium and then in WebKit. One that is not installed skips its tests."""
     with playwright_api.sync_playwright() as p:
         try:
-            launched = p.chromium.launch()
-        except playwright_api.Error as error:  # no browser installed
-            pytest.skip(f"no Chromium for Playwright: {error}")
+            launched = getattr(p, request.param).launch()
+        except playwright_api.Error as error:  # this browser is not installed
+            pytest.skip(f"no {request.param} for Playwright: {error}")
         yield launched
         launched.close()
 
@@ -637,6 +641,60 @@ def test_the_sheet_opens_showing_the_defaults(page):
     # every control is one a person can reach and work
     for key in SCHEMA:
         assert page.locator(f"#config-sheet [data-pref={key}]").is_visible(), key
+
+
+def brightest(page, x, y):
+    """The brightest of three pixels of the page, one above the other about
+    (x, y): a thin line that does not fall on whole pixels still fills one."""
+    return max((pixel(page, round(x), round(y) + dy) for dy in (-1, 0, 1)), key=sum)
+
+
+def test_the_theme_dropdown_is_drawn_by_the_page_not_by_the_browser(page):
+    """A browser's own dropdown is its own shape: WebKit rounds its corners
+    and makes it as short as it likes. This one is square, as high as the
+    buttons under it, with an arrow in the text's colour."""
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    drawn = page.eval_on_selector(
+        "#config-sheet select[data-pref=palette]",
+        """e => { const style = getComputedStyle(e); const box = e.getBoundingClientRect();
+                  return { appearance: style.appearance, radius: style.borderTopLeftRadius, arrow: style.backgroundImage,
+                           height: box.height, right: box.right, middle: box.top + box.height / 2 }; }""",
+    )
+    button = page.eval_on_selector("#config-sheet .seg", "e => e.getBoundingClientRect().height")
+    assert drawn["appearance"] == "none"
+    assert drawn["radius"] == "0px"
+    assert drawn["height"] == button == 26
+    assert drawn["arrow"].count("linear-gradient") == 2, drawn["arrow"]
+    # The arrow's top edge runs from 19 to 9 px in from the right; this is its middle.
+    assert brightest(page, drawn["right"] - 14, drawn["middle"] - 1.5) == css_colour(page, "--text")
+    assert brightest(page, drawn["right"] - 30, drawn["middle"]) == (0, 0, 0), "the arrow's place is not black beside it"
+
+
+@pytest.mark.parametrize("palette", ["WOPR", "AMBER"])
+def test_a_slider_is_drawn_by_the_page_and_its_track_shows_on_black(page, palette):
+    """WebKit's own slider draws a track that cannot be seen on black, and
+    ignores the accent colour. The track is a line in the dim colour and the
+    thumb a block in the bright one, whatever the browser."""
+    set_prefs(page, palette=palette)
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    track, thumb = css_colour(page, "--dim"), css_colour(page, "--cyan")
+    for key in ("volume", "box_width", "range_nm"):
+        slider = page.locator("#volume" if key == "volume" else f"#config-sheet input[data-pref={key}]")
+        slider.scroll_into_view_if_needed()
+        box = slider.bounding_box()
+        low, high, value = float(slider.get_attribute("min")), float(slider.get_attribute("max")), float(slider.input_value())
+        middle = box["y"] + box["height"] / 2
+        # The thumb's middle runs from half its width in at one end to half its width in at the other.
+        width = 10
+        at = box["x"] + width / 2 + (box["width"] - width) * (value - low) / (high - low)
+        assert brightest(page, at, middle) == thumb, f"{key}: no thumb at its value"
+        clear = [x for x in (box["x"] + 20, box["x"] + box["width"] / 2, box["x"] + box["width"] - 20) if abs(x - at) > 12]
+        for x in clear:
+            assert brightest(page, x, middle) == track, f"{key}: no track {x - box['x']:.0f} px along"
+        assert brightest(page, clear[0], middle - 7) == (0, 0, 0), f"{key}: the track is more than a line"
+        assert box["height"] == 18, key
 
 
 def test_each_number_slider_reaches_a_second_tab(page, other):
@@ -1931,6 +1989,105 @@ def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
     focused, dimmed = canvas_pixels(page, edges["a1"][0], edges["a2"][0])
     assert focused == pink
     assert 0 < dimmed[3] < 110, "the other aircraft's box is as dim as the aircraft"
+
+
+# Every draw the radar makes with a shadow on, by its name, in one frame of
+# its own. The radar's layers are canvases that are not in the page; the
+# waveforms' are.
+SHADOWED = """async () => {
+    const proto = CanvasRenderingContext2D.prototype;
+    const draws = ["stroke", "fill", "fillRect", "strokeRect", "fillText", "strokeText", "drawImage"];
+    const kept = Object.fromEntries(draws.map(name => [name, proto[name]]));
+    const seen = {};
+    for (const name of draws) proto[name] = function (...args) {
+        const radars = this.canvas.id === "radar" || !this.canvas.isConnected;
+        if (radars && this.shadowBlur > 0) seen[name] = (seen[name] || 0) + 1;
+        return kept[name].apply(this, args);
+    };
+    const frame = () => new Promise(requestAnimationFrame);
+    await frame();  // the radar's frame is asked for before this one, so it has been drawn
+    for (const name of Object.keys(seen)) delete seen[name];
+    await frame();
+    Object.assign(proto, kept);
+    return seen;
+}"""
+
+
+def fleet(count, step=0.0, **over):
+    """`count` aircraft in a slanting row across the radar, `step` nm on."""
+    return [
+        plane(f"a{i}", east=-30 + 60 * i / count + step, north=-14 + 28 * i / count, trk=90, **over.get(f"a{i}", {}))
+        for i in range(count)
+    ]
+
+
+@pytest.mark.parametrize("count", [4, 24])
+def test_the_traffics_glow_is_a_shadow_for_each_colour_not_one_for_each_stroke(page, count):
+    """A canvas shadow costs by the draw: with every trail segment and
+    chevron glowing on its own, thirty aircraft took over 60 ms a frame in
+    WebKit, and in Chromium drawing on a GPU. So the lines of one colour
+    share a shadow, however many aircraft there are."""
+    wait_for_traffic(page)
+    set_prefs(page, glow="LOW", display="OFF")
+    for step in (0, 1, 2, 3):  # four polls: a trail of three segments behind each
+        hold_traffic(page, *fleet(count, step, a1={"sq": "7700"}))
+    picture(page)  # the map has drawn itself on; from here only the traffic is drawn each frame
+    shadowed = page.evaluate(SHADOWED)
+    assert 1 <= sum(shadowed.values()) <= 2, f"cyan and the alarm colour: {shadowed}"
+    hit = radar_debug(page)["hits"][2]
+    page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
+    page.mouse.move(2, 2)  # off the radar: a label brightening under the pointer redraws the map
+    picture(page)
+    shadowed = page.evaluate(SHADOWED)
+    assert 1 <= sum(shadowed.values()) <= 3, f"cyan, the alarm colour and pink: {shadowed}"
+    set_prefs(page, glow="OFF")
+    picture(page)
+    assert page.evaluate(SHADOWED) == {}
+
+
+def light(pixel):
+    """A canvas pixel as the light it puts on the screen: its red, green and
+    blue, each as strong as the pixel is opaque."""
+    r, g, b, a = pixel
+    return [channel * a / 255 for channel in (r, g, b)]
+
+
+def beside_the_tail(page, hex_, reach):
+    """Two canvas pixels level with the tail of this aircraft's chevron, which
+    points north: 3 px off its stem, and as far again as the glow reaches."""
+    ratio = page.evaluate("devicePixelRatio")
+    hit = next(h for h in radar_debug(page)["hits"] if h["hex"] == hex_)
+    return [(hit["x"] + 3 * ratio, hit["y"] + 7 * ratio), (hit["x"] + (3 + reach) * ratio, hit["y"] + 7 * ratio)]
+
+
+@pytest.mark.parametrize("glow, reach", [("LOW", 4), ("FULL", 9)])
+def test_an_aircraft_glows_in_its_own_colour_and_not_at_all_with_the_glow_off(page, glow, reach):
+    """What an aircraft adds to the picture beside its lines: the map's own
+    light there is read first, with the aircraft away."""
+    wait_for_traffic(page)
+    draw(page, glow=glow, display="OFF", tag_fields=[])
+    planes = [plane("a1", -25, 14, trk=0), plane("a2", 25, 14, trk=0, sq="7700")]
+    hold_traffic(page, *planes)
+    spots = beside_the_tail(page, "a1", reach) + beside_the_tail(page, "a2", reach)
+
+    def added():
+        hold_traffic(page)
+        picture(page)
+        without = [light(p) for p in canvas_pixels(page, *spots)]
+        hold_traffic(page, *planes)
+        picture(page)
+        with_them = [light(p) for p in canvas_pixels(page, *spots)]
+        return [[now - before for now, before in zip(*pair)] for pair in zip(with_them, without)]
+
+    near, far, alarm_near, alarm_far = added()
+    assert near[2] > 12 and near[2] > near[0] + 8, f"no cyan glow beside the cyan aircraft: {near}"
+    assert alarm_near[0] > 12 and alarm_near[0] > alarm_near[2] + 8, f"no alarm glow beside the emergency: {alarm_near}"
+    # A glow and not a wider line: it falls away.
+    assert 0 <= sum(far) < sum(near) / 2 and sum(near) < 300, (near, far)
+    assert 0 <= sum(alarm_far) < sum(alarm_near) / 2, (alarm_near, alarm_far)
+    draw(page, glow="OFF")
+    assert added() == [[0, 0, 0]] * 4, "an aircraft lights what is beside it with the glow off"
 
 
 STILL = [

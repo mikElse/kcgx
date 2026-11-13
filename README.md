@@ -491,11 +491,14 @@ measurement and fails if the capacity goes back under a burst.
 ```bash
 uv run pytest -q                                   # the suite
 uv sync --group dev --group browser                # once, for the page's own tests
-uv run playwright install chromium                 # once
+uv run playwright install chromium webkit          # once
 ```
 
-Without the browser group, `tests/test_page.py` skips. Specs and plans for
-everything here are in [`docs/`](docs/README.md).
+`tests/test_page.py` drives the page in a real browser, and runs each of
+its tests twice: in Chromium and in WebKit, Safari's engine. Without the
+browser group it skips; without one of the two browsers, that browser's
+half skips. Specs and plans for everything here are in
+[`docs/`](docs/README.md).
 
 ## History
 
