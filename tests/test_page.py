@@ -1824,13 +1824,16 @@ def test_a_click_on_either_line_of_a_tag_focuses_its_aircraft(page):
                 page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
 
 
-@pytest.mark.parametrize("items", [[], ["AIRCRAFT"]])
-def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(page, items):
-    """A tag's rectangle, and all the more its box at the widest padding, can
-    lie over another aircraft's chevron. The chevron is the aircraft."""
+@pytest.mark.parametrize(
+    "box", [{"box_items": []}, {"box_items": ["AIRCRAFT"], "box_fill": 0}], ids=["unboxed", "unfilled"]
+)
+def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(page, box):
+    """An unboxed tag, or a box with no fill, lets the chevron under it win.
+    (A filled box covers it: test_page_map.py's
+    test_a_filled_box_on_the_tags_layer_covers_the_chevron_under_it.)"""
     wait_for_traffic(page)
     ratio = page.evaluate("devicePixelRatio")
-    ring = draw(page, box_items=items, box_pad=12)["rings"][0]
+    ring = draw(page, box_pad=12, **box)["rings"][0]
     per_nm = ring["r"] / ring["nm"]
     tag = hold_traffic(page, plane("a1", -10, 5))["a1"]
     first = radar_debug(page)["hits"][0]

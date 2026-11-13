@@ -10,9 +10,10 @@
 // under the aircraft's tag, which is up and right. It is placed after every
 // frame (view.js's `post`), from where that frame drew the aircraft, and
 // hidden with prefs.info_box off, with nothing focused, and while the
-// aircraft is off the screen. With AIRCRAFT among the boxed labels
-// (prefs.box_items) it is boxed as the tags are (the stylesheet, from the
-// same four settings main.js writes for the readouts).
+// aircraft is off the screen. It is always boxed, from the label box
+// settings main.js writes for the readouts, with a floor (the stylesheet).
+// It is placed in the CSS px of the radar's own box (offsetWidth), which
+// are the page's zoom's (prefs.ui_zoom) on screen, whatever the engine.
 
 import { COLUMN } from "../columns.js";
 import { focus } from "../focus.js";
@@ -28,6 +29,7 @@ export function mountInfo(radar) {
   if (!box) return () => {};
   let said = null; // what the box last said, to write it again only when it changes
   let size = [0, 0]; // its size in CSS px, measured when it was written
+  let placed = null; // the transform it was last given
   // The page's font or size may change under it: measure it again.
   radar.store.subscribe((kind) => { if (kind === "all" || kind === "prefs") said = null; });
 
@@ -42,15 +44,13 @@ export function mountInfo(radar) {
     if (!hex || !prefs.info_box || !frame) return hide();
     const hit = radar.hits.find((one) => one.hex === hex);
     const ac = frame.ac.find((one) => one.hex === hex);
-    const { ratio, width, height } = radar.size();
+    const { width, height } = radar.size();
     if (!hit || !ac || hit.x < 0 || hit.y < 0 || hit.x > width || hit.y > height) return hide();
 
-    const boxed = radar.boxed("AIRCRAFT") ? "ON" : "OFF";
     const lines = prefs.track_cols.filter((name) => COLUMN[name]).map((name) => [COLUMN[name].title, COLUMN[name].text(ac)]);
-    const says = JSON.stringify([boxed, lines]);
+    const says = JSON.stringify(lines);
     if (box.hidden) box.hidden = false;
     if (says !== said) {
-      box.dataset.boxed = boxed;
       box.replaceChildren(...lines.map(([name, value]) => {
         const line = document.createElement("div");
         const dt = document.createElement("dt");
@@ -65,8 +65,9 @@ export function mountInfo(radar) {
     }
 
     // In the radar's CSS px.
-    const x = hit.x / ratio;
-    const y = hit.y / ratio;
+    const { canvas } = radar;
+    const x = (hit.x * canvas.offsetWidth) / canvas.width;
+    const y = (hit.y * canvas.offsetHeight) / canvas.height;
     const [w, h] = size;
     let left = x - REACH_PX - GAP_PX - w;
     let top = y - h / 2;
@@ -75,8 +76,10 @@ export function mountInfo(radar) {
       left = x + REACH_PX + GAP_PX;
       top = y + UNDER_PX;
     }
-    top = Math.max(0, Math.min(height / ratio - h, top));
-    box.dataset.side = right ? "right" : "left";
-    box.style.transform = `translate(${left}px, ${top}px)`;
+    top = Math.max(0, Math.min(canvas.offsetHeight - h, top));
+    const side = right ? "right" : "left";
+    const transform = `translate(${left}px, ${top}px)`;
+    if (box.dataset.side !== side) box.dataset.side = side;
+    if (transform !== placed) { box.style.transform = transform; placed = transform; }
   };
 }

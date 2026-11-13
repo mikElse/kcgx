@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 import subprocess
 from pathlib import Path
 
@@ -1042,7 +1043,7 @@ def test_tags_are_tried_top_first_in_the_order_they_were_laid(page):
     assert clicked(page, x, y) == "a1"
 
 
-@pytest.mark.parametrize(("fill", "expected"), [(100, "a1"), (0, "a2")])
+@pytest.mark.parametrize(("fill", "expected"), [(100, "a1"), (DEFAULTS["box_fill"], "a1"), (0, "a2")])
 def test_a_filled_box_on_the_tags_layer_covers_the_chevron_under_it(page, fill, expected):
     """Fully exercised once the traffic lays its tags over the aircraft
     (Task 11): until then the test lays them, as that layer will say."""
@@ -1165,16 +1166,129 @@ def test_the_data_box_hides_with_its_setting_and_with_no_focus(page):
     info_box(page).wait_for(state="hidden")
 
 
-def test_the_data_box_is_boxed_as_the_tags_are(page):
+INFO_STYLE = "e => { const s = getComputedStyle(e); return [s.borderTopWidth, s.backgroundColor, s.paddingTop]; }"
+
+
+def alpha(colour):
+    """The alpha of a computed rgb() or rgba() colour."""
+    numbers = [float(n) for n in re.findall(r"[\d.]+", colour)]
+    return numbers[3] if len(numbers) > 3 else 1.0
+
+
+def test_the_data_box_is_boxed_whether_or_not_the_tags_are(page):
+    """The label box settings, with a floor: never less than 80 % black,
+    a 1 px edge and 4 px of padding."""
     wait_for_traffic(page)
     hold_traffic(page, *MOVING)
     click_row(page, "a1")
     info_box(page).wait_for(state="visible")
-    style = "e => { const s = getComputedStyle(e); return [s.borderTopWidth, s.backgroundColor, s.paddingTop]; }"
-    assert page.eval_on_selector("#ac-info", style)[0] == "0px"
-    set_prefs(page, box_items=["AIRCRAFT"], box_fill=100, box_pad=6, box_width=2)
+    set_prefs(page, box_items=[], box_fill=0, box_pad=0, box_border=0)
+    # box_width's least setting is 1 px: under it the floor still holds.
+    page.evaluate("document.documentElement.style.setProperty('--box-width', '0px')")
     frames(page)
-    width, background, padding = page.eval_on_selector("#ac-info", style)
+    width, background, padding = page.eval_on_selector("#ac-info", INFO_STYLE)
+    assert (width, padding) == ("1px", "4px")
+    assert background.startswith("rgba(0, 0, 0") and alpha(background) == pytest.approx(0.8, abs=0.01)
+    set_prefs(page, box_fill=100, box_pad=6, box_width=2)
+    frames(page)
+    width, background, padding = page.eval_on_selector("#ac-info", INFO_STYLE)
     assert (width, padding) == ("2px", "6px")
     assert background in ("rgb(0, 0, 0)", "rgba(0, 0, 0, 1)")
     assert page.eval_on_selector("#ac-info", "e => getComputedStyle(e).pointerEvents") == "none"
+
+
+# -- the page's zoom (prefs.ui_zoom, CSS zoom on .page) --------------------------
+
+
+def zoom_page(page, zoom):
+    """The page zoomed as prefs.ui_zoom zooms it; returns once the radar has
+    drawn at the size that leaves it."""
+    page.evaluate("z => { document.querySelector('.page').style.zoom = z; }", zoom)
+    frames(page, 2)
+    radar_drawn(page)
+
+
+def page_point(page, x, y):
+    """A canvas pixel position as a page position, whatever the zoom: from
+    where the browser says the canvas is on the page."""
+    box = page.locator("#radar").bounding_box()
+    width, height = canvas_size(page)
+    return box["x"] + x * box["width"] / width, box["y"] + y * box["height"] / height
+
+
+@pytest.mark.parametrize("zoom", [1, 1.5])
+def test_under_the_pages_zoom_a_click_focuses_the_chevron_and_the_data_box_is_beside_it(page, zoom):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    set_prefs(page, view_ease="OFF")
+    zoom_page(page, zoom)
+    hit = hit_of(page, "a2")
+    x, y = page_point(page, hit["x"], hit["y"])
+    assert 0 < x < 1440 and 0 < y < 900, "the test wants the chevron on screen"
+    page.mouse.click(x, y)
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
+    wait_followed(page, "a2")
+    info_box(page).wait_for(state="visible")
+    frames(page, 1)
+    rect = page.locator("#ac-info").bounding_box()
+    hit = hit_of(page, "a2")
+    x, y = page_point(page, hit["x"], hit["y"])
+    # In the page's CSS px, which the zoom scales on screen.
+    assert (x - rect["x"] - rect["width"]) / zoom == pytest.approx(REACH + GAP, abs=1)
+    assert (rect["y"] + rect["height"] / 2 - y) / zoom == pytest.approx(0, abs=1)
+
+
+# -- unfocusing after the view was moved -----------------------------------------
+
+
+def test_after_a_drag_unfocusing_keeps_the_view_the_drag_left(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    nothing_to_hit(page)
+    set_prefs(page, view_ease="OFF")
+    set_view(page, 25, 3, -4)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    pan(page, *on_screen(page, 200, 200))
+    dragged = view_of(page)
+    focus_set(page, None)
+    page.wait_for_selector("#tracks-body tr.focused", state="detached")
+    frames(page, 3)
+    assert view_of(page) == dragged
+
+
+def test_after_a_place_click_unfocusing_keeps_the_place_at_the_centre(page):
+    wait_for_traffic(page)
+    hold_traffic(page, plane("a1", -1, 1))
+    set_prefs(page, view_ease="OFF", follow_nm=40)  # wide enough for a city clear of the rest
+    set_view(page, 25, 3, -4)
+    click_row(page, "a1")
+    wait_followed(page, "a1", nm=40)
+    frames(page)
+    city = a_city(page)
+    page.mouse.click(*on_screen(page, *city["point"]))
+    frames(page, 1)
+    placed = view_of(page)
+    assert (placed["panX"], placed["panY"]) == tuple(city["xy"])
+    focus_set(page, None)
+    page.wait_for_selector("#tracks-body tr.focused", state="detached")
+    frames(page, 3)
+    assert view_of(page) == placed
+
+
+def test_after_a_wheel_a_click_on_the_focused_aircraft_unfocuses_and_goes_back(page):
+    wait_for_traffic(page)
+    hold_traffic(page, plane("a1", -12, 8))
+    set_prefs(page, view_ease="OFF")
+    before = set_view(page, 25, 3, -4)["view"]
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    page.mouse.move(*on_screen(page, 200, 200))
+    turn_wheel(page, -200)
+    assert view_of(page)["nm"] < 10
+    frames(page)
+    hit = hit_of(page, "a1")
+    page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
+    page.wait_for_selector("#tracks-body tr.focused", state="detached")
+    frames(page, 1)
+    assert view_of(page) == before

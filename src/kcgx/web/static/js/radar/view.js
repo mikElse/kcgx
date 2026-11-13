@@ -12,8 +12,9 @@
 // leaves where it is (`radar.now`), and the next frame's view is centred
 // there. A drag ends the following and keeps the focus; the wheel zooms
 // about the aircraft and keeps it. Unfocusing sends the view back to where
-// it was before the focus; a double click recentres on the airport, ends
-// the following and forgets that view. The focused aircraft's data box
+// it was before the focus, unless a drag or a click on a place has moved it
+// since (the view is the user's then, and stays); a double click recentres
+// on the airport, ends the following and forgets that view too. The focused aircraft's data box
 // (radar/info.js) is placed after each frame too.
 //
 // `radar` is the shared state `mountRadar` makes (see radar/index.js);
@@ -50,7 +51,7 @@ export function init(radar) {
   radar.ease = null;
   radar.following = false; // the view keeps the focused aircraft at its centre
   radar.followAt = null; // where it was last drawn, in nm
-  radar.unfocused = null; // the view from before the focus, { nm, x, y }, to go back to
+  radar.unfocused = null; // the view from before the focus, { nm, x, y }, to go back to; a drag or a place click forgets it
   bindPointer(radar);
   focus.subscribe((hex) => focused(radar, hex));
   radar.store.subscribe((kind) => {
@@ -186,12 +187,30 @@ function zoomed(radar, nm) {
 
 // -- pointing, panning, zooming, focusing --
 
-// The pointer in canvas pixels. The ratio is size()'s, which carries any
-// render scale, as every pointer and hit reckoning here does.
+// What the canvas's bounding rectangle is to be scaled by to be in the
+// pointer's px under CSS zoom (prefs.ui_zoom zooms .page): 1 where the
+// browser zooms the rectangle as it does the pointer (Chromium), the zoom
+// where it leaves the rectangle unzoomed (WebKit). The zoom is the product
+// of each ancestor's own, read from the stylesheet rather than from
+// currentCSSZoom, which not every engine has.
+export function cssZoomFix(canvas) {
+  let zoom = 1;
+  for (let el = canvas; el; el = el.parentElement) zoom *= Number.parseFloat(getComputedStyle(el).zoom) || 1;
+  const box = canvas.getBoundingClientRect();
+  return canvas.offsetWidth && box.width ? zoom / (box.width / canvas.offsetWidth) : 1;
+}
+
+// The pointer in canvas pixels, from the canvas's size on screen, so a
+// render scale and the page's zoom are both carried.
 function local(radar, event) {
-  const { ratio } = radar.size();
-  const box = radar.canvas.getBoundingClientRect();
-  return [(event.clientX - box.left) * ratio, (event.clientY - box.top) * ratio];
+  radar.size();
+  const { canvas } = radar;
+  const box = canvas.getBoundingClientRect();
+  const k = cssZoomFix(canvas);
+  return [
+    (event.clientX / k - box.left) * (canvas.width / box.width),
+    (event.clientY / k - box.top) * (canvas.height / box.height),
+  ];
 }
 
 const inside = (r, x, y) => Boolean(r) && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
@@ -280,10 +299,12 @@ function bindPointer(radar) {
       const dy = at[1] - pointer.down.at[1];
       if (!pointer.moved && Math.hypot(dx, dy) > 4 * ratio) {
         // A drag: from the view as it is now, which a move or the
-        // following may have taken on since the press.
+        // following may have taken on since the press. The view is the
+        // user's now: unfocusing leaves it.
         pointer.moved = true;
         radar.ease = null;
         radar.following = false;
+        radar.unfocused = null;
         pointer.down.panX = view.panX;
         pointer.down.panY = view.panY;
       }
@@ -309,8 +330,10 @@ function bindPointer(radar) {
       if (hex) {
         focus.toggle(hex);
       } else if (place) {
-        // Centred, at the same zoom, and no longer following.
+        // Centred, at the same zoom, and no longer following; unfocusing
+        // leaves it there.
         radar.following = false;
+        radar.unfocused = null;
         goTo(radar, { nm: view.nm, x: place.xy[0], y: place.xy[1] });
       }
     }
