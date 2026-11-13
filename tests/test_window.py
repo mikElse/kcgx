@@ -311,6 +311,10 @@ def test_a_link_shows_a_port_on_this_machine_and_a_fragment(app, link, page):
     "http://127.0.0.1:8473/#airport=st/x",
     "http://127.0.0.1:8473/#airport=a%26b%23c",
     "http://127.0.0.1:8473/#airport=caf%C3%A9",
+    # The edges of what the app takes: the launcher still hands these over.
+    "http://127.0.0.1:1024/",
+    "http://127.0.0.1:65535/#airport",
+    pytest.param("http://127.0.0.1:8473/#airport=" + "a" * 504, id="512 bytes of fragment"),
 ])
 def test_the_launcher_and_the_window_agree_on_a_link(app, page):
     """Both ends of the one contract: the link `kcgx` hands to `open` for a
@@ -323,6 +327,26 @@ def test_the_launcher_and_the_window_agree_on_a_link(app, page):
     [[*opening, link]] = ran
     assert opening == ["open", "-a", str(app)]
     assert check(app, link) == page
+
+
+@pytest.mark.parametrize("page, link", [
+    ("http://127.0.0.1:1023/", "kcgx://show?port=1023"),
+    ("http://127.0.0.1:80/#airport", "kcgx://show?port=80&fragment=airport"),
+    pytest.param(
+        "http://127.0.0.1:8473/#airport=" + "a" * 505, "kcgx://show?port=8473&fragment=airport%3D" + "a" * 505,
+        id="513 bytes of fragment",
+    ),
+])
+def test_the_launcher_keeps_from_the_window_a_page_it_would_refuse(app, page, link):
+    """`open` exits 0 whatever the app then makes of the link, so nothing
+    would fall back. The launcher knows the app's two limits and shows such
+    a page in the browser; `link` is what it would otherwise have sent."""
+    from kcgx import launcher
+
+    assert check(app, link) is None
+    ran, browser = [], []
+    launcher.window_opener(app, run=lambda command, **_: ran.append(command), browser=browser.append)(page)
+    assert ran == [] and browser == [page]
 
 
 @pytest.mark.parametrize("link, fragment", [

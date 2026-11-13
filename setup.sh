@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # setup.sh — install everything kcgx needs, prove it works, open the cockpit.
 #
-# Seven steps. Each announces itself, each asks before changing anything, and
-# each is idempotent -- so the second run, the one you do when you think
-# something went wrong, ends exactly where the first did.
+# Seven steps. Each announces itself, each asks before it installs anything
+# or edits a file of yours, and each is idempotent -- so the second run, the
+# one you do when you think something went wrong, ends exactly where the
+# first did. Step 5 alone makes things without a question of its own: the
+# launcher's link, and on macOS KCGX.app. Both are kcgx's own, both are named
+# as they are made, and neither replaces anything that is not.
 #
 # The contract is that reaching the end means the cockpit works: every
 # dependency installed, and step 7 having actually started the server and
@@ -668,7 +671,9 @@ print(sum(1 for d in sounddevice.query_devices() if d["max_output_channels"] > 0
         elif have_command codesign && codesign --verify "$APP" >/dev/null 2>&1; then
             ok "window" "$APP"
         else
-            meh "window" "$APP does not verify; rebuild it: $REPO/macos/build.sh"
+            # With the destination: build.sh alone builds the default app,
+            # which is not this one when KCGX_APP says otherwise.
+            meh "window" "$APP does not verify; rebuild it: $REPO/macos/build.sh $APP"
         fi
     fi
 
@@ -710,7 +715,9 @@ usage() {
     say "Usage: ./setup.sh [--check | --verify | --yes | --help]"
     say ""
     say "  (no arguments)  install everything kcgx needs and open the cockpit,"
-    say "                  asking before each step that changes anything"
+    say "                  asking before it installs anything or edits a file of"
+    say "                  yours (step 5 makes kcgx's own link, and on a Mac its"
+    say "                  own app, without asking)"
     say "  --check         print what you have and what is missing, then exit"
     say "  --verify        run the step 7 checks against this machine, then exit"
     say "  --yes           take every prompt's default (including appending to"
@@ -742,8 +749,11 @@ esac
 
 say "kcgx setup"
 say ""
-say "$STEPS steps. Each one asks before it changes anything, and running this"
-say "again is safe -- every step is idempotent."
+# Said without naming the app: this is printed before the platform is known,
+# and Linux is not offered one.
+say "$STEPS steps. Each one asks before it installs anything or edits a file of"
+say "yours. Step 5 makes what is kcgx's own without asking, and says where it"
+say "put it. Running this again is safe -- every step is idempotent."
 
 preflight
 install_packages

@@ -921,6 +921,49 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
   window by hand: `rm -rf ~/Applications/KCGX.app`.
 - [x] Commit `feat(launcher): kcgx opens its own window`.
 
+*After review, 2026-11-12.*
+
+- **This task landed before Task 11's hand check, which is still open.**
+  Task 11 asked for the owner's steps 1, 2, 4, 8, 9 and 10 before `kcgx`
+  came to depend on the window; nobody has done them. So
+  `open -a <app> kcgx://show?...` handing a page to a running app has not
+  been seen to work by anyone: the tests hold the link's text and what the
+  app's `--check` makes of it, and no more. What limits it: the window is
+  used only once KCGX.app exists at `$KCGX_APP`, which takes `setup.sh` or
+  `macos/build.sh` run by the owner. **`kcgx --browser`, or `KCGX_BROWSER=1`
+  in the environment, is the way back** if the window misbehaves after
+  that. Task 13 should say both in "Built" and in the README.
+- **The fallback is to `open`, not to the window.** The launcher goes to
+  the browser when `open` fails, is missing or hangs. `open` exits 0 once
+  it has handed the link over, so an app that then crashes, whose health
+  check fails, or that shows nothing, is not noticed and `kcgx` reports
+  success. The launcher now keeps from the app the two things it is known
+  to refuse (a port outside 1024 to 65535, as `KCGX_PORT=80` would give,
+  and a fragment over 512 bytes, as a very long `kcgx go` query would) and
+  shows those pages in the browser, saying so. `tests/test_window.py`
+  holds the two limits to the real app. The rest is left to the hand check.
+- **"The app exists" means its program is there**
+  (`Contents/MacOS/KCGX`), not that something is at the path. `KCGX_APP`
+  naming a folder that is not the bundle (`~/Applications`, say) used to
+  run `open -a` on it, fail, and print the fallback line at every `kcgx`.
+- **`KCGX_BROWSER` is on for anything but nothing or `0`**, `false` and
+  `no` included. Left so, and said in the launcher's docstring.
+- **`kcgx --no-open go` opened the page**, and after this task that meant
+  the window: `go`'s own `--no-open` had a default that put the flag back
+  to off. It was older than this task and is the fault this task had
+  already mended for `--browser`; mended the same way.
+- **Step 7's hint names the app.** For an app that does not verify it
+  said `rebuild it: <repo>/macos/build.sh`, which builds
+  `~/Applications/KCGX.app` whatever `KCGX_APP` says. It now ends with the
+  destination.
+- **Setup's banner and `--help` no longer say every step asks.** Step 5
+  makes the link and builds the app without a question of its own, as
+  above; the behaviour is unchanged. The banner says step 5 makes what is
+  kcgx's own without asking (it is printed before the platform is known,
+  so it does not name the app, which Linux is not offered); `--help` names
+  the link and the app. The README's line ("asks before each one that
+  changes...") is Task 13's.
+
 ### Task 13: The docs
 
 **Files:** `README.md`,

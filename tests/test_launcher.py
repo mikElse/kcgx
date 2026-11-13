@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -264,11 +265,18 @@ class Ran:
         return subprocess.CompletedProcess(command, self.returncode)
 
 
+def bundle(app):
+    """A KCGX.app, as far as the launcher looks: a bundle with the program
+    build.sh compiles into it."""
+    program = app / "Contents" / "MacOS" / "KCGX"
+    program.parent.mkdir(parents=True)
+    program.write_text("compiled\n")
+    return app
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    """A KCGX.app, as far as the launcher looks: a folder at $KCGX_APP."""
-    app = tmp_path / "apps" / "KCGX.app"
-    app.mkdir(parents=True)
+    app = bundle(tmp_path / "apps" / "KCGX.app")
     monkeypatch.setenv("KCGX_APP", str(app))
     monkeypatch.delenv("KCGX_BROWSER", raising=False)
     return app
@@ -289,15 +297,30 @@ def test_the_app_is_looked_for_in_applications_unless_told(monkeypatch):
     app = Path(os.environ["HOME"]) / "Applications" / "KCGX.app"
     assert launcher.app_path() == app
     assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is webbrowser.open
-    app.mkdir(parents=True)
+    bundle(app)
     run = Ran()
     launcher.pick_opener(launcher.parse_args([]), platform="darwin", run=run)("http://127.0.0.1:8473/")
     assert run.commands == [["open", "-a", str(app), "kcgx://show?port=8473"]]
 
 
 def test_with_no_app_built_the_page_opens_in_the_browser(app):
-    app.rmdir()
+    shutil.rmtree(app)
     assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is webbrowser.open
+
+
+def test_a_folder_that_is_not_the_app_is_not_opened_as_one(app, monkeypatch):
+    """KCGX_APP naming the folder the app is in, or an app that was never
+    finished: `open -a` would fail on it at every `kcgx`, so it is not tried."""
+    run = Ran()
+    empty = app.parent / "Empty.app"
+    empty.mkdir()
+    for not_the_app in (app.parent, app / "Contents", empty):
+        monkeypatch.setenv("KCGX_APP", str(not_the_app))
+        assert launcher.pick_opener(launcher.parse_args([]), platform="darwin", run=run) is webbrowser.open, not_the_app
+    (app / "Contents" / "MacOS" / "KCGX").unlink()
+    monkeypatch.setenv("KCGX_APP", str(app))
+    assert launcher.pick_opener(launcher.parse_args([]), platform="darwin", run=run) is webbrowser.open
+    assert run.commands == []
 
 
 def test_on_linux_the_page_opens_in_the_browser(app):
@@ -315,6 +338,11 @@ def test_kcgx_browser_in_the_environment_asks_for_the_browser_every_time(app, mo
     for off in ("", "0"):
         monkeypatch.setenv("KCGX_BROWSER", off)
         assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is not webbrowser.open
+    # Set to anything else it is on, whatever the word: only those two are off.
+    for on in ("yes", "true", "browser"):
+        monkeypatch.setenv("KCGX_BROWSER", on)
+        assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is webbrowser.open
+    assert "KCGX_BROWSER" in launcher.__doc__ and "`0`" in launcher.__doc__
 
 
 @pytest.mark.parametrize("page, link", [
@@ -346,6 +374,47 @@ def test_a_window_that_will_not_open_falls_back_to_the_browser(app, run, capsys)
     assert "browser" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("page", [
+    "http://127.0.0.1:1023/",
+    "http://127.0.0.1:80/#airport",
+    "http://127.0.0.1:8473/#airport=" + "a" * 505,
+    "http://127.0.0.1:8473/#airport=" + "%C3%A9" * 85,
+], ids=["port 1023", "port 80", "513 bytes of fragment", "518 bytes of fragment"])
+def test_a_page_the_window_would_refuse_goes_to_the_browser(app, page, capsys):
+    """The app takes a port from 1024 to 65535 and 512 bytes of fragment
+    (macos/KCGXWindow.swift, Target). `open` would hand it anything and
+    exit 0, and the window would then say the link is not one it opens."""
+    run, browser = Ran(), []
+    launcher.window_opener(app, run=run, browser=browser.append)(page)
+    assert run.commands == []
+    assert browser == [page]
+    assert "browser" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("page", [
+    "http://127.0.0.1:1024/",
+    "http://127.0.0.1:65535/",
+    "http://127.0.0.1:8473/#airport=" + "a" * 504,
+], ids=["port 1024", "port 65535", "512 bytes of fragment"])
+def test_a_page_at_the_edge_of_what_the_window_takes_is_handed_to_it(app, page):
+    run, browser = Ran(), []
+    launcher.window_opener(app, run=run, browser=browser.append)(page)
+    assert len(run.commands) == 1 and browser == []
+
+
+@pytest.mark.parametrize("argv", [["--no-open"], ["go", "--no-open"], ["--no-open", "go"], ["--no-open", "go", "seattle"]])
+def test_no_open_is_heard_before_the_command_and_after_it(argv):
+    assert launcher.parse_args(argv).no_open is True
+
+
+def test_no_open_before_go_opens_nothing(kcgx, port):
+    kcgx("--demo", "--no-open")
+    assert kcgx("--no-open", "go") == 0
+    assert kcgx("--no-open", "go", "san", "francisco") == 0
+    assert kcgx("--no-open", "go", "--open", "KSEA") == 0
+    assert kcgx.opened == []
+
+
 def test_with_no_opener_given_the_command_picks_one(kcgx, port, app, monkeypatch):
     """`kcgx go seattle` names several airports, so the page's search takes
     it: the app is handed the fragment, and the browser nothing."""
@@ -357,6 +426,7 @@ def test_with_no_opener_given_the_command_picks_one(kcgx, port, app, monkeypatch
     assert launcher.main([]) == 0
     assert run.commands[1:] == [["open", "-a", str(app), f"kcgx://show?port={port}"]]
     assert launcher.main(["--no-open"]) == 0 and launcher.main(["go", "--no-open"]) == 0
+    assert launcher.main(["--no-open", "go"]) == 0
     assert len(run.commands) == 2
 
 

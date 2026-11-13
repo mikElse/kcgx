@@ -25,7 +25,12 @@ page is shown there when the app exists at `$KCGX_APP` (by default
 `~/Applications/KCGX.app`), handed over as a `kcgx://show` link that carries
 the port and the page's fragment and nothing else. Without the app, on
 Linux, with `--browser`, or with `KCGX_BROWSER=1` in the environment, the
-page opens in the default browser, as it does if the window will not open.
+page opens in the default browser, as it does if the window will not open
+or the page is one the app would refuse. `KCGX_BROWSER` is on when it is
+set to anything but nothing or `0`: `false` and `no` are on as well.
+
+`open` returning is all the launcher can see. An app that opens and then
+shows no cockpit is not noticed here; `kcgx --browser` is the way round it.
 """
 
 from __future__ import annotations
@@ -55,6 +60,11 @@ DEFAULT_PORT = 8473
 START_TIMEOUT_SECS = 20.0
 STOP_TIMEOUT_SECS = 10.0
 OPEN_TIMEOUT_SECS = 15.0  # `open` hands the link over and returns; it does not wait for the window
+# What KCGX.app takes in a link (macos/KCGXWindow.swift, Target). It refuses
+# anything else, and `open` exits 0 all the same, so the launcher does not
+# send it. tests/test_window.py holds these to the app itself.
+WINDOW_PORTS = range(1024, 65536)
+WINDOW_FRAGMENT_BYTES = 512
 LOG_ROLL_BYTES = 1_000_000
 
 Opener = Callable[[str], Any]
@@ -147,27 +157,46 @@ def app_path() -> Path:
     return Path(os.environ.get("KCGX_APP") or Path.home() / "Applications" / "KCGX.app")
 
 
-def window_opener(app: Path, *, run: Callable[..., Any] = subprocess.run, browser: Opener = webbrowser.open) -> Opener:
-    """An opener that shows a page of this machine's cockpit in KCGX.app.
+def window_link(page: str) -> str | None:
+    """The `kcgx://show` link for a page of this machine's cockpit, or None
+    if the app would refuse it (a port under 1024, a fragment over 512 bytes).
 
     The app takes a port and a fragment (macos/KCGXWindow.swift refuses a
     link that says anything more), so those two are read back out of the
     page's address. The fragment is quoted whole: it is already quoted once
     as part of the page's address, and the app unquotes the link once.
     """
+    parts = urllib.parse.urlsplit(page)
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if port not in WINDOW_PORTS or len(parts.fragment.encode()) > WINDOW_FRAGMENT_BYTES:
+        return None
+    link = f"kcgx://show?port={port}"
+    if parts.fragment:
+        link += f"&fragment={urllib.parse.quote(parts.fragment, safe='')}"
+    return link
+
+
+def window_opener(app: Path, *, run: Callable[..., Any] = subprocess.run, browser: Opener = webbrowser.open) -> Opener:
+    """An opener that shows a page of this machine's cockpit in KCGX.app,
+    or in the browser when the app would refuse the page or `open` fails."""
 
     def show(page: str) -> None:
-        parts = urllib.parse.urlsplit(page)
-        link = f"kcgx://show?port={parts.port}"
-        if parts.fragment:
-            link += f"&fragment={urllib.parse.quote(parts.fragment, safe='')}"
-        try:
-            opened = run(["open", "-a", str(app), link], check=False, timeout=OPEN_TIMEOUT_SECS).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            opened = False
-        if not opened:
-            print(f"kcgx: {app} would not open; showing the page in the browser instead.", file=sys.stderr)
-            browser(page)
+        link = window_link(page)
+        if link is None:
+            why = f"{app} does not take this page (a port under 1024, or a search this long)"
+        else:
+            try:
+                opened = run(["open", "-a", str(app), link], check=False, timeout=OPEN_TIMEOUT_SECS).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                opened = False
+            if opened:
+                return
+            why = f"{app} would not open"
+        print(f"kcgx: {why}; showing the page in the browser instead.", file=sys.stderr)
+        browser(page)
 
     return show
 
@@ -180,13 +209,19 @@ def pick_opener(
     browser: Opener = webbrowser.open,
 ) -> Opener:
     """What shows the page: KCGX.app on a Mac that has it, else the browser.
-    A window for Linux would be chosen here."""
+    A window for Linux would be chosen here.
+
+    `KCGX_BROWSER` set to anything but nothing or `0` asks for the browser.
+    "Has it" means the bundle's program is there, as macos/build.sh leaves
+    it: a `KCGX_APP` that names some other folder is not handed to `open`,
+    which would fail on it at every `kcgx`.
+    """
     if getattr(args, "browser", False) or os.environ.get("KCGX_BROWSER", "") not in ("", "0"):
         return browser
     if (platform or sys.platform) != "darwin":
         return browser
     app = app_path()
-    if not app.exists():
+    if not (app / "Contents" / "MacOS" / "KCGX").is_file():
         return browser
     return window_opener(app, run=run, browser=browser)
 
@@ -397,8 +432,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     commands = parser.add_subparsers(dest="command")
     go = commands.add_parser("go", help="point the cockpit at an airport")
     go.add_argument("query", nargs="*", help="an ICAO, or text to search for")
-    go.add_argument("--no-open", action="store_true", help="do not open its own window")
-    # No default of its own, or `kcgx --browser go` would be put back to False.
+    # Neither has a default of its own here, or `kcgx --no-open go` and
+    # `kcgx --browser go` would be put back to False.
+    go.add_argument("--no-open", action="store_true", default=argparse.SUPPRESS, help="do not open its own window")
     go.add_argument("--browser", action="store_true", default=argparse.SUPPRESS, help=BROWSER_HELP)
     go.add_argument("--open", action="store_true", help="open the page after switching")
     commands.add_parser("stop", help="stop the server")

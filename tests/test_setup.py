@@ -885,7 +885,25 @@ def test_verify_warns_about_a_window_whose_signature_does_not_hold(tmp_path):
     assert result.returncode == 0, "the window is advisory: the cockpit still opens in the browser"
     [row] = [line for line in result.stdout.splitlines() if line.startswith("  window")]
     assert row.split()[1] == "warn" and "macos/build.sh" in row, row
+    # The command it offers rebuilds this app: build.sh alone builds the one
+    # in ~/Applications, which is not the one KCGX_APP has the launcher open.
+    assert row.endswith(f"rebuild it: {REPO}/macos/build.sh {app}"), row
     assert "1 warning(s) above" in result.stdout
+
+
+def test_setup_does_not_promise_a_question_before_everything(tmp_path):
+    """Step 5 links the launcher and builds the window without asking (the
+    plan's choice), so the banner and --help may not say every step asks."""
+    path_dir = window_env(tmp_path)
+    result = run_setup_for_the_window(tmp_path, path_dir)
+    assert result.returncode == 0, result.stdout + result.stderr
+    banner = " ".join(result.stdout.split("Step 1/7", 1)[0].split())
+    assert "asks before it changes anything" not in banner, banner
+    assert "Step 5" in banner and "without asking" in banner, banner
+    assert "idempotent" in banner
+    usage = " ".join(run_setup(tmp_path, path_dir, "--help").stdout.split())
+    assert "asking before each step that changes anything" not in usage, usage
+    assert "without asking" in usage, usage
 
 
 def test_verify_without_a_window_says_so_and_does_not_count_it_against_the_install(tmp_path):
