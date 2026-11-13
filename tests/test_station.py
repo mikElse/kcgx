@@ -332,7 +332,7 @@ async def test_stop_stops_every_feed_and_releases_the_mixer_channels():
 
 
 async def test_the_snapshot_carries_the_prefs_the_station_was_given():
-    prefs = {**DEFAULTS, "palette": "AMBER", "glow": "FULL", "display": "OFF", "lamps": True}
+    prefs = {**DEFAULTS, "palette": "AMBER", "glow_map": 75, "display": "OFF", "lamps": True}
     station, *_ = make(prefs=prefs)
     assert station.snapshot()["prefs"] == prefs
 
@@ -357,10 +357,35 @@ async def test_a_prefs_change_is_remembered_and_reaches_every_page():
     station.handle({"t": "prefs", "palette": "MATRIX"})
     assert saved == [{**DEFAULTS, "palette": "MATRIX"}]
     assert frames(page, "prefs") == [{"t": "prefs", **DEFAULTS, "palette": "MATRIX"}]
-    station.handle({"t": "prefs", "glow": "OFF", "teletype": True, "box_items": ["HUD"]})
+    station.handle({"t": "prefs", "glow_text": 0, "teletype": True, "box_items": ["HUD"]})
     assert station.prefs == {
-        **DEFAULTS, "palette": "MATRIX", "glow": "OFF", "teletype": True, "box_items": ["HUD"],
+        **DEFAULTS, "palette": "MATRIX", "glow_text": 0, "teletype": True, "box_items": ["HUD"],
     }
+
+
+async def test_a_partial_table_is_merged_a_cell_at_a_time():
+    """Two tabs changing two cells of the map: both land, and what is
+    remembered and sent is the whole table."""
+    saved = []
+    station, hub, *_ = make(remembered_prefs=saved)
+    page = watch(hub)
+    station.handle({"t": "prefs", "map": {"COAST": {"alpha": 60}}})
+    station.handle({"t": "prefs", "map": {"COAST": {"width": 30}, "LAKE": {"show": False}}})
+    whole = {
+        **DEFAULTS["map"],
+        "COAST": {**DEFAULTS["map"]["COAST"], "alpha": 60, "width": 30},
+        "LAKE": {**DEFAULTS["map"]["LAKE"], "show": False},
+    }
+    assert station.prefs["map"] == whole
+    assert saved[-1] == {**DEFAULTS, "map": whole}
+    assert frames(page, "prefs")[-1] == {"t": "prefs", **DEFAULTS, "map": whole}
+    assert DEFAULTS["map"]["COAST"]["alpha"] == 100, "the merge reached the defaults"
+
+
+async def test_a_stations_given_prefs_with_part_of_a_table_keep_the_rest():
+    station, *_ = make(prefs={"map": {"COAST": {"alpha": 60}}})
+    assert station.prefs["map"]["COAST"] == {**DEFAULTS["map"]["COAST"], "alpha": 60}
+    assert station.prefs["map"]["LAKE"] == DEFAULTS["map"]["LAKE"]
 
 
 # -- the radar ---------------------------------------------------------------

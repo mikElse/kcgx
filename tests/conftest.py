@@ -8,6 +8,8 @@ to prove it is not.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import kcgx.state
@@ -53,3 +55,17 @@ def isolate_kcgx_state(tmp_path, monkeypatch):
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     return path
+
+
+@pytest.fixture(scope="module")
+def page_state(tmp_path_factory):
+    """The state folder for a page test's server: KCGX_STATE_PATH is
+    `page_state / "airport"`, so its prefs file is `page_state / "prefs.json"`.
+
+    The prefs start with the boot animation off, so that nothing covers the
+    cockpit while a test works it (phase G decision 1). The boot tests turn
+    it back on themselves.
+    """
+    state = tmp_path_factory.mktemp("page-state")
+    (state / "prefs.json").write_text(json.dumps({"boot_anim": False}) + "\n")
+    return state

@@ -21,7 +21,9 @@ function applyPrefs() {
   const { prefs } = store.state;
   const root = document.documentElement;
   root.dataset.palette = prefs.palette;
-  root.dataset.glow = prefs.glow;
+  // Until phase G Task 4 reads the three glow numbers by layer: the phase F
+  // OFF, LOW and FULL, from the map's number, for theme.js and the stylesheet.
+  root.dataset.glow = prefs.glow_map === 0 ? "OFF" : prefs.glow_map <= 50 ? "LOW" : "FULL";
   root.dataset.display = prefs.display;
   // The scanlines: the pitch is the setting, the dark line a third of it.
   root.style.setProperty("--scan-alpha", String(prefs.scan_opacity / 100));

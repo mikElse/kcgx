@@ -19,7 +19,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from kcgx.prefs import SCHEMA, defaults
+from kcgx.prefs import SCHEMA, CellError, defaults
 
 PROTOCOL = 1
 
@@ -178,7 +178,9 @@ def _prefs(data: dict) -> dict:
     and nothing else: a name the schema does not have refuses the message
     even beside ones it does, so a mistyped setting is not silently dropped.
     Names are exact: the page sends what the server sent it. What comes back
-    is canonical (a subset in schema order, without repeats)."""
+    is canonical (a subset in schema order, without repeats). A table may be
+    sent in part, any of its cells; one bad cell refuses the message too,
+    and the refusal names it (`map.COAST.alpha`)."""
     for key in data:
         if key != "t" and key not in SCHEMA:
             raise BadMessage(f"unknown setting: {key}")
@@ -188,6 +190,8 @@ def _prefs(data: dict) -> dict:
             continue
         try:
             changes[key] = spec.check(data[key])
+        except CellError as bad:
+            raise BadMessage(f"{key}.{bad.where} {bad.reason}") from None
         except ValueError as reason:
             raise BadMessage(f"{key} {reason}") from None
     if not changes:

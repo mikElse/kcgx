@@ -14,17 +14,34 @@ from pathlib import Path
 
 import pytest
 
-from kcgx.prefs import PALETTES, SCHEMA, Choice, Flag, Number, Subset
+from kcgx.prefs import PALETTES, SCHEMA, Choice, Flag, Number, Subset, Table
 
 WEB = Path(__file__).parent.parent / "src" / "kcgx" / "web"
 INDEX_HTML = WEB / "index.html"
 SHEETS_JS = WEB / "static" / "js" / "sheets.js"
 COCKPIT_CSS = WEB / "static" / "cockpit.css"
 
+# Until phase G Task 2: the round two settings (phase G Task 1) are in the
+# schema but not yet in the sheet; Task 2 gives each its control and empties
+# this. Every check below holds for every other setting, as strictly as ever,
+# and `test_every_setting_has_a_control` (an xfail, strict) fails the moment
+# the sheet has them all, so that this cannot be left behind.
+UNTIL_TASK_2 = frozenset({
+    "boot_anim", "ui_zoom", "font", "font_px", "clock_24h", "clock_seconds", "clock_zone",
+    "glow_map", "glow_traffic", "glow_text", "aa", "burn_in", "fps_max", "poll_secs",
+    "motion", "view_ease", "zoom_speed",
+    "map", "label_min", "label_max", "tag_px", "follow_nm", "info_box",
+    "tail_secs", "tail_alpha", "tail_alpha_min", "tail_alpha_max", "tail_gs_low", "tail_gs_high",
+    "ground_mode", "ground_gs", "ground_alt", "ground_min", "ground_alpha",
+    "track_cols", "track_sort", "track_desc", "sort_floor", "tracks_open", "tracks_pct",
+    "short_names",
+})
+# The settings the sheet has a control for, in schema order.
+ON_THE_PAGE = {key: spec for key, spec in SCHEMA.items() if key not in UNTIL_TASK_2}
+
 # The settings table in the plan: the words beside each control.
 ROWS = {
     "palette": "THEME",
-    "glow": "GLOW",
     "display": "DISPLAY",
     "scan_opacity": "SCANLINE OPACITY",
     "scan_size": "SCANLINE SIZE",
@@ -41,7 +58,7 @@ ROWS = {
 
 SECTIONS = {
     "OUTPUT": [],
-    "LOOK": ["palette", "glow", "display", "scan_opacity", "scan_size"],
+    "LOOK": ["palette", "display", "scan_opacity", "scan_size"],
     "LAYOUT": ["lamps", "teletype"],
     "RADAR": ["range_nm", "tag_fields", "box_items", "box_fill", "box_pad", "box_border", "box_width"],
 }
@@ -136,12 +153,21 @@ def names(found: dict) -> list[str]:
 
 
 def test_every_setting_has_exactly_one_control_and_no_control_is_for_anything_else(sheet):
+    assert sorted(c["key"] for c in sheet.controls) == sorted(ON_THE_PAGE)
+
+
+def test_the_settings_waiting_for_a_control_are_all_in_the_schema():
+    assert UNTIL_TASK_2 <= set(SCHEMA)
+
+
+@pytest.mark.xfail(strict=True, reason="until phase G Task 2: the round two settings have no controls yet")
+def test_every_setting_has_a_control(sheet):
     assert sorted(c["key"] for c in sheet.controls) == sorted(SCHEMA)
 
 
 def test_the_controls_are_in_the_config_sheet_in_the_schemas_order(sheet):
     assert {c["dialog"] for c in sheet.controls} == {"config-sheet"}
-    assert [c["key"] for c in sheet.controls] == list(SCHEMA)
+    assert [c["key"] for c in sheet.controls] == list(ON_THE_PAGE)
 
 
 def test_the_sheets_sections_are_output_look_layout_and_radar(sheet):
@@ -156,12 +182,12 @@ def test_limits_is_gone(sheet):
     assert "max-streams" not in sheet.ids
 
 
-@pytest.mark.parametrize("key", list(SCHEMA))
+@pytest.mark.parametrize("key", list(ON_THE_PAGE))
 def test_a_control_sits_in_the_row_the_plan_names(sheet, key):
     assert control(sheet, key)["row"] == ROWS[key]
 
 
-@pytest.mark.parametrize("key", [k for k, spec in SCHEMA.items() if isinstance(spec, Number)])
+@pytest.mark.parametrize("key", [k for k, spec in ON_THE_PAGE.items() if isinstance(spec, Number)])
 def test_a_numbers_slider_has_the_schemas_range(sheet, key):
     spec, found = SCHEMA[key], control(sheet, key)
     attrs = found["attrs"]
@@ -178,28 +204,32 @@ def test_the_range_moves_in_steps_of_ten(sheet):
     assert control(sheet, "range_nm")["attrs"]["step"] == "10"
 
 
-@pytest.mark.parametrize("key", [k for k, spec in SCHEMA.items() if isinstance(spec, Choice)])
+@pytest.mark.parametrize("key", [k for k, spec in ON_THE_PAGE.items() if isinstance(spec, Choice)])
 def test_a_choice_offers_the_schemas_names_in_order(sheet, key):
     found = control(sheet, key)
     assert found["tag"] == "select" or found["attrs"].get("data-kind") == "choice"
     assert names(found) == list(SCHEMA[key].names)
 
 
-def test_the_theme_is_a_dropdown_and_glow_and_display_are_segments(sheet):
+def test_the_theme_is_a_dropdown_and_display_is_segments(sheet):
     assert control(sheet, "palette")["tag"] == "select"
-    for key in ("glow", "display"):
-        found = control(sheet, key)
-        assert found["tag"] == "div" and "segments" in found["attrs"]["class"].split()
+    found = control(sheet, "display")
+    assert found["tag"] == "div" and "segments" in found["attrs"]["class"].split()
 
 
-@pytest.mark.parametrize("key", [k for k, spec in SCHEMA.items() if isinstance(spec, Subset)])
+def test_glow_the_choice_has_no_control(sheet):
+    """Glow is three numbers now (phase G decision 15); Task 2 gives them their sliders."""
+    assert "glow" not in [c["key"] for c in sheet.controls]
+
+
+@pytest.mark.parametrize("key", [k for k, spec in ON_THE_PAGE.items() if isinstance(spec, Subset)])
 def test_a_subset_offers_the_schemas_names_in_order(sheet, key):
     found = control(sheet, key)
     assert found["attrs"].get("data-kind") == "subset"
     assert names(found) == list(SCHEMA[key].names)
 
 
-@pytest.mark.parametrize("key", [k for k, spec in SCHEMA.items() if isinstance(spec, Flag)])
+@pytest.mark.parametrize("key", [k for k, spec in ON_THE_PAGE.items() if isinstance(spec, Flag)])
 def test_a_flag_is_declared_a_flag(sheet, key):
     found = control(sheet, key)
     assert found["attrs"].get("data-kind") == "flag"

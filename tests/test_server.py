@@ -397,7 +397,7 @@ def test_prefs_are_read_at_startup(monkeypatch, tmp_path):
     monkeypatch.setattr("squelch.config.DEFAULT_PATH", tmp_path / "missing.toml")
     from kcgx.prefs import prefs_path, write_prefs
 
-    chosen = {"palette": "MATRIX", "glow": "OFF", "display": "VECTOR", "teletype": True, "box_items": ["HUD"]}
+    chosen = {"palette": "MATRIX", "glow_map": 0, "display": "VECTOR", "teletype": True, "box_items": ["HUD"]}
     write_prefs(chosen)
     assert prefs_path().exists()
     served = {}

@@ -22,7 +22,7 @@ from typing import Any
 from kcgx import protocol
 from kcgx.airports import Airport, find
 from kcgx.hub import Hub
-from kcgx.prefs import defaults, write_prefs
+from kcgx.prefs import defaults, merge, write_prefs
 from kcgx.radar import Fetch, Radar, fetch_adsb_lol
 from kcgx.state import write_airport
 from squelch.cockpit import ADDED, FEED, MESSAGE, ORDER, Cockpit
@@ -66,7 +66,7 @@ class Station:
         self._remember = remember
         self._remember_prefs = remember_prefs
         # Always every setting: what `prefs` leaves out is the default.
-        self.prefs = {**defaults(), **(prefs or {})}
+        self.prefs = merge(defaults(), prefs or {})
         # Polled by the server's radar task (kcgx.server), retargeted here
         # on every airport change and retuned by set_prefs. Its pace comes
         # from the config file; its range is a setting.
@@ -194,9 +194,11 @@ class Station:
 
     def set_prefs(self, changes: dict) -> None:
         """Any settings from kcgx.prefs.SCHEMA, already validated by the
-        protocol. Remembered, and sent to every page so all tabs agree. A
-        new range also reaches the radar, which sends its own frame."""
-        self.prefs = {**self.prefs, **changes}
+        protocol. A table's cells are merged one at a time, so two tabs
+        changing two cells both land. Remembered, and sent to every page so
+        all tabs agree. A new range also reaches the radar, which sends its
+        own frame."""
+        self.prefs = merge(self.prefs, changes)
         self._remember_prefs(self.prefs)
         self.hub.broadcast(protocol.prefs_frame(self.prefs))
         if self.prefs["range_nm"] != self.radar.range_nm:

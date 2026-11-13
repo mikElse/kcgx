@@ -24,6 +24,7 @@ import zlib
 import pytest
 
 from kcgx.prefs import DEFAULTS, SCHEMA, Choice, Flag, Number, Subset
+from test_page_prefs import ON_THE_PAGE  # until phase G Task 2: the settings the sheet has controls for
 
 playwright_api = pytest.importorskip("playwright.sync_api")
 
@@ -39,8 +40,8 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def server(tmp_path_factory):
-    state = tmp_path_factory.mktemp("page-state")
+def server(page_state):
+    state = page_state
     port = _free_port()
     env = {
         **os.environ,
@@ -125,6 +126,12 @@ def radar_drawn(page):
 
 def feed_names(page, shape):
     return page.eval_on_selector_all(f".feed.{shape} .feed-name", "els => els.map(e => e.textContent)")
+
+
+def glow(level):
+    """All three glow numbers at one level. The phase F choice's OFF, LOW and
+    FULL are 0, 33 and 75 (phase G decision 15)."""
+    return {"glow_map": level, "glow_traffic": level, "glow_text": level}
 
 
 def set_prefs(page, **prefs):
@@ -659,10 +666,10 @@ def test_the_volume_slider_reaches_the_server(page):
 
 # -- the config sheet ------------------------------------------------------------
 
-NUMBERS = {key: spec for key, spec in SCHEMA.items() if isinstance(spec, Number)}
-SUBSETS = {key: spec for key, spec in SCHEMA.items() if isinstance(spec, Subset)}
-FLAGS = [key for key, spec in SCHEMA.items() if isinstance(spec, Flag)]
-SEGMENTED = {key: spec for key, spec in SCHEMA.items() if isinstance(spec, Choice) and key != "palette"}
+NUMBERS = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Number)}
+SUBSETS = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Subset)}
+FLAGS = [key for key, spec in ON_THE_PAGE.items() if isinstance(spec, Flag)]
+SEGMENTED = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Choice) and key != "palette"}
 READOUTS = {
     "scan_opacity": "{}%", "scan_size": "{} PX", "range_nm": "{} NM",
     "box_fill": "{}%", "box_pad": "{} PX", "box_border": "{}%", "box_width": "{} PX",
@@ -757,7 +764,7 @@ def test_the_sheet_opens_showing_the_defaults(page):
         assert page.input_value(f"#config-sheet input[data-pref={key}]") == str(DEFAULTS[key]), key
         assert readout(page, key) == READOUTS[key].format(DEFAULTS[key]), key
     # every control is one a person can reach and work
-    for key in SCHEMA:
+    for key in ON_THE_PAGE:
         assert page.locator(f"#config-sheet [data-pref={key}]").is_visible(), key
 
 
@@ -1085,7 +1092,7 @@ def test_the_config_sheet_does_not_darken_the_radar_and_the_airport_sheet_does(p
     """Decision 10: scanlines, boxes and range are seen changing while they
     are set. The pixel is the radar screen's frame, halfway down its left
     edge: with no display effects it is exactly the frame colour."""
-    set_prefs(page, display="OFF", glow="OFF")
+    set_prefs(page, display="OFF", **glow(0))
     frame = css_colour(page, "--frame")
     x, y = page.eval_on_selector(
         ".screen-radar", "e => { const r = e.getBoundingClientRect(); return [r.left, Math.round(r.top + r.height / 2)]; }"
@@ -1670,7 +1677,7 @@ def test_a_setting_other_than_the_range_leaves_the_view_alone(page):
     pan(page, x, y)
     view = radar_debug(page)["view"]
     assert view["nm"] < 27 and view["panX"] != 0
-    set_prefs(page, glow="FULL", range_nm=40)
+    set_prefs(page, **glow(75), range_nm=40)
     assert radar_debug(page)["view"] == view
 
 
@@ -2061,7 +2068,7 @@ def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(
 
 def test_a_tags_box_blacks_out_the_map_under_it_and_is_edged_in_the_tags_colour(page):
     wait_for_traffic(page)
-    debug = draw(page, glow="OFF", display="OFF", box_items=["AIRCRAFT"], box_fill=0, box_border=0, box_pad=12)
+    debug = draw(page, **glow(0), display="OFF", box_items=["AIRCRAFT"], box_fill=0, box_border=0, box_pad=12)
     ring = next(r for r in debug["rings"] if r["nm"] == 20)
     home = debug["home"]
     # West of the airport and outside the 20 nm ring by 60 px, so that the
@@ -2110,7 +2117,7 @@ def test_a_tags_box_is_the_padding_and_the_border_about_the_text(page):
 
 def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
     wait_for_traffic(page)
-    set_prefs(page, glow="OFF", display="OFF", box_items=["AIRCRAFT"], box_fill=100, box_border=100, box_pad=12)
+    set_prefs(page, **glow(0), display="OFF", box_items=["AIRCRAFT"], box_fill=100, box_border=100, box_pad=12)
     drawn = hold_traffic(page, plane("a1", -12, 12), plane("a2", 12, -12))
     edges = {hex_: edge_middles(tag["box"]) for hex_, tag in drawn.items()}
     cyan = (*css_colour(page, "--cyan"), 255)
@@ -2162,7 +2169,7 @@ def test_the_traffics_glow_is_a_shadow_for_each_colour_not_one_for_each_stroke(p
     WebKit, and in Chromium drawing on a GPU. So the lines of one colour
     share a shadow, however many aircraft there are."""
     wait_for_traffic(page)
-    set_prefs(page, glow="LOW", display="OFF")
+    set_prefs(page, **glow(33), display="OFF")
     for step in (0, 1, 2, 3):  # four polls: a trail of three segments behind each
         hold_traffic(page, *fleet(count, step, a1={"sq": "7700"}))
     picture(page)  # the map has drawn itself on; from here only the traffic is drawn each frame
@@ -2175,7 +2182,7 @@ def test_the_traffics_glow_is_a_shadow_for_each_colour_not_one_for_each_stroke(p
     picture(page)
     shadowed = page.evaluate(SHADOWED)
     assert shadowed == {"drawImage": 3}, f"cyan, the alarm colour and pink, a shadow each: {shadowed}"
-    set_prefs(page, glow="OFF")
+    set_prefs(page, **glow(0))
     picture(page)
     assert page.evaluate(SHADOWED) == {}
 
@@ -2195,12 +2202,12 @@ def beside_the_tail(page, hex_, reach):
     return [(hit["x"] + 3 * ratio, hit["y"] + 7 * ratio), (hit["x"] + (3 + reach) * ratio, hit["y"] + 7 * ratio)]
 
 
-@pytest.mark.parametrize("glow, reach", [("LOW", 4), ("FULL", 9)])
-def test_an_aircraft_glows_in_its_own_colour_and_not_at_all_with_the_glow_off(page, glow, reach):
+@pytest.mark.parametrize("level, reach", [(33, 4), (75, 9)])
+def test_an_aircraft_glows_in_its_own_colour_and_not_at_all_with_the_glow_off(page, level, reach):
     """What an aircraft adds to the picture beside its lines: the map's own
     light there is read first, with the aircraft away."""
     wait_for_traffic(page)
-    draw(page, glow=glow, display="OFF", tag_fields=[])
+    draw(page, **glow(level), display="OFF", tag_fields=[])
     planes = [plane("a1", -25, 14, trk=0), plane("a2", 25, 14, trk=0, sq="7700")]
     hold_traffic(page, *planes)
     spots = beside_the_tail(page, "a1", reach) + beside_the_tail(page, "a2", reach)
@@ -2220,7 +2227,7 @@ def test_an_aircraft_glows_in_its_own_colour_and_not_at_all_with_the_glow_off(pa
     # A glow and not a wider line: it falls away.
     assert 0 <= sum(far) < sum(near) / 2 and sum(near) < 300, (near, far)
     assert 0 <= sum(alarm_far) < sum(alarm_near) / 2, (alarm_near, alarm_far)
-    draw(page, glow="OFF")
+    draw(page, **glow(0))
     assert added() == [[0, 0, 0]] * 4, "an aircraft lights what is beside it with the glow off"
 
 
@@ -2258,7 +2265,7 @@ def test_a_boxed_kind_of_label_is_filled_black_and_edged_in_its_own_colour(page,
         name_a_state(page)
     wait_for_traffic(page)
     hold_traffic(page)  # nothing flying over the labels
-    plain = still_labels(draw(page, glow="OFF", display="OFF"))
+    plain = still_labels(draw(page, **glow(0), display="OFF"))
     assert not any(label["boxed"] or label["box"] for label in plain.values())
     debug = draw(page, box_items=[item], box_fill=100, box_border=100)
     width, height = canvas_size(page)
@@ -2288,7 +2295,7 @@ def test_a_box_on_the_still_layer_blacks_out_the_ring_it_lies_across(page):
     wait_for_traffic(page)
     hold_traffic(page)
     # At the widest padding a ring number's box reaches back over its own ring.
-    debug = draw(page, glow="OFF", display="OFF", box_items=["RINGS"], box_fill=0, box_border=0, box_pad=12)
+    debug = draw(page, **glow(0), display="OFF", box_items=["RINGS"], box_fill=0, box_border=0, box_pad=12)
     ring, home = debug["rings"][-1], debug["home"]
     assert ring["bright"] and ring["label"]["boxed"]
     d = ring["r"] * 0.5**0.5
@@ -2307,7 +2314,7 @@ def test_a_ring_number_on_the_airports_name_is_left_off_once_either_is_boxed(pag
     other, so the number, placed after the name, is the one to give way."""
     wait_for_traffic(page)
     hold_traffic(page)
-    plain = draw(page, glow="OFF", display="OFF")
+    plain = draw(page, **glow(0), display="OFF")
     assert plain["placed"][0]["key"] == "home"
     bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
     assert [text for text, label in bare.items() if overlap(label, plain["placed"][0])] == ["10"]
@@ -2338,7 +2345,7 @@ def test_a_ring_number_takes_its_other_place_when_a_boxed_name_has_its_first(pag
     nearest the middle."""
     wait_for_traffic(page)
     hold_traffic(page)
-    draw(page, glow="OFF", display="OFF")
+    draw(page, **glow(0), display="OFF")
     x, y = centre_of_the_radar(page)
     page.mouse.move(x, y)
     page.mouse.down()
@@ -2375,7 +2382,7 @@ def test_a_boxed_place_keeps_off_a_bare_ring_number(page, range_nm):
     wait_for_traffic(page)
     hold_traffic(page)
     places = ["AIRPORTS", "NAVAIDS", "CITIES", "PEAKS"]
-    plain = draw(page, glow="OFF", display="OFF", range_nm=range_nm)
+    plain = draw(page, **glow(0), display="OFF", range_nm=range_nm)
     numbers = [ring["label"] for ring in plain["rings"]]
     assert all(numbers)
     across = {p["key"] for p in plain["placed"][1:] for n in numbers if overlap(p, n)}
@@ -2400,7 +2407,7 @@ def test_a_boxed_place_keeps_off_a_bare_ring_number(page, range_nm):
 def test_a_box_does_not_brighten_with_its_label_under_the_pointer(page):
     wait_for_traffic(page)
     hold_traffic(page)
-    debug = draw(page, glow="OFF", display="OFF", box_items=["CITIES"], box_fill=100, box_border=50)
+    debug = draw(page, **glow(0), display="OFF", box_items=["CITIES"], box_fill=100, box_border=50)
     width, height = canvas_size(page)
     label = next(
         p for p in debug["placed"]
@@ -2483,7 +2490,7 @@ def bounds(page, selector):
 def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
     spans = ["#radar-range", "#radar-poll", "#radar-tracks"]
     assert page.eval_on_selector_all(".hud span", "els => els.map(e => '#' + e.id)") == spans
-    set_prefs(page, glow="OFF", display="OFF")  # nothing over the readouts but themselves
+    set_prefs(page, **glow(0), display="OFF")  # nothing over the readouts but themselves
     for span in spans:
         assert hud_style(page, span, "backgroundColor") == "rgba(0, 0, 0, 0)"
         assert hud_style(page, span, "borderLeftWidth") == "0px" and hud_style(page, span, "paddingLeft") == "0px"

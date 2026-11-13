@@ -107,7 +107,7 @@ def test_a_snapshot_without_prefs_has_lists_of_its_own():
 
 
 def test_a_snapshot_carries_the_prefs_it_is_given():
-    prefs = {**DEFAULTS, "palette": "MONO", "glow": "OFF", "display": "VECTOR", "range_nm": 120}
+    prefs = {**DEFAULTS, "palette": "MONO", "glow_map": 0, "display": "VECTOR", "range_nm": 120}
     frame = snapshot(
         airport=None, icao="KPDX", loading=False, sessions=[], volume=1,
         max_streams=7, audio_ok=True, log=[], prefs=prefs,
@@ -161,8 +161,8 @@ def test_volume_is_clamped_to_the_unit_range(value, expected):
 
 def test_prefs_parse_one_or_more_known_names():
     assert parse_client('{"t":"prefs","palette":"MATRIX"}') == {"t": "prefs", "palette": "MATRIX"}
-    assert parse_client('{"t":"prefs","glow":"OFF","display":"CRT"}') == {
-        "t": "prefs", "glow": "OFF", "display": "CRT",
+    assert parse_client('{"t":"prefs","glow_traffic":0,"display":"CRT"}') == {
+        "t": "prefs", "glow_traffic": 0, "display": "CRT",
     }
 
 
@@ -177,6 +177,11 @@ def test_prefs_parse_one_or_more_known_names():
         {"tag_fields": ["CALLSIGN", "TYPE", "DIST"]},  # a subset
         {"box_items": []},
         {"box_fill": 0, "box_pad": 12, "box_border": 100, "box_width": 5, "scan_size": 2},
+        {"map": {"COAST": {"alpha": 60}}},  # a table, in part
+        {"map": {"CLASS_D": {"line": "DASH", "width": 5}, "HOME": {"show": False, "label": 32}}},
+        {"map": {}},
+        {"glow_map": 0, "glow_traffic": 100, "glow_text": 50},
+        {"poll_secs": 120, "fps_max": 15, "aa": "SUPER", "boot_anim": False},
     ],
 )
 def test_prefs_parse_every_kind_of_setting(changes):
@@ -194,7 +199,7 @@ def test_a_subset_from_a_page_is_put_in_schema_order_without_repeats():
     [
         ("palette", "PLAID"),
         ("palette", "amber"),
-        ("glow", 1),
+        ("glow_map", 101),
         ("display", None),
         ("lamps", 1),
         ("lamps", "true"),
@@ -211,12 +216,38 @@ def test_a_subset_from_a_page_is_put_in_schema_order_without_repeats():
         ("box_items", {"HUD": True}),
         ("box_items", [["HUD"]]),
         ("box_items", None),
+        ("poll_secs", 10),
+        ("map", "SOLID"),
+        ("map", []),
     ],
 )
 def test_a_bad_pref_is_refused_by_name(key, bad):
     with pytest.raises(BadMessage) as refused:
         parse_client(json.dumps({"t": "prefs", key: bad}))
     assert str(refused.value).startswith(key + " must be ")
+
+
+@pytest.mark.parametrize(
+    "cells, said",
+    [
+        ({"COAST": {"alpha": 101}}, "map.COAST.alpha must be a whole number from 0 to 100"),  # fails its spec
+        ({"COAST": {"alpha": 60.0}}, "map.COAST.alpha must be a whole number from 0 to 100"),
+        ({"COAST": {"line": "dash"}}, "map.COAST.line must be one of SOLID, DASH, DOT"),
+        ({"COAST": {"label": 12}}, "map.COAST.label "),  # a column COAST does not have
+        ({"COAST": {"colour": "red"}}, "map.COAST.colour "),  # a column nothing has
+        ({"NOWHERE": {"alpha": 1}}, "map.NOWHERE "),  # an unknown row
+        ({"COAST": True}, "map.COAST "),
+    ],
+)
+def test_a_bad_cell_refuses_the_whole_message_naming_the_cell(cells, said):
+    with pytest.raises(BadMessage) as refused:
+        parse_client(json.dumps({"t": "prefs", "palette": "MONO", "map": {"LAKE": {"alpha": 10}, **cells}}))
+    assert str(refused.value).startswith(said), str(refused.value)
+
+
+def test_glow_the_choice_is_an_unknown_setting_now():
+    with pytest.raises(BadMessage, match="^unknown setting: glow$"):
+        parse_client('{"t": "prefs", "glow": "LOW"}')
 
 
 def test_one_bad_pref_refuses_the_whole_message():
@@ -256,7 +287,8 @@ def test_a_setting_is_named_exactly():
         '{"t": "prefs"}',
         '{"t": "prefs", "palette": "PLAID"}',
         '{"t": "prefs", "palette": "amber"}',
-        '{"t": "prefs", "glow": 1}',
+        '{"t": "prefs", "glow": "LOW"}',
+        '{"t": "prefs", "map": {"COAST": {"alpha": 101}}}',
         '{"t": "prefs", "display": "CRT", "palette": null}',
         '{"t": "prefs", "theme": "WOPR"}',
         "not json",
