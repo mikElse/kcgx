@@ -446,3 +446,235 @@ def test_scrolled_down_the_header_stays_on_top_and_hides_the_rows(page):
     # And the rows are there, under it: a rule shows just below.
     below = [pixel(page, x, y) for y in range(int(filters["bottom"]) + 1, int(filters["bottom"]) + 24)]
     assert any(p != (0, 0, 0) for p in below), below
+
+
+# -- the pane's height and its fold (Task 9) --------------------------------------------------
+#
+# tracks_pct is the tracks row, the pane and the gap above it, as a percent of
+# the page's content box (the window's height, or the page's least, less its
+# padding). UI zoom (prefs ui_zoom) is CSS zoom on .page; it is simulated
+# here as the CHROME lane sets it, zoom on .page and its height 100 %.
+
+# An element's box in the window's px in either engine: getBoundingClientRect
+# is in the window's px in Chromium and in the element's own under a zoomed
+# ancestor in WebKit; offsetWidth is in the element's own in both.
+WINDOW_BOX = """sel => { const el = document.querySelector(sel), r = el.getBoundingClientRect();
+    let k = 1; for (let e = el; e; e = e.parentElement) k *= parseFloat(getComputedStyle(e).zoom) || 1;
+    const s = el.offsetWidth ? r.width / el.offsetWidth : 1, f = Math.abs(s - k) < Math.abs(s - 1) ? 1 : k;
+    return { left: r.left * f, top: r.top * f, right: r.right * f, bottom: r.bottom * f,
+             width: r.width * f, height: r.height * f }; }"""
+
+PANES = {"radar": ".screen-radar", "freq": ".screen-freq", "tracks": ".screen-tracks", "log": ".screen-log"}
+
+
+def window_box(tab, selector):
+    return tab.evaluate(WINDOW_BOX, selector)
+
+
+def panes(tab):
+    return {name: window_box(tab, selector) for name, selector in PANES.items()
+            if tab.eval_on_selector(selector, "e => e.getClientRects().length > 0")}
+
+
+def settle(tab):
+    tab.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+
+def zoom_page(tab, zoom):
+    if zoom != 1:
+        tab.evaluate("k => { const p = document.querySelector('.page'); p.style.zoom = String(k); p.style.height = '100%'; }", zoom)
+    settle(tab)
+
+
+def content_px(tab):
+    """The page's content box's height, in the window's px."""
+    return tab.evaluate(
+        """() => { const p = document.querySelector('.page'), s = getComputedStyle(p);
+                   return (p.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)) * (parseFloat(s.zoom) || 1); }"""
+    )
+
+
+def grab(tab):
+    """Press on the middle of the grip; returns where."""
+    grip = window_box(tab, "#tracks-grip")
+    x, y = grip["left"] + grip["width"] / 2, grip["top"] + grip["height"] / 2
+    tab.mouse.move(x, y)
+    tab.mouse.down()
+    return x, y
+
+
+def wait_for_sent(tab, count=1):
+    tab.wait_for_function("n => window.sent.length >= n", arg=count)
+    return tab.evaluate("window.sent")
+
+
+@pytest.mark.parametrize("zoom", [1, 1.5])
+def test_dragging_the_top_edge_up_100_px_makes_tracks_100_px_taller_and_reaches_a_second_tab(page, other, zoom):
+    for tab in (page, other):
+        tab.set_viewport_size({"width": 1440, "height": 1000})
+        zoom_page(tab, zoom)
+    before = panes(page)
+    content = content_px(page)
+    spy_on_sends(page)
+    x, y = grab(page)
+    page.mouse.move(x, y - 100, steps=8)
+    settle(page)
+    during = panes(page)
+    assert abs(during["tracks"]["height"] - before["tracks"]["height"] - 100) <= 2, (before, during)
+    assert abs(before["radar"]["height"] - during["radar"]["height"] - 100) <= 2, (before, during)
+    assert abs(during["tracks"]["bottom"] - before["tracks"]["bottom"]) <= 1
+    assert abs(during["freq"]["bottom"] - during["tracks"]["bottom"]) <= 1
+    assert page.evaluate("window.sent") == []  # a drag previews here, and sends on release
+    page.mouse.up()
+    expected = round(24 + 100 / content * 100)
+    assert wait_for_sent(page) == [{"t": "prefs", "tracks_pct": expected}]
+    for tab in (page, other):
+        pref_is(tab, "tracks_pct", expected)
+        tab.wait_for_selector(f"#tracks-grip[aria-valuenow='{expected}']")
+        settle(tab)
+    after, there = panes(page), panes(other)
+    # Whole percents: the release lands within half of one of where it was dropped.
+    assert abs(after["tracks"]["height"] - during["tracks"]["height"]) <= content / 200 + 1, (during, after)
+    assert abs(after["tracks"]["height"] - there["tracks"]["height"]) <= 1, (after, there)
+    assert abs(after["freq"]["bottom"] - after["tracks"]["bottom"]) <= 1
+
+
+def test_the_drag_stops_at_10_and_80_percent(page):
+    content = content_px(page)
+    spy_on_sends(page)
+    x, _ = grab(page)
+    page.mouse.move(x, 2, steps=6)
+    settle(page)
+    row = window_box(page, ".screen-tracks")["height"] + 10  # the row is the pane and the gap above it
+    assert abs(row - 0.8 * content) <= 2, (row, content)
+    page.mouse.up()
+    assert wait_for_sent(page) == [{"t": "prefs", "tracks_pct": 80}]
+    pref_is(page, "tracks_pct", 80)
+    x, _ = grab(page)
+    page.mouse.move(x, 898, steps=6)
+    settle(page)
+    row = window_box(page, ".screen-tracks")["height"] + 10
+    assert abs(row - 0.1 * content) <= 2, (row, content)
+    page.mouse.up()
+    assert wait_for_sent(page, 2)[-1] == {"t": "prefs", "tracks_pct": 10}
+    pref_is(page, "tracks_pct", 10)
+
+
+def test_the_grip_is_a_separator_and_arrow_keys_move_it_2_percent(page):
+    grip = page.eval_on_selector(
+        "#tracks-grip",
+        """g => ({ role: g.getAttribute('role'), orientation: g.getAttribute('aria-orientation'), tab: g.tabIndex,
+                  min: g.getAttribute('aria-valuemin'), max: g.getAttribute('aria-valuemax'),
+                  now: g.getAttribute('aria-valuenow'), cursor: getComputedStyle(g).cursor,
+                  height: g.getBoundingClientRect().height, width: g.getBoundingClientRect().width,
+                  pane: g.closest('.screen-tracks').getBoundingClientRect().width })""",
+    )
+    assert grip["role"] == "separator" and grip["orientation"] == "horizontal" and grip["tab"] == 0, grip
+    assert (grip["min"], grip["max"], grip["now"]) == ("10", "80", "24"), grip
+    assert grip["cursor"] == "row-resize" and grip["height"] == 6 and grip["width"] >= grip["pane"] - 2, grip
+    spy_on_sends(page)
+    page.focus("#tracks-grip")
+    page.keyboard.press("ArrowUp")
+    pref_is(page, "tracks_pct", 26)
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("ArrowDown")
+    pref_is(page, "tracks_pct", 22)
+    page.wait_for_selector("#tracks-grip[aria-valuenow='22']")
+    assert [m["tracks_pct"] for m in page.evaluate("window.sent")] == [26, 24, 22]
+    set_prefs(page, tracks_pct=80)
+    page.evaluate("window.sent = []")
+    page.keyboard.press("ArrowUp")
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.sent") == []
+
+
+def test_the_fold_leaves_only_the_title_bar_and_a_second_tab_folds_too(page, other):
+    open_ = panes(page)
+    assert page.get_attribute("#tracks-fold", "aria-expanded") == "true"
+    page.click("#tracks-fold")
+    for tab in (page, other):
+        pref_is(tab, "tracks_open", False)
+        tab.wait_for_selector("#tracks-fold[aria-expanded=false]")
+        tab.wait_for_selector("#tracks-scroll", state="hidden")
+        tab.wait_for_selector("#tracks-grip", state="hidden")
+    settle(page)
+    folded = panes(page)
+    title = window_box(page, ".screen-tracks .screen-title")
+    assert abs(folded["tracks"]["height"] - title["height"] - 2) <= 1, (folded, title)  # and the two borders
+    assert abs(folded["tracks"]["top"] - folded["radar"]["bottom"] - 10) <= 1, folded  # one gap
+    assert folded["radar"]["height"] > open_["radar"]["height"] + 100
+    assert abs(folded["freq"]["bottom"] - folded["tracks"]["bottom"]) <= 1
+    page.click("#tracks-fold")
+    pref_is(other, "tracks_open", True)
+    page.wait_for_selector("#tracks-fold[aria-expanded=true]")
+    settle(page)
+    again = panes(page)
+    assert abs(again["tracks"]["height"] - open_["tracks"]["height"]) <= 1
+
+
+@pytest.mark.parametrize("lamps, teletype", [(False, False), (True, False), (False, True), (True, True)])
+def test_frequencies_and_the_teletype_stay_level_with_tracks_in_every_state(page, lamps, teletype):
+    set_prefs(page, lamps=lamps, teletype=teletype)
+    for state in ({"tracks_pct": 24}, {"tracks_pct": 60}, {"tracks_pct": 10}, {"tracks_open": False}):
+        set_prefs(page, **state)
+        settle(page)
+        shown = panes(page)
+        tracks = shown["tracks"]
+        right = shown["log"] if teletype else shown["freq"]
+        assert abs(right["bottom"] - tracks["bottom"]) <= 1, (state, shown)
+        if teletype:
+            assert abs(shown["log"]["top"] - tracks["top"]) <= 1, (state, shown)
+        assert shown["radar"]["bottom"] <= tracks["top"], (state, shown)
+        assert page.evaluate("document.documentElement.scrollHeight") <= 900, state
+
+
+def test_in_one_column_there_is_no_grip_and_the_fold_still_works(page):
+    page.set_viewport_size({"width": 820, "height": 1000})
+    settle(page)
+    assert page.is_hidden("#tracks-grip")
+    assert page.is_visible("#tracks-fold")
+    page.click("#tracks-fold")
+    page.wait_for_selector("#tracks-fold[aria-expanded=false]")
+    page.wait_for_selector("#tracks-scroll", state="hidden")
+    settle(page)
+    folded = window_box(page, ".screen-tracks")
+    title = window_box(page, ".screen-tracks .screen-title")
+    assert abs(folded["height"] - title["height"] - 2) <= 1, (folded, title)
+    page.click("#tracks-fold")
+    page.wait_for_selector("#tracks-scroll", state="visible")
+    assert page.is_hidden("#tracks-grip")
+
+
+def test_a_drag_redraws_the_radar_at_most_once_a_frame(page):
+    page.evaluate(
+        """() => { window.statics = 0; window.ticks = 0;
+                   window.kcgx.radar.hook((radar) => {
+                     const ctx = radar.still.getContext('2d'), clear = ctx.clearRect;
+                     ctx.clearRect = function (...args) { window.statics += 1; return clear.apply(this, args); };
+                     return { tick() { window.ticks += 1; } }; }); }"""
+    )
+    frames(page, 3)
+    x, y = grab(page)
+    page.evaluate("window.statics = 0; window.ticks = 0")
+    page.mouse.move(x, y - 150, steps=20)
+    frames(page, 2)
+    statics, ticks = page.evaluate("[window.statics, window.ticks]")
+    page.mouse.up()
+    assert 1 <= statics <= ticks, (statics, ticks)
+
+
+@pytest.mark.parametrize("zoom", [1, 1.5])
+def test_under_zoom_the_checklist_opens_over_its_button_and_the_filters_stay_under_the_header(page, zoom):
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    zoom_page(page, zoom)
+    page.click("#open-columns")
+    page.wait_for_selector("#tracks-columns", state="visible")
+    button = window_box(page, "#open-columns")
+    pop = window_box(page, "#tracks-columns")
+    assert pop["bottom"] <= button["top"] + 0.5 and button["top"] - pop["bottom"] <= 4 * zoom + 1, (pop, button)
+    assert abs(pop["right"] - button["right"]) <= 1, (pop, button)
+    assert pop["top"] >= 0 and pop["left"] >= 0, pop
+    page.keyboard.press("Escape")
+    th = window_box(page, "#tracks-head th")
+    filters = window_box(page, "#tracks-filters td")
+    assert abs(filters["top"] - th["bottom"]) <= 1, (filters, th)

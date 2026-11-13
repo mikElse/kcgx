@@ -94,7 +94,11 @@
   <section class="screen screen-tracks" aria-label="Tracks">
     <div class="ovl" aria-hidden="true"></div>
     <!-- G:tracks-grip -->
-    <div class="tracks-body">
+    <!-- The pane's top edge: drag it, or arrow keys on it, for the pane's height (prefs tracks_pct; tracks.js binds it). -->
+    <div class="tracks-grip" id="tracks-grip" role="separator" aria-orientation="horizontal" tabindex="0"
+      aria-label="Height of the tracks pane" aria-controls="tracks-scroll" aria-valuemin="10" aria-valuemax="80" aria-valuenow="24"></div>
+    <!-- /G:tracks-grip -->
+    <div class="tracks-body" id="tracks-scroll">
       <table class="tracks">
         <thead>
           <tr id="tracks-head"></tr>
@@ -108,6 +112,9 @@
       <div class="title-tools tracks-tools">
         <button type="button" class="btn btn-small" id="tracks-clear" disabled>CLEAR</button>
         <button type="button" class="btn btn-small" id="open-columns" popovertarget="tracks-columns" aria-expanded="false" aria-controls="tracks-columns">COLUMNS</button>
+        <!-- Folds the pane to its title bar (prefs tracks_open; tracks.js binds it). -->
+        <button type="button" class="btn btn-small tracks-fold" id="tracks-fold" aria-expanded="true" aria-controls="tracks-scroll"
+          aria-label="Tracks table" title="FOLD"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9.5l6 6 6-6"/></svg></button>
       </div>
       <div class="columns-pop" id="tracks-columns" popover role="group" aria-label="Columns shown in the tracks table"></div>
       <!-- /G:tracks-tools --></div>

@@ -478,6 +478,37 @@ label.field-row { flex-wrap: nowrap; }
 @media (max-width: 1100px) {
   .screen-tracks .tracks-body { max-height: 70vh; }
 }
+/* The pane's height and its fold (Task 9, decision 18). tracks.js sets
+   --tracks-row on .page: prefs tracks_pct as a percent, or min-content when
+   folded. A percent of a grid row is of the page's content box (the window's
+   height, or the page's least, less the padding), and the row is the pane
+   and the gap above it. A percent and not vh: under UI zoom (CSS zoom on
+   .page) Chromium scales vh and WebKit does not, where a percent of the page
+   is the same share of the window in both. This is first paint's, the default. */
+.page { --tracks-row: 24%; }
+/* The grip is the pane's top 6 px, a strip of its own over the header. */
+.screen-tracks { padding-top: 6px; }
+.tracks-grip { position: absolute; top: 0; left: 0; right: 0; height: 6px; z-index: 3; cursor: row-resize; touch-action: none; }
+.tracks-grip::after { content: ""; position: absolute; top: 2px; left: calc(50% - 24px); width: 48px; height: 2px;
+  background: var(--frame); opacity: 0.6; }
+.tracks-grip:hover::after, .tracks-grip.dragging::after { left: 0; width: 100%; background: var(--cyan); opacity: 1; }
+.tracks-grip:focus-visible { outline: 2px solid var(--pink); outline-offset: -2px; }
+.tracks-fold { display: inline-grid; place-items: center; min-width: 30px; padding: 0 6px; }
+.tracks-fold svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* Folded, the title bar is all there is (the chevron points up, to open it). */
+.screen-tracks.folded { padding-top: 0; }
+.screen-tracks.folded .tracks-body, .screen-tracks.folded .tracks-grip { display: none; }
+.screen-tracks.folded .tracks-fold svg { transform: rotate(180deg); }
+/* The teletype shares the row: its lines must not make the folded row taller. */
+@media not all and (max-width: 1100px) {
+  .page[data-tracks="folded"] > .screen-log { contain: size; }
+}
+/* In one column the rows are as tall as what is in them: no grip. */
+@media (max-width: 1100px) {
+  .screen-tracks { padding-top: 0; }
+  .tracks-grip { display: none; }
+}
 
 /* == G:CHROME == */
 /* Zoom, fonts, clocks and text glow: the body and page rules (Tasks 3, 4c). */

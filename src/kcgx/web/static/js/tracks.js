@@ -12,11 +12,39 @@
 // The sort, with no filter applied and the focus first, also ranks every
 // aircraft for the radar: store.state.rank, hex -> 0 for the first to 1 for
 // the last, and a "rank" event when it changes (decision 5, Task 13).
+//
+// The pane itself is dragged taller or shorter by its top edge and folds to
+// its title bar (Task 9): mountPane, at the end.
 
 import { COLUMNS, COLUMN } from "./columns.js";
 import { focus } from "./focus.js";
 
 const EMERGENCY = new Set(["7500", "7600", "7700"]);
+
+// UI zoom (prefs ui_zoom) is CSS zoom on .page, and the engines measure
+// what is under it differently: getBoundingClientRect is in the window's px
+// in Chromium and in the element's own px in WebKit. offsetWidth and the
+// like, a length set in a style, and a pointer's clientY are the same in
+// both: the element's own px, its own, and the window's.
+//
+// The window's px to one of the element's own: the product of every zoom
+// from the element up.
+function zoomOf(el) {
+  let k = 1;
+  for (let e = el; e; e = e.parentElement) k *= parseFloat(getComputedStyle(e).zoom) || 1;
+  return k;
+}
+
+// An element's box in the window's px, in either engine. Whether its rect is
+// zoomed is read from the rect against offsetWidth, and settled to one or the
+// other, as offsetWidth is rounded.
+function windowBox(el) {
+  const r = el.getBoundingClientRect();
+  const k = zoomOf(el);
+  const s = el.offsetWidth ? r.width / el.offsetWidth : 1;
+  const f = Math.abs(s - k) < Math.abs(s - 1) ? 1 : k;
+  return { left: r.left * f, top: r.top * f, right: r.right * f, bottom: r.bottom * f, width: r.width * f, height: r.height * f };
+}
 
 // What a number filter's box says: no bound when empty, GND as 0, and NaN
 // for anything that is not a figure (no bound either, and marked invalid).
@@ -222,20 +250,27 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
   // The checklist opens over the page, above its button, right edges level
   // (a popover: the pane clips what is inside it, the top layer does not);
   // below it when there is not the room above, and always on the screen.
+  // It is in .page, so zoomed with it: placed in the window's px, then set
+  // in its own (zoomOf).
   columns.addEventListener("beforetoggle", (event) => {
     if (event.newState !== "open") return;
-    // Not open yet, so not laid out: measured shown for a moment, unpainted.
-    columns.style.display = "grid";
-    const { width, height } = columns.getBoundingClientRect();
-    columns.style.display = "";
-    const at = openColumns.getBoundingClientRect();
+    const k = zoomOf(columns);
     const across = document.documentElement.clientWidth;
     const down = window.innerHeight;
+    columns.style.maxWidth = `${(across - 16) / k}px`;
+    columns.style.maxHeight = `${(down - 16) / k}px`;
+    // Not open yet, so not laid out: measured shown for a moment, unpainted.
+    columns.style.display = "grid";
+    const width = columns.offsetWidth * k;
+    const height = columns.offsetHeight * k;
+    columns.style.display = "";
+    const at = windowBox(openColumns);
+    const gap = 4 * k;
     const clamp = (value, size, room) => Math.max(8, Math.min(value, room - 8 - size));
-    const above = at.top - 4 - height;
-    const top = clamp(above >= 8 ? above : at.bottom + 4, height, down);
-    columns.style.left = `${clamp(at.right - width, width, across)}px`;
-    columns.style.top = `${top}px`;
+    const above = at.top - gap - height;
+    const top = clamp(above >= 8 ? above : at.bottom + gap, height, down);
+    columns.style.left = `${clamp(at.right - width, width, across) / k}px`;
+    columns.style.top = `${top / k}px`;
   });
   columns.addEventListener("toggle", (event) => {
     openColumns.setAttribute("aria-expanded", String(event.newState === "open"));
@@ -369,12 +404,114 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
     if (pressedHere && body.firstElementChild) body.firstElementChild.scrollIntoView({ block: "nearest" });
   });
   // The filter row sticks under the header, however tall the font makes it.
+  // In the header's own px: a rect would be zoomed twice in Chromium.
   const table = head.closest("table");
   new ResizeObserver(() => {
-    table.style.setProperty("--tracks-head-h", `${head.getBoundingClientRect().height}px`);
+    table.style.setProperty("--tracks-head-h", `${windowBox(head).height / zoomOf(head)}px`);
   }).observe(head);
+  mountPane(head.closest(".screen-tracks"), store, send);
   buildHead();
   markColumns();
   sortedFor = `${state.prefs.track_sort} ${state.prefs.track_desc}`;
   render();
+}
+
+// -- the pane's height and its fold (phase G Task 9, decision 18) --
+//
+// The grip along the pane's top edge sets prefs.tracks_pct, the button in its
+// title bar prefs.tracks_open; both are settings, so every tab follows. A
+// drag shows here as it goes and is sent on release; nothing else changes
+// the page before the server answers. What they set is --tracks-row on
+// .page, the grid's last row: tracks_pct percent of the page's content box
+// (the window's height, or the page's least, less its padding), the row being
+// the pane and the gap above it; or, folded, as tall as the title bar.
+
+const PCT_LOW = 10;
+const PCT_HIGH = 80;
+const PCT_KEY = 2; // an arrow key's step
+
+function mountPane(pane, store, send) {
+  const { state } = store;
+  const page = pane.closest(".page");
+  const grip = pane.querySelector("#tracks-grip");
+  const fold = pane.querySelector("#tracks-fold");
+  let drag = null; // { id, y, from, perPct, pct } while the grip is held
+  let dropped = null; // the percent sent on release, shown until the server answers
+  let askedPct = null; // the last an arrow key asked for, for the next to build on
+  let askedOpen = null; // as for the fold button
+
+  const clampPct = (pct) => Math.min(PCT_HIGH, Math.max(PCT_LOW, pct));
+  const pctNow = () => (drag ? drag.pct : dropped ?? state.prefs.tracks_pct);
+
+  function show() {
+    const open = state.prefs.tracks_open !== false;
+    const pct = pctNow();
+    page.style.setProperty("--tracks-row", open ? `${pct}%` : "min-content");
+    page.dataset.tracks = open ? "open" : "folded";
+    pane.classList.toggle("folded", !open);
+    fold.setAttribute("aria-expanded", String(open));
+    fold.title = open ? "FOLD" : "UNFOLD";
+    grip.setAttribute("aria-valuenow", String(Math.round(pct)));
+  }
+
+  // The pointer moves in the window's px; a percent is of the page's content
+  // box, in its own px, which the page's zoom makes the window's.
+  grip.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || drag) return;
+    event.preventDefault();
+    const style = getComputedStyle(page);
+    const content = page.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const from = pctNow();
+    drag = { id: event.pointerId, y: event.clientY, from, perPct: (content * zoomOf(page)) / 100, pct: from };
+    grip.setPointerCapture(event.pointerId);
+    grip.classList.add("dragging");
+  });
+  // A style written per move; the browser lays it out, and the radar's
+  // canvas follows, once a frame however many moves come in it.
+  grip.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    drag.pct = clampPct(drag.from + (drag.y - event.clientY) / drag.perPct);
+    show();
+  });
+  function release(event, keep) {
+    if (!drag || event.pointerId !== drag.id) return;
+    const pct = Math.round(drag.pct); // the setting is a whole percent
+    drag = null;
+    grip.classList.remove("dragging");
+    if (keep && pct !== state.prefs.tracks_pct) {
+      dropped = pct;
+      send({ t: "prefs", tracks_pct: pct });
+    }
+    show();
+  }
+  grip.addEventListener("pointerup", (event) => release(event, true));
+  grip.addEventListener("lostpointercapture", (event) => release(event, true));
+  grip.addEventListener("pointercancel", (event) => release(event, false));
+
+  // Up for a taller pane, as dragging up makes it.
+  grip.addEventListener("keydown", (event) => {
+    const step = { ArrowUp: PCT_KEY, ArrowDown: -PCT_KEY }[event.key];
+    if (!step || drag) return;
+    event.preventDefault();
+    const now = askedPct ?? pctNow();
+    const next = clampPct(now + step);
+    if (next === now) return;
+    askedPct = next;
+    send({ t: "prefs", tracks_pct: next });
+  });
+
+  fold.addEventListener("click", () => {
+    askedOpen = !(askedOpen ?? state.prefs.tracks_open !== false);
+    send({ t: "prefs", tracks_open: askedOpen });
+  });
+
+  store.subscribe((kind) => {
+    if (kind !== "all" && kind !== "prefs") return;
+    const { tracks_pct: pct, tracks_open: open } = state.prefs;
+    if (kind === "all" || dropped === pct) dropped = null;
+    if (kind === "all" || askedPct === pct) askedPct = null;
+    if (kind === "all" || askedOpen === open) askedOpen = null;
+    show();
+  });
+  show();
 }
