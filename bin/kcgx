@@ -6,6 +6,12 @@
 #   kcgx stop           stop the cockpit
 #   kcgx status         say whether it is running, and where
 #   kcgx --demo         the demo: synthetic feeds and traffic, no audio
+#   kcgx --browser      open it in the default browser, not in its own window
+#   kcgx --no-open      start it and open nothing (KCGX.app starts it this way)
+#
+# "Open" is KCGX.app, the cockpit's own window, on a Mac where setup.sh has
+# built it (step 5; $KCGX_APP, by default ~/Applications/KCGX.app), and the
+# default browser everywhere else.
 #
 # Everything is in kcgx.launcher; this only finds the repo and runs it with
 # the repo's own Python, through uv. The intended install is a symlink in a

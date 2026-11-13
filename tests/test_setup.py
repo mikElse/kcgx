@@ -12,6 +12,7 @@ instead of running adsb-tui.
 from __future__ import annotations
 
 import os
+import plistlib
 import re
 import shutil
 import subprocess
@@ -690,6 +691,217 @@ def test_exec_hands_off_by_absolute_path(tmp_path):
         f"exec must hand off by absolute $REPO path, not a bare command "
         f"name resolved through PATH: {exec_lines}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step 5's second half: KCGX.app, the cockpit's own window (macOS)
+#
+# setup.sh runs macos/build.sh, which tests/test_window.py covers on its own.
+# Here the real build.sh runs with a fake swiftc and a fake codesign, so
+# nothing is compiled, and the app goes where KCGX_APP says or under the
+# test's own HOME: never into anybody's ~/Applications.
+
+# Writes the "binary" where -o says, as build.sh expects of a compiler.
+FAKE_SWIFTC = """#!/bin/sh
+printf '%s\\n' "$*" >> "$SWIFTC_LOG"
+while [ $# -gt 0 ]; do
+    if [ "$1" = "-o" ]; then printf 'compiled\\n' > "$2"; fi
+    shift
+done
+"""
+SWIFTC_FAILS = """#!/bin/sh
+printf '%s\\n' "$*" >> "$SWIFTC_LOG"
+echo "error: no such module 'Cocoa'" >&2
+exit 1
+"""
+# Signs anything, and verifies whatever still holds what the fake compiler wrote.
+FAKE_CODESIGN = """#!/bin/sh
+case "$1" in
+    --verify) for last; do :; done; grep compiled "$last/Contents/MacOS/KCGX" >/dev/null 2>&1 ;;
+    *) exit 0 ;;
+esac
+"""
+
+
+def window_env(tmp_path, *, swiftc=FAKE_SWIFTC, **scripts):
+    """complete_env, with what build.sh runs beside setup.sh's own tools.
+    `swiftc=None` is a Mac without the command line tools."""
+    fakes = {"codesign": FAKE_CODESIGN, **scripts}
+    if swiftc is not None:
+        fakes["swiftc"] = swiftc
+    path_dir = complete_env(tmp_path, **fakes)
+    (path_dir / "mv").symlink_to(shutil.which("mv"))
+    return path_dir
+
+
+def run_setup_for_the_window(tmp_path, path_dir, *args, **env):
+    env.setdefault("KCGX_APP", tmp_path / "apps" / "KCGX.app")
+    return run_setup(
+        tmp_path, path_dir, *args,
+        **{"KCGX_SETUP_YES": "1", "SHELL": "/bin/zsh", "SWIFTC_LOG": tmp_path / "swiftc.log", **env},
+    )
+
+
+def step(result, number):
+    """What a run printed for one step, the warnings of the whole run with it."""
+    after = result.stdout.split(f"Step {number}/7", 1)[1]
+    return after.split(f"Step {number + 1}/7", 1)[0] + result.stderr
+
+
+def test_step_five_builds_the_window_where_kcgx_app_says(tmp_path):
+    app = tmp_path / "apps" / "KCGX.app"
+    result = run_setup_for_the_window(tmp_path, window_env(tmp_path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Step 5/7  The launcher on your PATH, and its window" in result.stdout
+    assert (app / "Contents" / "MacOS" / "KCGX").read_text() == "compiled\n"
+    info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == "com.kcgx.cockpit"
+    assert info["KCGXRepo"] == str(REPO)
+    assert str(app) in step(result, 5)
+    assert "browser" not in step(result, 5)
+    assert not (tmp_path / "home" / "Applications").exists(), "built somewhere KCGX_APP did not say"
+    assert (tmp_path / "home" / ".local" / "bin" / "kcgx").is_symlink(), "the window replaced the link"
+    assert "Setup complete" in result.stdout and "Everything checks out" in result.stdout
+
+
+def test_the_window_goes_where_the_launcher_will_look_for_it(tmp_path, monkeypatch):
+    """Two programs in two languages agree on one default, as with the
+    User-Agent: setup builds the app where kcgx.launcher looks when nobody
+    has said. The home folder here is the test's own."""
+    from kcgx import launcher
+
+    path_dir = window_env(tmp_path)
+    env = setup_env(tmp_path, path_dir, KCGX_SETUP_YES="1", SHELL="/bin/zsh", SWIFTC_LOG=tmp_path / "swiftc.log")
+    assert "KCGX_APP" not in env
+    result = subprocess.run([str(SETUP)], env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    built = tmp_path / "home" / "Applications" / "KCGX.app"
+    assert (built / "Contents" / "MacOS" / "KCGX").exists()
+
+    monkeypatch.delenv("KCGX_APP", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert launcher.app_path() == built
+
+
+def test_the_window_knows_the_path_that_finds_uv(tmp_path):
+    """A Dock launch has no shell PATH; the app runs bin/kcgx with the one
+    it was built with. Built after the PATH question, so it holds the answer."""
+    app = tmp_path / "apps" / "KCGX.app"
+    path_dir = window_env(tmp_path)
+    assert run_setup_for_the_window(tmp_path, path_dir).returncode == 0
+    built_with = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())["KCGXPath"].split(":")
+    assert built_with == [str(tmp_path / "home" / ".local" / "bin"), str(path_dir)]
+
+
+def test_building_the_window_again_replaces_it(tmp_path):
+    app = tmp_path / "apps" / "KCGX.app"
+    path_dir = window_env(tmp_path)
+    assert run_setup_for_the_window(tmp_path, path_dir).returncode == 0
+    stale = app / "Contents" / "old.txt"
+    stale.write_text("from the build before")
+    second = run_setup_for_the_window(tmp_path, path_dir)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert not stale.exists() and (app / "Contents" / "MacOS" / "KCGX").exists()
+    assert len((tmp_path / "swiftc.log").read_text().splitlines()) == 2
+
+
+def test_without_swiftc_the_cockpit_opens_in_the_browser_and_setup_carries_on(tmp_path):
+    app = tmp_path / "apps" / "KCGX.app"
+    result = run_setup_for_the_window(tmp_path, window_env(tmp_path, swiftc=None))
+    assert result.returncode == 0, result.stdout + result.stderr
+    said = step(result, 5)
+    assert "swiftc" in said and "browser" in said, said
+    assert "xcode-select --install" in said, "no way to get a window later is offered"
+    assert not app.exists() and not app.parent.exists()
+    # Not having a window is not something wrong with the install.
+    assert "Setup complete" in result.stdout and "Everything checks out" in result.stdout
+    assert result.stderr == ""
+
+
+def test_a_window_that_will_not_build_is_a_warning_and_never_fatal(tmp_path):
+    app = tmp_path / "apps" / "KCGX.app"
+    result = run_setup_for_the_window(tmp_path, window_env(tmp_path, swiftc=SWIFTC_FAILS))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no such module" in result.stderr, "the compiler's own words were swallowed"
+    assert "setup: KCGX.app was not built" in result.stderr and "browser" in result.stderr
+    assert not app.exists()
+    for n in (6, 7):
+        assert f"Step {n}/7" in result.stdout, "setup stopped at the failed build"
+    assert "Setup complete" in result.stdout
+
+
+def test_something_else_where_the_window_goes_is_left_alone(tmp_path):
+    """build.sh replaces only an app it built. Setup passes that on as a
+    warning and neither removes the stranger nor stops."""
+    app = tmp_path / "apps" / "KCGX.app"
+    (app / "Contents").mkdir(parents=True)
+    (app / "Contents" / "Info.plist").write_text("somebody else's app")
+    result = run_setup_for_the_window(tmp_path, window_env(tmp_path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (app / "Contents" / "Info.plist").read_text() == "somebody else's app"
+    assert not (tmp_path / "swiftc.log").exists(), "compiled for a place it may not use"
+    assert "setup: KCGX.app was not built" in result.stderr
+    assert "Setup complete" in result.stdout
+
+
+def test_linux_is_not_offered_a_window(tmp_path):
+    """Even with a swiftc to hand (Swift runs on Linux; Cocoa does not)."""
+    app = tmp_path / "apps" / "KCGX.app"
+    path_dir = window_env(tmp_path, ldconfig=LDCONFIG_WITH_PORTAUDIO)
+    result = run_setup_for_the_window(tmp_path, path_dir, KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="apt")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (tmp_path / "swiftc.log").exists() and not app.exists()
+    combined = result.stdout + result.stderr
+    for word in ("KCGX.app", "window", "swiftc"):
+        assert word not in combined, f"Linux was told about {word}: {combined}"
+    assert "Step 5/7  The launcher on your PATH\n" in result.stdout
+    assert "Setup complete" in result.stdout and "Everything checks out" in result.stdout
+
+
+# `--verify` alone links nothing, so plain `kcgx` has to be on the PATH
+# already, or its own warning is counted among the ones these tests count.
+KCGX_ON_PATH = "#!/bin/sh\nexit 0\n"
+
+
+def test_verify_says_the_window_is_there_and_signed(tmp_path):
+    app = tmp_path / "apps" / "KCGX.app"
+    path_dir = window_env(tmp_path, kcgx=KCGX_ON_PATH)
+    assert run_setup_for_the_window(tmp_path, path_dir).returncode == 0
+    result = run_setup_for_the_window(tmp_path, path_dir, "--verify")
+    assert result.returncode == 0, result.stdout + result.stderr
+    [row] = [line for line in result.stdout.splitlines() if line.startswith("  window")]
+    assert row.split()[1] == "ok" and str(app) in row, row
+    assert "Everything checks out" in result.stdout
+
+
+def test_verify_warns_about_a_window_whose_signature_does_not_hold(tmp_path):
+    """macOS will not start an app whose signature is broken, so `kcgx`
+    would fall back to the browser every time with nothing to say why."""
+    app = tmp_path / "apps" / "KCGX.app"
+    path_dir = window_env(tmp_path, kcgx=KCGX_ON_PATH)
+    assert run_setup_for_the_window(tmp_path, path_dir).returncode == 0
+    (app / "Contents" / "MacOS" / "KCGX").write_text("tampered with\n")
+    result = run_setup_for_the_window(tmp_path, path_dir, "--verify")
+    assert result.returncode == 0, "the window is advisory: the cockpit still opens in the browser"
+    [row] = [line for line in result.stdout.splitlines() if line.startswith("  window")]
+    assert row.split()[1] == "warn" and "macos/build.sh" in row, row
+    assert "1 warning(s) above" in result.stdout
+
+
+def test_verify_without_a_window_says_so_and_does_not_count_it_against_the_install(tmp_path):
+    path_dir = window_env(tmp_path, swiftc=None, kcgx=KCGX_ON_PATH)
+    result = run_setup_for_the_window(tmp_path, path_dir, "--verify")
+    assert result.returncode == 0, result.stdout + result.stderr
+    [row] = [line for line in result.stdout.splitlines() if line.startswith("  window")]
+    assert row.split()[1] not in ("ok", "warn", "FAIL") and "browser" in row, row
+    assert "Everything checks out" in result.stdout
+
+
+def test_verify_on_linux_has_no_window_row(tmp_path):
+    path_dir = window_env(tmp_path, ldconfig=LDCONFIG_WITH_PORTAUDIO, kcgx=KCGX_ON_PATH)
+    result = run_setup_for_the_window(tmp_path, path_dir, "--verify", KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="apt")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "window" not in result.stdout and "Everything checks out" in result.stdout
 
 
 # ---------------------------------------------------------------------------

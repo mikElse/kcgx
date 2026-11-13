@@ -303,6 +303,28 @@ def test_a_link_shows_a_port_on_this_machine_and_a_fragment(app, link, page):
     assert check(app, link) == page
 
 
+@pytest.mark.parametrize("page", [
+    "http://127.0.0.1:8473/",
+    "http://127.0.0.1:50123/#airport",
+    "http://127.0.0.1:8473/#airport=seattle",
+    "http://127.0.0.1:8473/#airport=new%20york",
+    "http://127.0.0.1:8473/#airport=st/x",
+    "http://127.0.0.1:8473/#airport=a%26b%23c",
+    "http://127.0.0.1:8473/#airport=caf%C3%A9",
+])
+def test_the_launcher_and_the_window_agree_on_a_link(app, page):
+    """Both ends of the one contract: the link `kcgx` hands to `open` for a
+    page (kcgx.launcher.window_opener, with `open` itself collected and not
+    run) is read by the real app as that page, to the letter."""
+    from kcgx import launcher
+
+    ran = []
+    launcher.window_opener(app, run=lambda command, **_: ran.append(command) or subprocess.CompletedProcess(command, 0))(page)
+    [[*opening, link]] = ran
+    assert opening == ["open", "-a", str(app)]
+    assert check(app, link) == page
+
+
 @pytest.mark.parametrize("link, fragment", [
     ("kcgx://show?port=8473&fragment=a%20b", "a%20b"),
     ("kcgx://show?port=8473&fragment=%22%3E%3Cscript%3E", "%22%3E%3Cscript%3E"),

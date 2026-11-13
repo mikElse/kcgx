@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import time
+import webbrowser
 from pathlib import Path
 
 import pytest
@@ -239,6 +240,134 @@ def test_go_open_opens_the_page_after_switching(kcgx, port):
     kcgx("--demo", "--no-open")
     assert kcgx("go", "--open", "KSEA") == 0
     assert kcgx.opened == [f"http://127.0.0.1:{port}/"]
+
+
+# -- its own window ------------------------------------------------------------------
+#
+# On a Mac where setup has built KCGX.app the page opens in that; anywhere
+# else, or when asked, in the default browser. Nothing here runs `open`: the
+# command the window opener would run is collected instead.
+
+
+class Ran:
+    """Stands in for subprocess.run: collects each command, exits as told."""
+
+    def __init__(self, returncode=0, raises=None):
+        self.commands = []
+        self.returncode = returncode
+        self.raises = raises
+
+    def __call__(self, command, **options):
+        self.commands.append(list(command))
+        if self.raises is not None:
+            raise self.raises
+        return subprocess.CompletedProcess(command, self.returncode)
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    """A KCGX.app, as far as the launcher looks: a folder at $KCGX_APP."""
+    app = tmp_path / "apps" / "KCGX.app"
+    app.mkdir(parents=True)
+    monkeypatch.setenv("KCGX_APP", str(app))
+    monkeypatch.delenv("KCGX_BROWSER", raising=False)
+    return app
+
+
+def test_on_a_mac_with_the_app_built_the_page_opens_in_its_own_window(app):
+    run, browser = Ran(), []
+    opener = launcher.pick_opener(launcher.parse_args([]), platform="darwin", run=run, browser=browser.append)
+    opener("http://127.0.0.1:8473/")
+    assert run.commands == [["open", "-a", str(app), "kcgx://show?port=8473"]]
+    assert browser == []
+
+
+def test_the_app_is_looked_for_in_applications_unless_told(monkeypatch):
+    # HOME is the test's own folder (conftest), so this is nobody's real one.
+    monkeypatch.delenv("KCGX_APP", raising=False)
+    monkeypatch.delenv("KCGX_BROWSER", raising=False)
+    app = Path(os.environ["HOME"]) / "Applications" / "KCGX.app"
+    assert launcher.app_path() == app
+    assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is webbrowser.open
+    app.mkdir(parents=True)
+    run = Ran()
+    launcher.pick_opener(launcher.parse_args([]), platform="darwin", run=run)("http://127.0.0.1:8473/")
+    assert run.commands == [["open", "-a", str(app), "kcgx://show?port=8473"]]
+
+
+def test_with_no_app_built_the_page_opens_in_the_browser(app):
+    app.rmdir()
+    assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is webbrowser.open
+
+
+def test_on_linux_the_page_opens_in_the_browser(app):
+    assert launcher.pick_opener(launcher.parse_args([]), platform="linux") is webbrowser.open
+
+
+@pytest.mark.parametrize("argv", [["--browser"], ["go", "--browser"], ["go", "seattle", "--browser"], ["--browser", "go", "seattle"]])
+def test_browser_asks_for_the_browser_whatever_is_built(app, argv):
+    assert launcher.pick_opener(launcher.parse_args(argv), platform="darwin") is webbrowser.open
+
+
+def test_kcgx_browser_in_the_environment_asks_for_the_browser_every_time(app, monkeypatch):
+    monkeypatch.setenv("KCGX_BROWSER", "1")
+    assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is webbrowser.open
+    for off in ("", "0"):
+        monkeypatch.setenv("KCGX_BROWSER", off)
+        assert launcher.pick_opener(launcher.parse_args([]), platform="darwin") is not webbrowser.open
+
+
+@pytest.mark.parametrize("page, link", [
+    ("http://127.0.0.1:8473/", "kcgx://show?port=8473"),
+    ("http://127.0.0.1:50123/#airport", "kcgx://show?port=50123&fragment=airport"),
+    ("http://127.0.0.1:8473/#airport=seattle", "kcgx://show?port=8473&fragment=airport%3Dseattle"),
+    # The page's own fragment is quoted once already; the link quotes it whole
+    # (the same pair is in tests/test_window.py, read from the other end).
+    ("http://127.0.0.1:8473/#airport=new%20york", "kcgx://show?port=8473&fragment=airport%3Dnew%2520york"),
+    ("http://127.0.0.1:8473/#airport=a%26b%23c", "kcgx://show?port=8473&fragment=airport%3Da%2526b%2523c"),
+    ("http://127.0.0.1:8473/#airport=st/x", "kcgx://show?port=8473&fragment=airport%3Dst%2Fx"),
+])
+def test_the_window_is_handed_the_port_and_the_fragment_and_nothing_else(app, page, link):
+    run = Ran()
+    launcher.window_opener(app, run=run)(page)
+    assert run.commands == [["open", "-a", str(app), link]]
+
+
+@pytest.mark.parametrize("run", [
+    Ran(returncode=1),
+    Ran(raises=FileNotFoundError("open")),
+    Ran(raises=subprocess.TimeoutExpired("open", 15)),
+], ids=["open exits non-zero", "there is no open", "open never returns"])
+def test_a_window_that_will_not_open_falls_back_to_the_browser(app, run, capsys):
+    browser = []
+    launcher.window_opener(app, run=run, browser=browser.append)("http://127.0.0.1:8473/#airport=seattle")
+    assert len(run.commands) == 1
+    assert browser == ["http://127.0.0.1:8473/#airport=seattle"]
+    assert "browser" in capsys.readouterr().err
+
+
+def test_with_no_opener_given_the_command_picks_one(kcgx, port, app, monkeypatch):
+    """`kcgx go seattle` names several airports, so the page's search takes
+    it: the app is handed the fragment, and the browser nothing."""
+    kcgx("--demo", "--no-open")  # the demo first: `go` alone would start the real cockpit
+    run, picked = Ran(), launcher.pick_opener
+    monkeypatch.setattr(launcher, "pick_opener", lambda args: picked(args, platform="darwin", run=run))
+    assert launcher.main(["go", "seattle"]) == 0
+    assert run.commands == [["open", "-a", str(app), f"kcgx://show?port={port}&fragment=airport%3Dseattle"]]
+    assert launcher.main([]) == 0
+    assert run.commands[1:] == [["open", "-a", str(app), f"kcgx://show?port={port}"]]
+    assert launcher.main(["--no-open"]) == 0 and launcher.main(["go", "--no-open"]) == 0
+    assert len(run.commands) == 2
+
+
+def test_help_says_its_own_window_and_offers_the_browser(capsys):
+    for argv in (["--help"], ["go", "--help"]):
+        with pytest.raises(SystemExit):
+            launcher.parse_args(argv)
+        text = capsys.readouterr().out
+        assert "--browser" in text and "its own window" in text, text
+        assert "a browser" not in text, text
+    assert "its own window" in launcher.__doc__ and "opening a browser" not in launcher.__doc__
 
 
 # -- the server outlives the command --------------------------------------------------

@@ -877,7 +877,7 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
 **Files:** `launcher.py`, `setup.sh`, `bin/kcgx` (comment),
 `tests/test_launcher.py`, `tests/test_setup.py`
 
-- [ ] **Tests first.** `pick_opener` returns the window opener when the
+- [x] **Tests first.** `pick_opener` returns the window opener when the
   platform is darwin and `KCGX_APP` (default `~/Applications/KCGX.app`)
   exists, and `webbrowser.open` when it does not, on Linux, with
   `--browser`, or with `KCGX_BROWSER=1`. The window opener runs
@@ -888,15 +888,38 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
   fake `swiftc` on the test's `PATH`, step 5 builds into the test's
   `KCGX_APP`; with no `swiftc`, it says the cockpit will open in the
   browser and carries on; on Linux it does not try.
-- [ ] `launcher.main(argv, *, opener=None)`: `opener or pick_opener(args)`.
+- [x] `launcher.main(argv, *, opener=None)`: `opener or pick_opener(args)`.
   `--browser` on `kcgx` and `kcgx go`. Help and the module docstring say
   "its own window" where they said "a browser".
-- [ ] `setup.sh` step 5 becomes "The launcher on your PATH, and its
+  *As built, 2026-11-12:* the opener still takes the page's address, so
+  the port and the fragment are read back out of it. The fragment is
+  quoted whole, on top of the quoting it already has as part of that
+  address (`#airport=new%20york` goes as `fragment=airport%3Dnew%2520york`),
+  which is what the app unquotes once. The fallback also covers an `open`
+  that is missing or does not return within 15 s, and says on stderr that
+  the browser is being used. `KCGX_BROWSER` set to nothing or to `0` is
+  off. `kcgx --browser go` works as well as `kcgx go --browser`.
+  `tests/test_window.py` gained one test that is not in this task's list
+  of files: the link the launcher makes, read by the real app through
+  `--check`, shows the page it was made from.
+- [x] `setup.sh` step 5 becomes "The launcher on your PATH, and its
   window": after the symlink, on macOS, run `macos/build.sh`. A failed
   build is a warning, never fatal. Still seven steps. Step 7's check adds
   one advisory line: the app is there and `codesign --verify` passes.
-- [ ] `--uninstall` paths, if `setup.sh` has them, remove the app.
-- [ ] Commit `feat(launcher): kcgx opens its own window`.
+  *As built, 2026-11-12:* the build comes after the PATH question as well
+  as after the symlink, because the app keeps the `PATH` it was built with
+  and that is the step which settles it. Setup reads `KCGX_APP` as the
+  launcher does and passes it to `build.sh`. It does not ask before
+  building, as it does not ask before linking. On Linux the step keeps its
+  old title and says nothing of a window. Step 7's row is `window`: `ok`
+  with the path; `none`, which is not counted as a warning, when there is
+  no app (the launcher opens the browser, so nothing is wrong); `warn`
+  when an app is there and does not verify, since macOS will not start it.
+  The last line reads "Opening the cockpit..." without saying where.
+- [x] `--uninstall` paths, if `setup.sh` has them, remove the app.
+  *2026-11-12:* it has none, so there was nothing to do. To remove the
+  window by hand: `rm -rf ~/Applications/KCGX.app`.
+- [x] Commit `feat(launcher): kcgx opens its own window`.
 
 ### Task 13: The docs
 

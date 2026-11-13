@@ -15,6 +15,14 @@
 # config, and the terminal width check: the cockpit is a page in your
 # browser now, and the radar is the server's own.
 #
+# Phase F (2026-11-12) gave the page a window of its own on macOS: step 5
+# builds KCGX.app (macos/build.sh) and the launcher opens the cockpit in it.
+# The window is never required. With no swiftc, on Linux, or when the build
+# fails, the cockpit opens in the browser as before and setup still finishes.
+#
+# Where the app goes (the launcher reads the same variable):
+#   KCGX_APP               default ~/Applications/KCGX.app
+#
 # Test seams (all default to production behaviour when unset):
 #   KCGX_SETUP_YES         non-empty takes every prompt's default answer
 #   KCGX_SETUP_NO_LAUNCH   non-empty stops before exec'ing the launcher
@@ -33,6 +41,10 @@ PKG=""       # brew | apt | dnf | pacman | none
 SUDO=""      # "" when root or on brew, else "sudo"
 
 PREFIX="$HOME/.local/bin"
+# KCGX.app, the cockpit's own window (macOS). kcgx.launcher looks for it in
+# the same place, by the same variable; tests/test_setup.py holds the two
+# defaults together.
+APP="${KCGX_APP:-$HOME/Applications/KCGX.app}"
 # adsb.lol 403s a request that carries no User-Agent. Step 7's probe sends the
 # one the server's radar sends (kcgx.radar.DEFAULT_UA): a check that proves a
 # different request than the app sends proves nothing. The two are literals
@@ -399,7 +411,11 @@ path_has_prefix() {
 
 link_launcher() {
     local target="$REPO/bin/kcgx" link="$PREFIX/kcgx" profile
-    step 5 "The launcher on your PATH"
+    if [ "$OS" = "macos" ]; then
+        step 5 "The launcher on your PATH, and its window"
+    else
+        step 5 "The launcher on your PATH"
+    fi
 
     mkdir -p "$PREFIX"
 
@@ -472,6 +488,41 @@ edit. Add the line above to it yourself."
     # This shell, so step 7's checks and the launch below see it too.
     PATH="$PREFIX:$PATH"
     say "Open a new terminal (or source $profile) for it to reach other shells."
+}
+
+# Step 5's second half, on macOS: the cockpit's own window.
+#
+# After the PATH question, not before it: the app is built with the PATH of
+# this shell written into it (a launch from the Dock has no shell, and
+# bin/kcgx needs uv), so it should be the PATH that step has just settled.
+#
+# Never fatal. The launcher shows the page in the browser when there is no
+# app, so a Mac without swiftc, or a build that fails, still ends with a
+# cockpit that works; step 7 says which it will be.
+build_window() {
+    [ "$OS" = "macos" ] || return 0
+
+    say ""
+    if ! have_command swiftc; then
+        say "KCGX.app, the cockpit's own window, is built with swiftc, which is"
+        say "not installed. The cockpit will open in your browser instead."
+        say "For the window, install the Xcode command line tools and run this"
+        say "again:"
+        say ""
+        say "  xcode-select --install"
+        return 0
+    fi
+
+    say "Building KCGX.app, the cockpit's own window: one Swift file, compiled"
+    say "here and signed for this Mac alone."
+    say ""
+    say "  $REPO/macos/build.sh $APP"
+    say ""
+    # build.sh puts the app together beside its destination and moves it into
+    # place only when it is whole, so a failure leaves whatever was there.
+    if ! "$REPO/macos/build.sh" "$APP"; then
+        warn "KCGX.app was not built; the cockpit will open in your browser instead."
+    fi
 }
 
 # -- step 6 -----------------------------------------------------------------
@@ -607,6 +658,20 @@ print(sum(1 for d in sounddevice.query_devices() if d["max_output_channels"] > 0
         meh "kcgx on PATH" "start it as $REPO/bin/kcgx until it is (step 5)"
     fi
 
+    # Advisory. No window is a state the launcher handles (it opens the
+    # browser), so it is said and not counted. An app that is there and does
+    # not verify is counted: macOS will not start it, and `kcgx` would fall
+    # back to the browser every time with nothing here to say why.
+    if [ "$OS" = "macos" ]; then
+        if [ ! -e "$APP" ]; then
+            vrow "window" "none" "no KCGX.app; the cockpit opens in your browser (step 5)"
+        elif have_command codesign && codesign --verify "$APP" >/dev/null 2>&1; then
+            ok "window" "$APP"
+        else
+            meh "window" "$APP does not verify; rebuild it: $REPO/macos/build.sh"
+        fi
+    fi
+
     if [ -z "${KCGX_SETUP_SKIP_NET:-}" ]; then
         # /play/*.pls is the path audio actually comes from, and it is not
         # the one behind the Cloudflare challenge -- so it is the one worth
@@ -685,11 +750,12 @@ install_packages
 install_uv
 sync_project
 link_launcher
+build_window
 warm_feed_cache
 verify
 
 say ""
-say "Setup complete. Opening the cockpit in your browser..."
+say "Setup complete. Opening the cockpit..."
 
 if [ -n "${KCGX_SETUP_NO_LAUNCH:-}" ]; then
     exit 0
@@ -697,5 +763,6 @@ fi
 
 # By absolute path, not by name: a PATH the user has not reloaded yet must
 # not stop the cockpit opening on this first run. bin/kcgx starts the server
-# in the background and opens the page.
+# in the background and opens the page: in KCGX.app if step 5 built it, in
+# the browser if not.
 exec "$REPO/bin/kcgx"
