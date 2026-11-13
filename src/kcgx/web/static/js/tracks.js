@@ -49,7 +49,18 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
 
   // -- the header and the filter row --
 
+  // The title bar names a sort the header cannot show: a hidden column's.
+  const sortNote = document.createElement("span");
+  sortNote.id = "tracks-sort";
+  sortNote.className = "muted small tracks-sort";
+  sortNote.hidden = true;
+  clear.before(sortNote);
+
   function buildHead() {
+    // A box being typed in is built again with the row: it keeps the focus
+    // and the caret (another tab may change the columns at any moment).
+    const typing = filters.contains(document.activeElement) ? document.activeElement : null;
+    const caret = typing && [typing.dataset.key, typing.dataset.bound, typing.selectionStart, typing.selectionEnd];
     shown = visible();
     builtFor = String(state.prefs.track_cols);
     for (const key of [...typed.keys()]) if (!shown.some((column) => column.key === key)) typed.delete(key);
@@ -64,9 +75,11 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
       th.append(button);
       return th;
     }));
+    // Cells, not headers: a screen reader would read a filter row of th as
+    // the header of every cell below it. Each box has its own label.
     filters.replaceChildren(...shown.map((column) => {
-      const th = document.createElement("th");
-      th.className = column.filter;
+      const td = document.createElement("td");
+      td.className = column.filter;
       const now = typed.get(column.key) || {};
       const box = (bound, label, placeholder) => {
         const input = document.createElement("input");
@@ -84,12 +97,21 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
         return input;
       };
       if (column.filter === "number") {
-        th.append(box("min", `${column.title} at least`, "MIN"), box("max", `${column.title} at most`, "MAX"));
+        td.append(box("min", `${column.title} at least`, "MIN"), box("max", `${column.title} at most`, "MAX"));
       } else {
-        th.append(box(null, `${column.title} contains`, "FILTER"));
+        td.append(box(null, `${column.title} contains`, "FILTER"));
       }
-      return th;
+      return td;
     }));
+    if (caret) {
+      const [key, which, start, end] = caret;
+      const again = [...filters.querySelectorAll("input")]
+        .find((input) => input.dataset.key === key && input.dataset.bound === which);
+      if (again) {
+        again.focus({ preventScroll: true });
+        again.setSelectionRange(start, end);
+      }
+    }
     markInvalid();
     markSort();
   }
@@ -100,6 +122,9 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
       const here = th.firstChild.dataset.key === key;
       th.setAttribute("aria-sort", here ? (desc ? "descending" : "ascending") : "none");
     }
+    const column = COLUMN[key] || COLUMN.DIST; // as sorted() falls back
+    sortNote.hidden = shown.includes(column);
+    sortNote.textContent = `SORT ${column.title} ${desc ? "▼" : "▲"}`;
   }
 
   function markInvalid() {
@@ -170,8 +195,11 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
     return button;
   }));
 
+  // Marked as the table shows them: an empty track_cols shows the callsign.
+  const shownKeys = () => visible().map((column) => column.key);
+
   function markColumns() {
-    const names = state.prefs.track_cols || [];
+    const names = shownKeys();
     for (const button of columns.children) {
       const on = names.includes(button.dataset.key);
       button.setAttribute("aria-pressed", String(on));
@@ -183,7 +211,7 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
   columns.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-key]");
     if (!button) return;
-    const now = askedCols || state.prefs.track_cols || [];
+    const now = askedCols || shownKeys();
     const key = button.dataset.key;
     const next = COLUMNS.map((column) => column.key).filter((name) => (name === key) !== now.includes(name));
     if (!next.length) return;
@@ -192,16 +220,34 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
   });
 
   // The checklist opens over the page, above its button, right edges level
-  // (a popover: the pane clips what is inside it, the top layer does not).
+  // (a popover: the pane clips what is inside it, the top layer does not);
+  // below it when there is not the room above, and always on the screen.
   columns.addEventListener("beforetoggle", (event) => {
     if (event.newState !== "open") return;
+    // Not open yet, so not laid out: measured shown for a moment, unpainted.
+    columns.style.display = "grid";
+    const { width, height } = columns.getBoundingClientRect();
+    columns.style.display = "";
     const at = openColumns.getBoundingClientRect();
-    columns.style.right = `${Math.max(8, document.documentElement.clientWidth - at.right)}px`;
-    columns.style.bottom = `${Math.max(8, window.innerHeight - at.top + 4)}px`;
+    const across = document.documentElement.clientWidth;
+    const down = window.innerHeight;
+    const clamp = (value, size, room) => Math.max(8, Math.min(value, room - 8 - size));
+    const above = at.top - 4 - height;
+    const top = clamp(above >= 8 ? above : at.bottom + 4, height, down);
+    columns.style.left = `${clamp(at.right - width, width, across)}px`;
+    columns.style.top = `${top}px`;
   });
   columns.addEventListener("toggle", (event) => {
     openColumns.setAttribute("aria-expanded", String(event.newState === "open"));
   });
+  // Placed once, so closed when its button moves away or the window changes;
+  // scrolling the checklist itself, or a scroller its button is not in, does not.
+  const shut = () => { if (columns.matches(":popover-open")) columns.hidePopover(); };
+  document.addEventListener("scroll", (event) => {
+    const scrolled = event.target === document ? document.documentElement : event.target;
+    if (scrolled.contains && scrolled.contains(openColumns)) shut();
+  }, { capture: true, passive: true });
+  window.addEventListener("resize", shut);
 
   // -- the rows --
 
@@ -257,7 +303,13 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
           const button = document.createElement("button");
           button.type = "button";
           button.className = "callsign";
-          button.textContent = text;
+          // Something to click when the column has nothing to say: the
+          // callsign, muted, or a dash when there is not even that.
+          if (text) button.textContent = text;
+          else {
+            button.textContent = COLUMN.CALLSIGN.text(ac) || "—";
+            button.classList.add("stand-in");
+          }
           button.setAttribute("aria-pressed", String(ac.hex === focused));
           button.setAttribute("aria-label", `Focus ${COLUMN.CALLSIGN.text(ac) || ac.hex.toUpperCase()} on the radar`);
           td.append(button);
@@ -306,9 +358,9 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
     }
   });
   // The focused row is the first, so showing it is scrolling to the top.
-  // In one column the table does not scroll, the page does, and its top may
-  // be off the page: a callsign pressed here takes the page to its row. A
-  // click on the radar does not, or the radar would be scrolled out of sight.
+  // In one column the page scrolls too, and the table's top may be off the
+  // page: a callsign pressed here takes the page to its row. A click on the
+  // radar does not, or the radar would be scrolled out of sight.
   const scroller = body.closest(".tracks-body");
   focus.subscribe((hex) => {
     render();

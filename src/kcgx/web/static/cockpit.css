@@ -441,28 +441,43 @@ label.field-row { flex-wrap: nowrap; }
    (tracks.js measures it). */
 .tracks-body { padding-top: 0; }
 .tracks thead th { position: sticky; top: 0; background: #000; z-index: 1; }
-.tracks thead tr.filters th { top: var(--tracks-head-h, 21px); padding: 1px 6px 3px; box-shadow: inset 0 -1px var(--rule); }
+.tracks thead tr.filters td { position: sticky; top: var(--tracks-head-h, 21px); z-index: 1; background: #000;
+  padding: 1px 6px 3px; border-top: 0; box-shadow: inset 0 -1px var(--rule); }
 .tracks .filters input { width: 100%; min-width: 8.5ch; height: 20px; padding: 0 4px; background: #000;
   border: 1px solid var(--rule); color: var(--text); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
 .tracks .filters input::placeholder { color: var(--muted); opacity: 0.55; }
 .tracks .filters input:hover { border-color: var(--dim); }
 .tracks .filters input:focus-visible { outline: 1px solid var(--pink); outline-offset: 0; border-color: var(--pink); }
 .tracks .filters input[aria-invalid="true"] { border-color: var(--alarm); color: var(--alarm); }
-.tracks .filters th.number { white-space: nowrap; }
-.tracks .filters th.number input { width: 5.5ch; min-width: 5.5ch; text-align: right; }
-.tracks .filters th.number input + input { margin-left: 2px; }
+.tracks .filters td.number { white-space: nowrap; }
+.tracks .filters td.number input { width: 5.5ch; min-width: 5.5ch; text-align: right; }
+.tracks .filters td.number input + input { margin-left: 2px; }
 .tracks-tools { gap: 6px; margin-left: auto; }
 .tracks-tools .btn:disabled { opacity: 0.4; cursor: default; border-color: var(--frame); color: var(--text); }
-/* The checklist of columns, over the page above its button (tracks.js places it). */
+.tracks-sort { white-space: nowrap; letter-spacing: 0.08em; }
+/* A row's first cell is its focus button: never too small to press, as tall
+   as the row (the cell's padding is the button's), the callsign muted when
+   the column has nothing of its own to show. */
+.tracks td .callsign { display: inline-block; min-width: 2ch; padding: 2px 0; margin: -2px 0; }
+.tracks tr:not(.focused):not(.emergency) .callsign.stand-in { color: var(--muted); }
+/* The checklist of columns, over the page above its button, or below it (tracks.js places it). */
 .columns-pop { position: fixed; inset: auto; margin: 0; padding: 8px; width: max-content; max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px); overflow: auto;
   background: #000; color: var(--text); border: 1px solid var(--frame);
   box-shadow: 0 0 24px color-mix(in srgb, var(--frame) 40%, transparent); }
-.columns-pop:popover-open { display: grid; grid-template-columns: repeat(3, minmax(9ch, auto)); gap: 4px; }
+/* Rows as tall as a button: WebKit otherwise stretches them to the max-height.
+   Set when closed as well, as tracks.js measures the grid before it opens. */
+.columns-pop { grid-template-columns: repeat(3, minmax(9ch, auto)); grid-auto-rows: max-content; align-content: start; gap: 4px; }
+.columns-pop:popover-open { display: grid; }
 .columns-pop .check { text-align: left; }
 .columns-pop .check::before { content: "[ ] "; color: var(--muted); }
 .columns-pop .check[aria-pressed="true"]::before { content: "[X] "; color: var(--pink); }
 .columns-pop .check:disabled { cursor: not-allowed; opacity: 0.7; }
+/* In one column the pane is as tall as the table would make it: held to the
+   frequencies' height, the table scrolls in it and the header stays. */
+@media (max-width: 1100px) {
+  .screen-tracks .tracks-body { max-height: 70vh; }
+}
 
 /* == G:CHROME == */
 /* Zoom, fonts, clocks and text glow: the body and page rules (Tasks 3, 4c). */

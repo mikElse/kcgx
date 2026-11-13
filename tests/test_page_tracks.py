@@ -11,7 +11,7 @@ import pytest
 
 from kcgx.prefs import DEFAULTS, SCHEMA
 from page_fixtures import *  # noqa: F403  (fixtures and helpers)
-from page_fixtures import hold_traffic, pixel, plane, pref_is, radar_debug, rows, set_prefs, spy_on_sends
+from page_fixtures import box_of, hold_traffic, pixel, plane, pref_is, radar_debug, rows, set_prefs, spy_on_sends
 
 pytestmark = pytest.mark.browser
 
@@ -95,7 +95,7 @@ def test_the_header_shows_exactly_track_cols_in_the_schema_order(page):
     pref_is(page, "track_cols", ["CALLSIGN", "REG", "LON"])
     page.wait_for_function("document.querySelectorAll('#tracks-head th').length === 3")
     assert head(page) == ["CALLSIGN", "REG", "LON"]
-    assert page.eval_on_selector_all("#tracks-filters th", "ths => ths.length") == 3
+    assert page.eval_on_selector_all("#tracks-filters td", "tds => tds.length") == 3
     assert all(len(row["cells"]) == 3 for row in rows(page))
     set_prefs(page, track_cols=DEFAULTS["track_cols"])
     assert head(page) == ["CALLSIGN", "TYPE", "ALT FT", "GS KT", "TRK", "DIST NM", "SQWK"]
@@ -133,6 +133,43 @@ def test_the_last_column_cannot_be_unchecked(page):
     assert head(page) == ["DIST NM"]
 
 
+def test_an_empty_checklist_falls_back_to_the_callsign_and_says_so(page):
+    set_prefs(page, track_cols=[])
+    assert head(page) == ["CALLSIGN"]
+    page.click("#open-columns")
+    page.wait_for_selector("#tracks-columns button[data-key=CALLSIGN][aria-pressed=true]:disabled")
+    assert checklist(page) == [[name, name == "CALLSIGN"] for name in NAMES]
+    # The next box checked adds to what is shown, not to the empty list.
+    page.click("#tracks-columns button[data-key=REG]")
+    pref_is(page, "track_cols", ["CALLSIGN", "REG"])
+
+
+def test_a_first_cell_with_nothing_to_say_shows_the_callsign_muted(page):
+    hold_traffic(
+        page,
+        plane("r1", 5, 0, label="DAL1388", reg="N101DQ", dist=5.0),
+        plane("r2", 0, 10, label="UAL22", dist=10.0),
+        plane("r3", -20, 0, label="", dist=20.0),
+    )
+    set_prefs(page, track_cols=["REG", "ALT"])
+    wait_for_hexes(page, ["r1", "r2", "r3"])
+    first = page.eval_on_selector_all(
+        "#tracks-body tr",
+        """trs => trs.map(tr => { const b = tr.querySelector("td:first-child button"), r = b.getBoundingClientRect();
+            const ch = parseFloat(getComputedStyle(b).fontSize) * 0.5;
+            return { text: b.textContent, standIn: b.classList.contains("stand-in"), colour: getComputedStyle(b).color,
+                     w: r.width, h: r.height, row: tr.getBoundingClientRect().height, ch }; })""",
+    )
+    assert [(f["text"], f["standIn"]) for f in first] == [("N101DQ", False), ("UAL22", True), ("—", True)]
+    assert first[1]["colour"] != first[0]["colour"]
+    assert first[1]["colour"] == page.evaluate("getComputedStyle(document.querySelector('.muted')).color")
+    for f in first:
+        assert f["w"] >= 2 * f["ch"] - 0.5 and f["h"] >= f["row"] - 1.5, f
+    page.click('#tracks-body tr[data-hex="r3"] td:first-child button')
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="r3"]')
+    assert hexes(page)[0] == "r3"
+
+
 def test_with_the_callsign_hidden_the_first_cell_still_focuses(page):
     hold_traffic(page, *THREE)
     set_prefs(page, track_cols=["ALT", "DIST"])
@@ -141,7 +178,76 @@ def test_with_the_callsign_hidden_the_first_cell_still_focuses(page):
     assert hexes(page)[0] == "r3"
 
 
+def test_the_checklist_opens_below_its_button_when_there_is_no_room_above(page):
+    page.set_viewport_size({"width": 390, "height": 844})
+    # Room below the page, so its last pane's title bar can be scrolled up near the top.
+    page.evaluate("document.body.append(Object.assign(document.createElement('div'), {style: 'height: 1200px'}))")
+    page.evaluate("scrollBy(0, document.getElementById('open-columns').getBoundingClientRect().top - 20)")
+    button = box_of(page, "#open-columns")
+    assert 0 <= button["y"] < 60, button
+    page.click("#open-columns")
+    page.wait_for_selector("#tracks-columns", state="visible")
+    pop = page.eval_on_selector("#tracks-columns", "e => e.getBoundingClientRect().toJSON()")
+    assert pop["top"] >= button["y"] + button["height"], (pop, button)
+    assert pop["left"] >= 0 and pop["right"] <= 390 and pop["bottom"] <= 844, pop
+    # It closes when the page scrolls, the button moving away from it ...
+    page.evaluate("scrollBy(0, -200)")
+    page.wait_for_selector("#tracks-columns", state="hidden")
+    page.wait_for_selector("#open-columns[aria-expanded=false]")
+    # ... and when the window changes size.
+    page.click("#open-columns")
+    page.wait_for_selector("#tracks-columns", state="visible")
+    page.set_viewport_size({"width": 400, "height": 844})
+    page.wait_for_selector("#tracks-columns", state="hidden")
+
+
+def test_the_checklist_still_opens_above_its_button_where_there_is_room(page):
+    page.click("#open-columns")
+    page.wait_for_selector("#tracks-columns", state="visible")
+    button = box_of(page, "#open-columns")
+    pop = page.eval_on_selector("#tracks-columns", "e => e.getBoundingClientRect().toJSON()")
+    assert pop["bottom"] <= button["y"] and pop["top"] >= 0, (pop, button)
+    assert abs(pop["right"] - (button["x"] + button["width"])) <= 1, (pop, button)
+    # Scrolling its own list does not close it.
+    page.eval_on_selector("#tracks-columns", "e => e.dispatchEvent(new Event('scroll'))")
+    page.wait_for_timeout(100)
+    assert page.is_visible("#tracks-columns")
+
+
 # -- filters --------------------------------------------------------------------
+
+
+def test_the_filter_cells_are_data_cells_sticky_and_opaque(page):
+    cells = page.eval_on_selector_all(
+        "#tracks-filters > *",
+        "cs => cs.map(c => [c.tagName, getComputedStyle(c).position, getComputedStyle(c).backgroundColor])",
+    )
+    assert cells and all(cell == ["TD", "sticky", "rgb(0, 0, 0)"] for cell in cells), cells
+    labels = page.eval_on_selector_all("#tracks-filters input", "is => is.map(i => i.getAttribute('aria-label'))")
+    assert labels and all(labels), labels
+
+
+def test_a_columns_change_from_another_tab_keeps_the_box_being_typed_in(page, other):
+    hold_traffic(page, *THREE)
+    page.click(text_filter("CALLSIGN"))
+    page.keyboard.type("da")
+    page.keyboard.press("ArrowLeft")
+    page.evaluate("window.oldBox = document.activeElement")
+    other.evaluate("window.kcgx.send({t: 'prefs', track_cols: [...window.kcgx.store.state.prefs.track_cols, 'REG']})")
+    page.wait_for_function("[...document.querySelectorAll('#tracks-head th')].some(th => th.textContent === 'REG')")
+    assert page.evaluate("document.activeElement !== window.oldBox")  # the row was built again
+    now = page.evaluate(
+        "(({dataset: d, value, selectionStart: s}) => [d.key, d.bound || null, value, s])(document.activeElement)"
+    )
+    assert now == ["CALLSIGN", None, "da", 1]
+    page.keyboard.type("x")
+    assert page.input_value(text_filter("CALLSIGN")) == "dxa"
+    # A number box keeps its bound too.
+    page.click(number_filter("ALT", "max"))
+    page.keyboard.type("50")
+    other.evaluate("window.kcgx.send({t: 'prefs', track_cols: window.kcgx.store.state.prefs.track_cols.filter(c => c !== 'REG')})")
+    page.wait_for_function("![...document.querySelectorAll('#tracks-head th')].some(th => th.textContent === 'REG')")
+    assert page.evaluate("[document.activeElement.dataset.key, document.activeElement.dataset.bound]") == ["ALT", "max"]
 
 
 def test_a_text_filter_matches_a_substring_in_any_case_and_hides_rows_only(page):
@@ -253,6 +359,19 @@ def test_a_sort_by_a_hidden_column_still_orders_the_rows(page):
     assert [s for _, s in sorted_by(page, "ALT")] == ["none"]
 
 
+def test_a_sort_by_a_hidden_column_is_named_in_the_title_bar(page):
+    set_prefs(page, track_cols=["CALLSIGN"], track_sort="ALT", track_desc=True)
+    page.wait_for_selector("#tracks-sort:text-is('SORT ALT FT ▼')")
+    assert page.is_visible("#tracks-sort")
+    assert page.eval_on_selector("#tracks-sort", "e => e.closest('.tracks-tools') !== null && e.matches('.muted.small')")
+    set_prefs(page, track_desc=False)
+    page.wait_for_selector("#tracks-sort:text-is('SORT ALT FT ▲')")
+    set_prefs(page, track_cols=["CALLSIGN", "ALT"])
+    page.wait_for_selector("#tracks-sort", state="hidden")
+    set_prefs(page, track_cols=["CALLSIGN"], track_sort="CALLSIGN")
+    page.wait_for_selector("#tracks-sort", state="hidden")
+
+
 # -- the rank -------------------------------------------------------------------------
 
 
@@ -286,6 +405,23 @@ def test_the_rank_follows_the_sort_unfiltered_with_the_focus_first(page):
 # -- the header stays ------------------------------------------------------------------
 
 
+def test_in_one_column_the_table_scrolls_in_its_pane_and_the_header_stays(page):
+    page.set_viewport_size({"width": 820, "height": 1000})
+    many = [plane(f"s{n:03}", east=(n % 20) - 10, north=(n // 20) - 5, dist=n / 10) for n in range(200)]
+    hold_traffic(page, *many)
+    page.wait_for_function("document.querySelectorAll('#tracks-body tr').length === 200")
+    size = page.eval_on_selector(".tracks-body", "e => [e.clientHeight, e.scrollHeight]")
+    assert size[0] <= 700 + 1 and size[1] > size[0], size
+    scrolled = page.eval_on_selector(".tracks-body", "e => { e.scrollTop = 500; return e.scrollTop; }")
+    assert scrolled == 500
+    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    body = page.eval_on_selector(".tracks-body", "e => e.getBoundingClientRect().toJSON()")
+    th = page.eval_on_selector("#tracks-head th", "e => e.getBoundingClientRect().toJSON()")
+    filters = page.eval_on_selector("#tracks-filters td", "e => e.getBoundingClientRect().toJSON()")
+    assert abs(th["top"] - body["top"]) <= 1, (th, body)
+    assert abs(filters["top"] - th["bottom"]) <= 1, (filters, th)
+
+
 def test_scrolled_down_the_header_stays_on_top_and_hides_the_rows(page):
     set_prefs(page, display="OFF")  # no scanlines over the pixels read
     many = [plane(f"s{n:03}", east=(n % 20) - 10, north=(n // 20) - 5, dist=n / 10) for n in range(200)]
@@ -296,7 +432,7 @@ def test_scrolled_down_the_header_stays_on_top_and_hides_the_rows(page):
     page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
     body = page.eval_on_selector(".tracks-body", "e => e.getBoundingClientRect().toJSON()")
     th = page.eval_on_selector("#tracks-head th", "e => e.getBoundingClientRect().toJSON()")
-    filters = page.eval_on_selector("#tracks-filters th", "e => e.getBoundingClientRect().toJSON()")
+    filters = page.eval_on_selector("#tracks-filters td", "e => e.getBoundingClientRect().toJSON()")
     assert abs(th["top"] - body["top"]) <= 1, (th, body)
     assert abs(filters["top"] - th["bottom"]) <= 1, (filters, th)
     background = page.eval_on_selector("#tracks-head th", "e => getComputedStyle(e).backgroundColor")
