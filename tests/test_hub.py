@@ -145,12 +145,26 @@ async def test_only_the_first_page_a_hub_welcomes_is_told_to_boot():
     hub = Hub()
     first, _, _ = sink()
     second, _, _ = sink()
-    hub.welcome(first, {"t": "snapshot", "boot": False})
-    hub.welcome(second, {"t": "snapshot"})
+    hub.welcome(first, {"t": "snapshot", "boot": False}, cockpit=True)
+    hub.welcome(second, {"t": "snapshot"}, cockpit=True)
     hub.remove(first)
     again, _, _ = sink()  # the first page, reconnected
-    hub.welcome(again, {"t": "snapshot"})
+    hub.welcome(again, {"t": "snapshot"}, cockpit=True)
     assert [queued(c)[0]["boot"] for c in (first, second, again)] == [True, False, False]
+
+
+async def test_only_the_cockpit_page_uses_up_the_boot():
+    """/debug (or anything else on /ws) that connects first is told no, and
+    leaves the boot for the first cockpit page: only the cockpit says it is
+    one (it connects to /ws?page=cockpit), and the default is not."""
+    hub = Hub()
+    debug, _, _ = sink()
+    hub.welcome(debug, {"t": "snapshot"})
+    cockpit, _, _ = sink()
+    hub.welcome(cockpit, {"t": "snapshot"}, cockpit=True)
+    later, _, _ = sink()
+    hub.welcome(later, {"t": "snapshot"})
+    assert [queued(c)[0]["boot"] for c in (debug, cockpit, later)] == [False, True, False]
 
 
 async def test_a_welcome_queues_the_snapshot_first_then_joins():

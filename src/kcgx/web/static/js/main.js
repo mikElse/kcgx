@@ -13,7 +13,7 @@ import { mountLog } from "./log.js";
 import { mountRadar } from "./radar/index.js";
 import { mountTracks } from "./tracks.js";
 import { mountAirportSheet, mountConfigSheet, mountShutdownSheet } from "./sheets.js";
-import { mountBoot } from "./boot.js";
+import { afterBoot, mountBoot } from "./boot.js";
 
 const $ = (id) => document.getElementById(id);
 const store = createStore();
@@ -138,7 +138,9 @@ function fromLink() {
   } catch {
     // "%E9", "100%": no escape of anything, so the text itself.
   }
-  airportSheet.open(query);
+  // Not over the boot animation: once it has gone, or at once if it is not
+  // played (boot.js decides on the first snapshot).
+  afterBoot(() => airportSheet.open(query));
 }
 window.addEventListener("hashchange", fromLink);
 fromLink();

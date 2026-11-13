@@ -11,7 +11,9 @@ export function connect(store) {
 
   function open() {
     if (stopped) return;
-    socket = new WebSocket(`ws://${location.host}/ws`);
+    // `page=cockpit`: this is the cockpit, which may play the boot animation
+    // (kcgx.hub, Hub.welcome); /debug and anything else on /ws is not.
+    socket = new WebSocket(`ws://${location.host}/ws?page=cockpit`);
     socket.addEventListener("open", () => {
       attempt = 0;
       store.setConnected(true);

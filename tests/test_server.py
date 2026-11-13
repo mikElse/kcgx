@@ -153,13 +153,17 @@ def test_the_first_frame_is_a_snapshot():
         assert [f["ident"] for f in frame["feeds"]] == ["kpdx3_twr", "kpdx3_gnd", "kpdx3_atis"]
 
 
-def test_only_the_first_page_since_the_server_started_is_told_to_boot():
-    """Phase G decision 1: the boot animation plays once per launch."""
+def test_only_the_first_cockpit_page_since_the_server_started_is_told_to_boot():
+    """Phase G decision 1: the boot animation plays once per launch, on the
+    cockpit, which says it is one (/ws?page=cockpit). Anything else on /ws,
+    /debug first of all, is told no and leaves it for the cockpit."""
     asgi, _ = app()
     with client(asgi) as http:
         with http.websocket_connect(WS) as ws:
+            assert ready(ws)["boot"] is False
+        with http.websocket_connect(WS + "?page=cockpit") as ws:
             assert ready(ws)["boot"] is True
-        with http.websocket_connect(WS) as ws:
+        with http.websocket_connect(WS + "?page=cockpit") as ws:
             assert ready(ws)["boot"] is False
 
 

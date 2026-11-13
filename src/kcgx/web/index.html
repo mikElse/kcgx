@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KCGX</title>
 <link rel="stylesheet" href="/static/cockpit.css">
+<script>
+// data-booting keeps the page hidden until boot.js decides about the boot
+// animation. Should it never (main.js fails to load, or throws first), the
+// page shows anyway after 3 s rather than staying black. boot.js calls this
+// off when it decides.
+window.kcgxBootFallback = setTimeout(function () {
+  document.documentElement.removeAttribute("data-booting");
+}, 3000);
+</script>
 <script type="module" src="/static/js/main.js"></script>
 </head>
 <body>

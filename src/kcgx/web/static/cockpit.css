@@ -553,9 +553,11 @@ label.field-row { flex-wrap: nowrap; }
 /* Until boot.js has heard the first snapshot (or waited 1.5 s), nothing of
    the page shows, so it never flashes up in the default palette: the first
    paint is the wall. Then it shows at once, or after the animation fades in
-   over the 600 ms the cover fades out (boot.js FADE_MS). */
-[data-booting] .page, [data-booting] dialog { opacity: 0; }
-[data-boot-fade] .page, [data-boot-fade] dialog { transition: opacity 600ms ease-out; }
+   over the 600 ms the cover fades out (boot.js FADE_MS). A dialog's
+   backdrop, in the top layer over the cover, is hidden with it. Should
+   boot.js never decide, index.html's own script shows the page at 3 s. */
+[data-booting] .page, [data-booting] dialog, [data-booting] dialog::backdrop { opacity: 0; }
+[data-boot-fade] .page, [data-boot-fade] dialog, [data-boot-fade] dialog::backdrop { transition: opacity 600ms ease-out; }
 .boot { position: fixed; inset: 0; z-index: 10; overflow: hidden; background: var(--wall);
   transition: opacity 600ms ease-out; }
 .boot canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

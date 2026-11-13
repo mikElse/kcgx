@@ -9,13 +9,20 @@
 // since the server started, kcgx.hub) and `boot_anim`, and no reduced
 // motion. A later prefs frame or snapshot changes nothing. Played, it runs
 // LENGTH s on frames.js's clock and fades out over FADE_MS as the page fades
-// in; a key or a press anywhere does the same at once. Not played, the
-// page shows at once.
+// in; a key or a press anywhere does the same at once (a modifier key
+// alone does not). Not played, the page shows at once. Done, it gives its
+// canvases' backing stores back.
+//
+// index.html's head has a fallback of its own: if nothing here has decided
+// by 3 s (main.js failed to load, or threw before mounting this), it takes
+// data-booting off, so an error is never a black window. Deciding calls it
+// off (window.kcgxBootFallback).
 //
 // window.kcgx.boot is for the tests: `state` (waiting, playing, leaving,
 // done, or none when it does not play), `t` (playback seconds), `frames`,
-// `hold(t)`, `seek(t)`, `at(x, y)` (a scene point in canvas pixels) and
-// `drawMs` (the last frames' drawing times, for measuring).
+// `hold(t)`, `seek(t)`, `at(x, y)` (a scene point in canvas pixels),
+// `drawMs` (the last frames' drawing times, for measuring) and `canvases`
+// (the [width, height] of each canvas it still holds).
 
 import { authored, fit, frame, LENGTH } from "./boot-scene.js";
 import { onFrame } from "./frames.js";
@@ -24,6 +31,25 @@ import { colours, glowBlur, reducedMotion, renderScale } from "./theme.js";
 const WAIT_MS = 1500;
 const FADE_MS = 600; // also cockpit.css's G:BOOT transitions
 const MEASURED = 120;
+// Keys that are half a shortcut, or a state, rather than a press.
+const MODIFIERS = new Set(["Shift", "Control", "Alt", "AltGraph", "Meta", "OS", "CapsLock", "Fn", "FnLock", "NumLock", "ScrollLock", "Hyper", "Super", "Symbol", "SymbolLock"]);
+
+// What waits for the boot to be over: `fn` runs once the cover has gone, or
+// at once when it is not played (or already over). main.js opens the
+// airport search from a #airport link this way, so the sheet's backdrop is
+// never over the animation, nor its focus in an input nobody can see.
+let over = false;
+const afterwards = [];
+export function afterBoot(fn) {
+  if (over) fn();
+  else afterwards.push(fn);
+}
+function ended() {
+  over = true;
+  for (const fn of afterwards.splice(0)) {
+    try { fn(); } catch (error) { console.error(error); }
+  }
+}
 
 // How much of the canvas a frame `ms` after the last fades away: burn_in is
 // the half-life in ms (decision 15), so 19, the default, takes 0.45 a frame
@@ -50,7 +76,7 @@ function filters(ctx) {
 
 export function mountBoot(cover, store) {
   const root = document.documentElement;
-  const canvas = cover.querySelector("canvas");
+  let canvas = cover.querySelector("canvas");
   let state = "waiting";
   let start = null; // the frame time playback started from
   let held = null; // a playback time to stay at, for the tests
@@ -59,11 +85,12 @@ export function mountBoot(cover, store) {
   let t = 0;
   let frames = 0;
   let fontsIn = false;
+  let failed = false; // whether a frame has thrown (written to the console once)
   let stop = () => {};
   const drawMs = [];
   // Where the canvas has filters: the scene small, and its glow.
-  const small = document.createElement("canvas");
-  const soft = document.createElement("canvas");
+  let small = document.createElement("canvas");
+  let soft = document.createElement("canvas");
 
   const unsubscribe = store.subscribe((kind, _detail, s) => {
     if (kind === "all") decide(Boolean(s.boot && s.prefs.boot_anim) && !reducedMotion());
@@ -74,10 +101,13 @@ export function mountBoot(cover, store) {
     if (state !== "waiting") return;
     unsubscribe();
     clearTimeout(timer);
+    clearTimeout(window.kcgxBootFallback);
     if (!play) {
       state = "none";
       cover.remove();
+      release();
       root.removeAttribute("data-booting");
+      ended();
       return;
     }
     state = "playing";
@@ -97,12 +127,27 @@ export function mountBoot(cover, store) {
     if (start === null) start = now;
     lastNow = now;
     t = held ?? (now - start) / 1000;
+    // The end first, so a frame that cannot be drawn never keeps the cover up.
+    if (t >= LENGTH && held === null) { leave(); return; }
     const begun = performance.now();
-    draw(now);
+    try {
+      draw(now);
+    } catch (error) {
+      if (!failed) console.error("boot: a frame failed to draw", error);
+      failed = true;
+    }
     drawMs.push(performance.now() - begun);
     if (drawMs.length > MEASURED) drawMs.shift();
     frames += 1;
-    if (t >= LENGTH && held === null) leave();
+  }
+
+  // The canvases' backing stores back (at 2x and SUPER, tens of MB), and
+  // nothing kept of them: the tests' handle on this outlives the cover.
+  function release() {
+    for (const each of [canvas, small, soft]) {
+      if (each) { each.width = 0; each.height = 0; }
+    }
+    canvas = small = soft = null;
   }
 
   // Backing store by the render scale (decision 6), as the radar's: at OFF
@@ -169,6 +214,7 @@ export function mountBoot(cover, store) {
 
   function skip(event) {
     if (state !== "playing") return;
+    if (event.type === "keydown" && MODIFIERS.has(event.key)) return;
     // The press is the skip's: it does not reach the cockpit under the cover.
     event.preventDefault();
     event.stopPropagation();
@@ -186,8 +232,10 @@ export function mountBoot(cover, store) {
     root.removeAttribute("data-booting");
     setTimeout(() => {
       cover.remove();
+      release();
       root.removeAttribute("data-boot-fade");
       state = "done";
+      ended();
     }, FADE_MS);
   }
 
@@ -196,6 +244,7 @@ export function mountBoot(cover, store) {
     get t() { return t; },
     get frames() { return frames; },
     get drawMs() { return [...drawMs]; },
+    get canvases() { return [canvas, small, soft].filter(Boolean).map((c) => [c.width, c.height]); },
     hold(at) {
       if (at === null && held !== null && lastNow !== null) start = lastNow - held * 1000;
       held = at;
@@ -204,6 +253,7 @@ export function mountBoot(cover, store) {
       start = (lastNow ?? performance.now()) - at * 1000;
     },
     at(x, y) {
+      if (!canvas) return [NaN, NaN];
       const view = fit(canvas.width, canvas.height);
       return [view.x + x * view.s, view.y + y * view.s];
     },
