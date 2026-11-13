@@ -8,12 +8,24 @@ when refused) is per address (spec, Radar).
 `Radar` owns the picture for the current airport: the aircraft seen, when
 each was last seen, the UNK numbers given to aircraft with no callsign, and
 which emergency squawks have been announced. A refused poll keeps the last
-good picture and backs off: 15, 30, 60, then 120 s, reset by the first
-success. Aircraft not seen for `stale_secs` drop out.
+good picture and backs off: the refresh doubled per failure in a row,
+capped at two minutes or four refreshes, whichever is longer (so it backs
+off at least twice at any rate: 15, 30, 60, 120 s; at 120, 240, 480 s),
+reset by the first success. Aircraft not seen for `stale_secs` drop out.
 
 The range is a setting (kcgx.prefs, `range_nm`), changed while running by
 `set_range`. A new airport is polled at once; a new range waits for the
-next scheduled poll, so a dragged slider is never a burst of requests.
+next scheduled poll, so a dragged slider is never a burst of requests. The
+poll interval (`poll_secs`, by `set_refresh`) and the two thresholds for
+parked traffic (`ground_gs`, `ground_alt`, by `set_ground`) are settings
+too, and likewise never poll.
+
+Parked traffic (phase G decision 9): a track is still while its ground
+speed is under `ground_gs` and it reports GND or a barometric altitude under
+`ground_alt`. The frame's `still` is how many seconds it has been so, counted
+from the poll it first qualified; one poll that finds it otherwise resets it
+to 0. A poll that does not hear from it at all changes nothing. Counted
+here, not in the page, so every tab agrees and a reload keeps the clock.
 
 Everything but the fetch runs on the event loop. The fetch is a plain
 blocking function, run in a worker thread, so tests and the demo can hand
@@ -99,6 +111,14 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _text(value: Any) -> str | None:
+    """A text field as the page shows it: upper case, or None when the reply
+    has none (missing, empty, or not text at all)."""
+    if not isinstance(value, str):
+        return None
+    return value.strip().upper() or None
+
+
 @dataclass
 class Track:
     hex: str
@@ -112,13 +132,22 @@ class Track:
     track: float | None = None
     squawk: str = ""
     unk: int = 0
+    # Given by adsb.lol for most aircraft but not promised for any: None
+    # when the reply leaves them out. readsb's names: r, desc, ownOp,
+    # baro_rate (ft/min), category (A0 to D7).
+    reg: str | None = None
+    desc: str | None = None
+    oper: str | None = None
+    vs: float | None = None
+    cat: str | None = None
+    still_since: float | None = None  # our clock, the poll it first qualified as parked
 
 
 @dataclass
 class Radar:
     """The current airport's picture. Call `retarget` on an airport change,
-    `set_range` on a range change, `poll` to take one picture (or let `run`
-    do it on its schedule)."""
+    `set_range`, `set_refresh` and `set_ground` when those settings change,
+    `poll` to take one picture (or let `run` do it on its schedule)."""
 
     on_frame: Callable[[dict], None]
     on_note: Callable[[str], None]
@@ -126,6 +155,8 @@ class Radar:
     refresh_secs: int = 15
     range_nm: int = 40
     stale_secs: int = 60
+    ground_gs: int = 5  # kt: slower than this may be parked
+    ground_alt: int = 0  # ft: under this, or GND, is on the ground; 0 is GND only
     clock: Callable[[], float] = time.time
     lat: float | None = None
     lon: float | None = None
@@ -168,6 +199,29 @@ class Radar:
         self._trim()
         self.on_frame(self.frame())
 
+    # -- the pace and parked traffic ------------------------------------------------
+
+    def set_refresh(self, secs: int) -> None:
+        """A new poll interval. It sets the base of `delay` and nothing
+        else: the back-off still doubles it per failure, the 15 s floor and
+        the cap (see `delay`) hold, and the wait already begun runs out first.
+        It never triggers a poll, for the same reason a new range does not."""
+        self.refresh_secs = secs
+
+    def set_ground(self, gs: int, alt: int) -> None:
+        """New thresholds for parked traffic, judged from the next poll on.
+        Nothing is sent: no track's `still` changes until then."""
+        self.ground_gs, self.ground_alt = gs, alt
+
+    def _parked(self, track: Track) -> bool:
+        if track.gs is None or not track.gs < self.ground_gs:
+            return False
+        if track.alt == "GND":
+            return True
+        # 0 is GND only (kcgx.prefs), even where a field below sea level
+        # reports a barometric altitude under it.
+        return self.ground_alt > 0 and isinstance(track.alt, int) and track.alt < self.ground_alt
+
     def _beyond(self, lat: float, lon: float) -> bool:
         return distance_bearing(self.lat, self.lon, lat, lon)[0] > self.range_nm
 
@@ -189,11 +243,12 @@ class Radar:
 
     def delay(self) -> float:
         """Seconds until the next poll: the refresh, doubled per failure in a
-        row, capped at two minutes."""
+        row, capped at two minutes or four refreshes, whichever is longer."""
         refresh = max(MIN_REFRESH_SECS, self.refresh_secs)
         if not self.failures:
             return float(refresh)
-        return float(min(BACKOFF_CAP_SECS, refresh * 2 ** self.failures))
+        cap = max(BACKOFF_CAP_SECS, 4 * refresh)
+        return float(min(cap, refresh * 2 ** self.failures))
 
     async def poll(self) -> None:
         if self.lat is None or self.lon is None:
@@ -252,6 +307,15 @@ class Radar:
             track.gs = _number(raw.get("gs"))
             track.track = _number(raw.get("track"))
             track.squawk = str(raw.get("squawk") or "").strip()
+            track.reg = _text(raw.get("r"))
+            track.desc = _text(raw.get("desc"))
+            track.oper = _text(raw.get("ownOp"))
+            track.vs = _number(raw.get("baro_rate"))
+            track.cat = _text(raw.get("category"))
+            if not self._parked(track):
+                track.still_since = None
+            elif track.still_since is None:
+                track.still_since = now
             if not track.callsign and hex_ not in self._unks:
                 self._unks[hex_] = self._unk_next
                 self._unk_next += 1
@@ -308,6 +372,12 @@ class Radar:
                 "age": round(now - track.seen_at, 1),
                 "dist": round(distance, 1),
                 "brg": round(bearing),
+                "reg": track.reg,
+                "desc": track.desc,
+                "oper": track.oper,
+                "vs": None if track.vs is None else round(track.vs),
+                "cat": track.cat,
+                "still": 0 if track.still_since is None else round(now - track.still_since),
             })
         return {
             "t": "aircraft",

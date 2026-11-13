@@ -221,5 +221,7 @@ export function createStore() {
     setConnected(value) { state.connected = value; emit("connection"); },
     setShutdown() { state.shutdown = true; emit("connection"); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    // A view's own news about state it fills, such as tracks.js' "rank".
+    emit,
   };
 }

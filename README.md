@@ -501,13 +501,17 @@ stops the server with a message naming the file and the key.
 | `master_volume` | `1.0` | Output gain, 0.0 to 1.0; CONFIG's slider changes it while running |
 | `buffer_seconds` | `4.0` | How far behind live a feed may fall before it drops audio; see [Buffering](#buffering) |
 | `max_streams` | `7` | Streams held open at once; LiveATC's limit |
-| `radar_refresh_secs` | `15` | Seconds between radar polls; never less than 15 |
 | `radar_stale_secs` | `60` | An aircraft not heard from for this long drops off |
 
 **`radar_range_nm` was retired on 2026-11-12.** The range is CONFIG's
 RANGE now, changed while running and remembered with the other settings.
 A file that still sets the key loads as before; the key is ignored, as any
 unknown key is.
+
+**`radar_refresh_secs` was retired on 2026-11-13.** The poll interval is
+the `poll_secs` setting now, CONFIG > GENERAL > RADAR POLL, changed while
+running and remembered with the other settings. A file that still sets the
+key loads as before; the key is ignored.
 
 The airport you choose is remembered in `~/.local/state/kcgx/airport`, and
 the cockpit reopens there; `icao` is only the fallback. `ambient_enabled`

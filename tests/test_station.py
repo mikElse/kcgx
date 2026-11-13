@@ -503,10 +503,10 @@ async def test_radar_frames_and_emergencies_reach_every_page():
     assert hub.log[-1]["text"].startswith("N52RT squawking 7700 (emergency), 19 nm N")
 
 
-async def test_the_radar_takes_its_pace_from_the_config_and_its_range_from_the_prefs():
+async def test_the_radar_takes_its_stale_time_from_the_config_and_the_rest_from_the_prefs():
     loop = asyncio.get_running_loop()
     station = Station(
-        Config(radar_refresh_secs=30, radar_stale_secs=90),
+        Config(radar_stale_secs=90),
         Hub(),
         post=lambda fn, *args: loop.call_soon_threadsafe(fn, *args),
         airports=AIRPORTS,
@@ -515,10 +515,49 @@ async def test_the_radar_takes_its_pace_from_the_config_and_its_range_from_the_p
         sessions_builder=Builder(),
         picker_loader=picker,
         remember=lambda icao: None,
-        prefs={"range_nm": 120},
+        prefs={"range_nm": 120, "poll_secs": 45, "ground_gs": 8, "ground_alt": 300},
         remember_prefs=lambda prefs: None,
     )
-    assert (station.radar.refresh_secs, station.radar.range_nm, station.radar.stale_secs) == (30, 120, 90)
+    radar = station.radar
+    assert (radar.refresh_secs, radar.range_nm, radar.stale_secs) == (45, 120, 90)
+    assert (radar.ground_gs, radar.ground_alt) == (8, 300)
+
+
+async def test_a_poll_secs_change_reaches_the_radar_without_a_poll_or_a_frame():
+    asked = []
+    station, hub, *_ = make()
+    station.radar.fetch = lambda *args: asked.append(args) or {"ac": []}
+    await station.open("KPDX")
+    page = watch(hub)
+    station.handle({"t": "prefs", "poll_secs": 60})
+    assert station.radar.refresh_secs == 60 and station.radar.delay() == 60
+    assert [f["t"] for f in frames(page)] == ["prefs"] and asked == []
+
+
+async def test_ground_thresholds_reach_the_radar_as_the_range_does():
+    station, hub, *_ = make()
+    await station.open("KPDX")
+    page = watch(hub)
+    station.handle({"t": "prefs", "ground_gs": 12, "ground_alt": 500})
+    assert (station.radar.ground_gs, station.radar.ground_alt) == (12, 500)
+    assert [f["t"] for f in frames(page)] == ["prefs"]
+
+
+async def test_a_prefs_change_reaches_the_radar_only_for_what_changed():
+    station, hub, *_ = make()
+    await station.open("KPDX")
+    calls = []
+    set_refresh, set_ground = station.radar.set_refresh, station.radar.set_ground
+    station.radar.set_refresh = lambda secs: calls.append(("refresh", secs)) or set_refresh(secs)
+    station.radar.set_ground = lambda gs, alt: calls.append(("ground", gs, alt)) or set_ground(gs, alt)
+    station.handle({"t": "prefs", "palette": "MONO"})
+    station.handle({"t": "prefs", "poll_secs": DEFAULTS["poll_secs"]})
+    station.handle({"t": "prefs", "ground_gs": DEFAULTS["ground_gs"]})
+    assert calls == []
+    station.handle({"t": "prefs", "poll_secs": 60})
+    assert calls == [("refresh", 60)]
+    station.handle({"t": "prefs", "ground_alt": 500})
+    assert calls == [("refresh", 60), ("ground", DEFAULTS["ground_gs"], 500)]
 
 
 async def test_without_prefs_the_radar_has_the_default_range():

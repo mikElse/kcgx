@@ -435,6 +435,87 @@ label.field-row { flex-wrap: nowrap; }
 
 /* == G:TRACKS == */
 /* The table's columns, filters and sticky header; the pane's grip and collapse (Tasks 8, 9). */
+/* The header and the filter row under it stay at the top of the scrolling
+   table, opaque over the rows. The scroller has no top padding, so the
+   header sits at its very top; --tracks-head-h is the header row's height
+   (tracks.js measures it). */
+.tracks-body { padding-top: 0; }
+.tracks thead th { position: sticky; top: 0; background: #000; z-index: 1; }
+.tracks thead tr.filters td { position: sticky; top: var(--tracks-head-h, 21px); z-index: 1; background: #000;
+  padding: 1px 6px 3px; border-top: 0; box-shadow: inset 0 -1px var(--rule); }
+.tracks .filters input { width: 100%; min-width: 8.5ch; height: 20px; padding: 0 4px; background: #000;
+  border: 1px solid var(--rule); color: var(--text); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.tracks .filters input::placeholder { color: var(--muted); opacity: 0.55; }
+.tracks .filters input:hover { border-color: var(--dim); }
+.tracks .filters input:focus-visible { outline: 1px solid var(--pink); outline-offset: 0; border-color: var(--pink); }
+.tracks .filters input[aria-invalid="true"] { border-color: var(--alarm); color: var(--alarm); }
+.tracks .filters td.number { white-space: nowrap; }
+.tracks .filters td.number input { width: 5.5ch; min-width: 5.5ch; text-align: right; }
+.tracks .filters td.number input + input { margin-left: 2px; }
+.tracks-tools { gap: 6px; margin-left: auto; }
+.tracks-tools .btn:disabled { opacity: 0.4; cursor: default; border-color: var(--frame); color: var(--text); }
+.tracks-sort { white-space: nowrap; letter-spacing: 0.08em; }
+/* A row's first cell is its focus button: never too small to press, as tall
+   as the row (the cell's padding is the button's), the callsign muted when
+   the column has nothing of its own to show. */
+.tracks td .callsign { display: inline-block; min-width: 2ch; padding: 2px 0; margin: -2px 0; }
+.tracks tr:not(.focused):not(.emergency) .callsign.stand-in { color: var(--muted); }
+/* The checklist of columns, over the page above its button, or below it (tracks.js places it). */
+.columns-pop { position: fixed; inset: auto; margin: 0; padding: 8px; width: max-content; max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px); overflow: auto;
+  background: #000; color: var(--text); border: 1px solid var(--frame);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--frame) 40%, transparent); }
+/* Rows as tall as a button: WebKit otherwise stretches them to the max-height.
+   Set when closed as well, as tracks.js measures the grid before it opens. */
+.columns-pop { grid-template-columns: repeat(3, minmax(9ch, auto)); grid-auto-rows: max-content; align-content: start; gap: 4px; }
+.columns-pop:popover-open { display: grid; }
+.columns-pop .check { text-align: left; }
+.columns-pop .check::before { content: "[ ] "; color: var(--muted); }
+.columns-pop .check[aria-pressed="true"]::before { content: "[X] "; color: var(--pink); }
+.columns-pop .check:disabled { cursor: not-allowed; opacity: 0.7; }
+/* In one column the pane is as tall as the table would make it: held to the
+   frequencies' height, the table scrolls in it and the header stays. */
+@media (max-width: 1100px) {
+  .screen-tracks .tracks-body { max-height: 70vh; }
+}
+/* The pane's height and its fold (Task 9, decision 18). tracks.js sets
+   --tracks-row on .page: prefs tracks_pct as a percent, or min-content when
+   folded. A percent of a grid row is of the page's content box (the window's
+   height, or the page's least, less the padding), and the row is the pane
+   and the gap above it. A percent and not vh: under UI zoom (CSS zoom on
+   .page) Chromium scales vh and WebKit does not, where a percent of the page
+   is the same share of the window in both. This is first paint's, the default.
+   minmax(0, ...): the row takes its percent only from what the other rows'
+   floors leave (the radar's own row's 48 px among them), so a percent too
+   tall for this window, as one set in a taller, makes the pane shorter and
+   never the page taller (tracks.js stops a drag and the keys there too). */
+.page { --tracks-row: minmax(0, 24%); }
+/* The grip is the pane's top 6 px, a strip of its own over the header. */
+.screen-tracks { padding-top: 6px; }
+.tracks-grip { position: absolute; top: 0; left: 0; right: 0; height: 6px; z-index: 3; cursor: row-resize; touch-action: none; }
+.tracks-grip::after { content: ""; position: absolute; top: 2px; left: calc(50% - 24px); width: 48px; height: 2px;
+  background: var(--frame); opacity: 0.6; }
+.tracks-grip:hover::after, .tracks-grip.dragging::after { left: 0; width: 100%; background: var(--cyan); opacity: 1; }
+.tracks-grip:focus-visible { outline: 2px solid var(--pink); outline-offset: -2px; }
+.tracks-fold { display: inline-grid; place-items: center; min-width: 30px; padding: 0 6px; }
+.tracks-fold svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* Folded, the title bar is all there is (the chevron points up, to open it). */
+.screen-tracks.folded { padding-top: 0; }
+.screen-tracks.folded .tracks-body, .screen-tracks.folded .tracks-grip { display: none; }
+.screen-tracks.folded .tracks-fold svg { transform: rotate(180deg); }
+/* The teletype shares the row: folded, it too is its title bar, its lines
+   hidden (tracks.js scrolls them to the last when the pane opens again), and
+   each title bar fills its screen, so the two are level whichever is taller. */
+@media not all and (max-width: 1100px) {
+  .page[data-tracks="folded"] > .screen-log .log { display: none; }
+  .page[data-tracks="folded"] > .screen-log .screen-title, .screen-tracks.folded .screen-title { flex: 1 1 auto; }
+}
+/* In one column the rows are as tall as what is in them: no grip. */
+@media (max-width: 1100px) {
+  .screen-tracks { padding-top: 0; }
+  .tracks-grip { display: none; }
+}
 
 /* == G:CHROME == */
 /* Zoom, fonts, clocks and text glow: the body and page rules (Tasks 3, 4c). */

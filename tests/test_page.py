@@ -1231,11 +1231,14 @@ def test_the_focused_row_is_set_a_fifth_larger_in_every_cell(page):
 def test_sorting_leaves_the_focused_row_first_and_sorts_the_rest(page):
     hex_ = focus_on_the_radar(page)
     page.click("#tracks-head button:text-is('ALT FT')")
+    # The sort is a setting: the table sorts on the server's answer.
+    page.wait_for_selector("#tracks-head th[aria-sort=ascending]:has(button:text-is('ALT FT'))")
     table = rows(page)
     assert table[0]["hex"] == hex_ and table[0]["focused"]
     rest = column(table[1:], "ALT FT")
     assert rest == sorted(rest) and len(set(rest)) > 1
     page.click("#tracks-head button:text-is('ALT FT')")
+    page.wait_for_selector("#tracks-head th[aria-sort=descending]:has(button:text-is('ALT FT'))")
     table = rows(page)
     assert table[0]["hex"] == hex_
     rest = column(table[1:], "ALT FT")
@@ -1659,11 +1662,14 @@ def test_a_column_header_sorts_the_table(page):
     wait_for_traffic(page)
     page.wait_for_selector("#tracks-body tr")
     page.click("#tracks-head button:text-is('ALT FT')")
+    # The sort is a setting: the table sorts on the server's answer.
+    page.wait_for_selector("#tracks-head th[aria-sort=ascending]:has(button:text-is('ALT FT'))")
     alts = page.eval_on_selector_all(
         "#tracks-body tr td:nth-child(3)", "cells => cells.map(c => c.textContent === 'GND' ? 0 : Number(c.textContent))"
     )
     assert alts == sorted(alts)
     page.click("#tracks-head button:text-is('ALT FT')")
+    page.wait_for_selector("#tracks-head th[aria-sort=descending]:has(button:text-is('ALT FT'))")
     alts = page.eval_on_selector_all("#tracks-body tr td:nth-child(3)", "cells => cells.map(c => Number(c.textContent))")
     assert alts == sorted(alts, reverse=True)
 

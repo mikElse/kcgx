@@ -69,15 +69,18 @@ class Station:
         # Always every setting: what `prefs` leaves out is the default.
         self.prefs = merge(defaults(), prefs or {})
         # Polled by the server's radar task (kcgx.server), retargeted here
-        # on every airport change and retuned by set_prefs. Its pace comes
-        # from the config file; its range is a setting.
+        # on every airport change and retuned by set_prefs. Its pace, range
+        # and parked-traffic thresholds are settings; its stale time comes
+        # from the config file.
         self.radar = Radar(
             on_frame=self.hub.broadcast,
             on_note=self.hub.note,
             fetch=radar_fetch,
-            refresh_secs=config.radar_refresh_secs,
+            refresh_secs=self.prefs["poll_secs"],
             range_nm=self.prefs["range_nm"],
             stale_secs=config.radar_stale_secs,
+            ground_gs=self.prefs["ground_gs"],
+            ground_alt=self.prefs["ground_alt"],
         )
         self._events = SessionEvents(
             on_state=lambda session, state: self._post(self._session_changed, session),
@@ -209,7 +212,8 @@ class Station:
         protocol. A table's cells are merged one at a time, so two tabs
         changing two cells both land. Remembered, and sent to every page so
         all tabs agree. A new range also reaches the radar, which sends its
-        own frame."""
+        own frame; a new poll interval or parked-traffic threshold reaches
+        it quietly."""
         short_names = self.prefs["short_names"]
         self.prefs = merge(self.prefs, changes)
         self._remember_prefs(self.prefs)
@@ -220,6 +224,11 @@ class Station:
                 self.hub.broadcast(protocol.feed_frame(session, self._title))
         if self.prefs["range_nm"] != self.radar.range_nm:
             self.radar.set_range(self.prefs["range_nm"])
+        if self.prefs["poll_secs"] != self.radar.refresh_secs:
+            self.radar.set_refresh(self.prefs["poll_secs"])
+        ground = (self.prefs["ground_gs"], self.prefs["ground_alt"])
+        if ground != (self.radar.ground_gs, self.radar.ground_alt):
+            self.radar.set_ground(*ground)
 
     def open_feed(self, ident: str) -> None:
         if self.cockpit.session(ident) is not None:
