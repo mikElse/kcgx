@@ -941,8 +941,8 @@ to the integrator first.
 
 | Lane | Worktree, branch | Tasks | Owns |
 |---|---|---|---|
-| **AUDIO** | `../kcgx_g_audio`, `g/audio` | 6; render scale and `glow_traffic` on the stack's traces (from 4) | `squelch/cockpit.py`, `squelch/mixer.py`, `kcgx/names.py`, `stack.js`; in `protocol.py` and `station.py` only `select`, `master_mute` and `title` |
-| **TRACKS** | `../kcgx_g_tracks`, `g/tracks` | 7, 8, 9; **4b** (`poll_secs`: `Radar.set_refresh`, the station's half) | `kcgx/radar.py`, `kcgx/demo.py`, `tracks.js`, `columns.js` |
+| **AUDIO** | `../kcgx_g_audio`, `g/audio` | 6; render scale and `glow_traffic` on the stack's traces (from 4) | `squelch/cockpit.py`, `squelch/mixer.py`, `kcgx/names.py`, `stack.js`; in `protocol.py` and `station.py` only `select`, `master_mute` and `title`; in `index.html` the `G:freq-head` anchor (which takes in `#freq-counts`); `mountVolume` (moved out of `sheets.js`) and the two mount lines for the stack and the volume in `main.js` |
+| **TRACKS** | `../kcgx_g_tracks`, `g/tracks` | 7, 8, 9; **4b** (`poll_secs`: `Radar.set_refresh`, the station's half) | `kcgx/radar.py`, `kcgx/demo.py`, `tracks.js`, `columns.js`; the `--tracks-row` custom property, which `tracks.js` sets itself (the grid reads `var(--tracks-row, minmax(160px, 24vh))` from Phase 0) |
 | **CHROME** | `../kcgx_g_chrome`, `g/chrome` | 3; **4c** (`glow_text`, `--glow`, the `[data-glow]` rules) | `main.js` (`applyPrefs` only), `status.js`, `theme.js`, fonts, the body and page rules in `cockpit.css` |
 | **MAP** | `../kcgx_g_map`, `g/map` | 10, 12; **4d** (`glow_map`, `zoom_speed`, `view_ease`); **5a** (glow by colour on the map; moving the bitmap during gestures, drawn inside `drawStatic` onto `still`, so `index.js` keeps pasting it at 0,0) | `radar/still.js`, `radar/view.js`, `tools/build_geodata.py`, `geodata.py` |
 | **TRAFFIC** | `../kcgx_g_traffic`, `g/traffic` | 11, 13; **4e** (`glow_traffic`, `burn_in`, `motion`, render scale on the radar's canvases); **5b** (culling) | `radar/moving.js`, `radar/index.js` (the tags layer, the HUD), trails in `store.js` |
@@ -952,6 +952,8 @@ Cross-lane contracts, set in P0.4 so no lane waits:
 
 - `debug()` keys are per lane and never shared: MAP adds `styles`, `following`, `blur_map`; TRAFFIC adds `blur_traffic` and its own. (Task 4's test says `debug().blur` per layer: read it as these keys.) The seams test asserts a superset of the core keys, not an exact set.
 - Pointer maths use `radar.size().ratio`, never `devicePixelRatio`, so TRAFFIC's render scale reaches MAP's hit tests without an edit to `view.js`.
+- Lane CSS sections come after the narrow-layout media rules in `cockpit.css`, so a lane rule that must differ under 1100 px carries its own `@media` inside its section.
+- `columns.js` sorts a missing figure below every real one (`-Infinity`) and gives each column `value(ac)` (a number or null; GND is 0) for number filters, so a filter can drop what reports nothing.
 - A module's `post(now)` hook, if it returns one, runs after drawing, so MAP's follow and data box (Task 12) read this frame's `radar.now`.
 
 - TRAFFIC reads `store.state.rank` and `ac.still`. Its tests set both
