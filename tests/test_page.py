@@ -1277,13 +1277,12 @@ def first_row_in_the_window(page):
 
 
 def test_a_callsign_pressed_far_down_a_one_column_page_brings_its_row_back_into_view(page):
-    # In one column the table does not scroll, the page does: a window too
-    # short to hold the table has its first row off the top when its last
-    # row is in view.
+    # In one column the page scrolls, and since phase G the table scrolls
+    # within its pane too (at most 70vh): a window too short to hold the
+    # table has its first row out of sight when its last row is in view.
     page.set_viewport_size({"width": 390, "height": 180})
     wait_for_traffic(page)
     page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")
-    assert page.eval_on_selector(".tracks-body", "e => e.scrollHeight - e.clientHeight") == 0
     hex_ = rows(page)[-1]["hex"]
     callsign = page.locator(f'#tracks-body tr[data-hex="{hex_}"] .callsign')
     callsign.scroll_into_view_if_needed()
@@ -1437,7 +1436,11 @@ def test_a_new_range_that_is_the_view_already_held_is_not_drawn_until_the_next_f
     page.mouse.move(*centre_of_the_radar(page))
     for _ in range(4):
         turn_wheel(page, 600)
-    assert radar_drawn(page)["view"] == {"nm": 160, "panX": 0, "panY": 0}
+    # About the canvas's middle, which is on half a pixel when its height is
+    # odd (the tracks row is a percentage of the page since phase G): a
+    # fraction of a nautical mile of pan, which the new range resets.
+    held = radar_drawn(page)["view"]
+    assert held["nm"] == 160 and abs(held["panX"]) < 0.5 and abs(held["panY"]) < 0.5, held
     page.evaluate(
         """drawn => window.kcgx.store.subscribe((kind) => {
                if (kind === "prefs") window.drawnAtPrefs = new Function("return (" + drawn + ")()")(); })""",
