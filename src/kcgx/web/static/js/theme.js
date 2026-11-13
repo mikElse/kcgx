@@ -29,17 +29,57 @@ function setting(key) {
 
 // A glow's blur in CSS px. By layer (phase G decision 15), "map", "traffic"
 // or "text": 0 to 100 is 0 to 12 px. With no layer, phase F's three steps
-// from the data-glow bridge main.js keeps (OFF 0, LOW 4, FULL 9), which is
-// what the radar and the traces draw with until their lanes move them to
-// the layers; 33, the default, is 3.96 px and not quite LOW's 4.
+// (OFF 0, LOW 4, FULL 9) from the map's number, which is what the radar
+// draws with until its lanes move it to the layers; 33, the default, is
+// 3.96 px and not quite LOW's 4.
 const GLOW_LAYERS = new Set(["map", "traffic", "text"]);
 export function glowBlur(layer) {
   if (layer === undefined) {
-    const glow = document.documentElement.dataset.glow;
-    return glow === "FULL" ? 9 : glow === "LOW" ? 4 : 0;
+    const level = setting("glow_map");
+    return level === 0 ? 0 : level <= 50 ? 4 : 9;
   }
   if (!GLOW_LAYERS.has(layer)) throw new Error(`theme.js: no glow layer ${layer}`);
   return (setting(`glow_${layer}`) * 12) / 100;
+}
+
+// The page's own glow, from the text layer's number (glow_text, 0 to 100),
+// as the custom properties the stylesheet reads. The text's shadow is a
+// wide halo and, above 33, a tight core under it, so the two phase F steps
+// are exact: 33 is LOW (one 7 px halo) and 75 is FULL (a 4 px core and a
+// 16 px halo). Below 33 the halo grows from nothing to LOW's; from 33 to
+// 75 it grows to FULL's as the core fades in; above 75 both grow on in
+// proportion. The screens' frames and the lit lamps glow while the text does.
+export function textGlow() {
+  const level = setting("glow_text");
+  if (level === 0) return { glow: "none", frame: "none", lamp: "0px" };
+  const between = (from, to) => from + ((to - from) * (level - 33)) / (75 - 33);
+  const [core, halo] = level <= 33 ? [0, (7 * level) / 33]
+    : level <= 75 ? [between(0, 4), between(7, 16)]
+      : [(4 * level) / 75, (16 * level) / 75];
+  const shadow = (blur) => `0 0 ${Math.round(blur * 100) / 100}px currentColor`;
+  return {
+    glow: core > 0 ? `${shadow(core)}, ${shadow(halo)}` : shadow(halo),
+    frame: "0 0 14px color-mix(in srgb, var(--frame) 27%, transparent)",
+    lamp: "10px",
+  };
+}
+
+// The fonts (phase G decision 17), vendored in static/fonts: FONT's choice
+// as the text's family and the display's (titles, big figures, the radar).
+// CLASSIC is phase F's pair; each of the others is both. A face whose file
+// is missing falls to the next family in its stack, the system's.
+const SYSTEM = "ui-monospace, Menlo, monospace";
+const FAMILY = {
+  B612: '"B612 Mono"', SHARETECH: '"Share Tech Mono"', PLEX: '"IBM Plex Mono"',
+  JETBRAINS: '"JetBrains Mono"', VT323: '"VT323"',
+};
+export function fontFamilies(choice) {
+  if (choice === "SYSTEM") return { text: SYSTEM, display: SYSTEM };
+  if (choice in FAMILY) {
+    const stack = `${FAMILY[choice]}, ${SYSTEM}`;
+    return { text: stack, display: stack };
+  }
+  return { text: `${FAMILY.B612}, ${SYSTEM}`, display: `${FAMILY.SHARETECH}, ${SYSTEM}` }; // CLASSIC
 }
 
 // How many backing-store pixels a canvas gives each device pixel, by the

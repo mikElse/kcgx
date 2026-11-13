@@ -35,7 +35,7 @@
 
 import { colours, reducedMotion } from "../theme.js";
 import { onFrame } from "../frames.js";
-import { paintBox } from "./draw.js";
+import { FONT, paintBox } from "./draw.js";
 import { drawStatic, init as initStill } from "./still.js";
 import { drawMoving, init as initMoving } from "./moving.js";
 import { init as initView, recentre, scale } from "./view.js";
@@ -163,7 +163,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     // change with the event that changes them and `shown` with the next
     // frame, so the rest describes them once `shown` agrees with both.
     debug() {
-      return mergeDebug([{ shown: radar.shown, frames }, ...hooks.map((h) => (h.debug ? h.debug() : {}))]);
+      return mergeDebug([{ shown: radar.shown, frames, font: FONT }, ...hooks.map((h) => (h.debug ? h.debug() : {}))]);
     },
   };
 }

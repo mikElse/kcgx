@@ -1,12 +1,19 @@
 /* KCGX cockpit. The look is the NORAD wall in WarGames: line art on black,
    framed screens with their names along the bottom, lamps between them.
    Everything visual hangs off attributes on <html>, set from the server's
-   prefs: data-palette, data-glow, data-display, data-lamps, data-teletype,
-   data-box-hud. */
+   prefs: data-palette, data-display, data-lamps, data-teletype and
+   data-box-hud, and custom properties for the numbers (glow, zoom, fonts,
+   scanlines, boxes), which main.js writes. */
 
 @font-face { font-family: "Share Tech Mono"; src: url("fonts/share-tech-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "B612 Mono"; src: url("fonts/b612-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "B612 Mono"; src: url("fonts/b612-mono-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+/* FONT's others (phase G decision 17), latin 400 from fontsource, each with
+   its OFL text beside it. A face is fetched only when its family is in use,
+   and one whose file is missing gives way to the next family in the stack. */
+@font-face { font-family: "IBM Plex Mono"; src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "VT323"; src: url("fonts/vt323-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 
 /* -- palettes: one meaning per colour (spec, Visual language) ------------ */
 
@@ -33,15 +40,29 @@
 
 /* -- glow ------------------------------------------------------------------ */
 
-:root { --glow: 0 0 7px currentColor; --frame-glow: 0 0 14px color-mix(in srgb, var(--frame) 27%, transparent); }
-[data-glow="OFF"] { --glow: none; --frame-glow: none; }
-[data-glow="FULL"] { --glow: 0 0 4px currentColor, 0 0 16px currentColor; }
+/* The page's glow is the text layer's (prefs glow_text): main.js writes the
+   three properties from it (theme.js textGlow), and these are the default's,
+   33, for first paint, which is phase F's LOW (75 is its FULL). --lamp-glow
+   is the lit lamps' blur. */
+:root { --glow: 0 0 7px currentColor;
+  --frame-glow: 0 0 14px color-mix(in srgb, var(--frame) 27%, transparent); --lamp-glow: 10px; }
 
 /* -- page ------------------------------------------------------------------ */
 
+/* The page's face, size and zoom (prefs font, font_px and ui_zoom): main.js
+   writes the properties, and these are the defaults for first paint. The
+   text takes --font-text at --font-px; titles, the big figures and the
+   radar take --font-display at sizes of their own. UI zoom scales the page
+   and each sheet, and not the radar's labels, which the canvas sizes. */
+:root { --font-text: "B612 Mono", ui-monospace, Menlo, monospace;
+  --font-display: "Share Tech Mono", ui-monospace, Menlo, monospace; --font-px: 13px; --ui-zoom: 100; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { background: var(--wall); color: var(--text); font: 13px/1.3 "B612 Mono", ui-monospace, Menlo, monospace; letter-spacing: 0.06em; }
+body { background: var(--wall); color: var(--text); font: var(--font-px)/1.3 var(--font-text); letter-spacing: 0.06em; }
+/* #ended and the boot cover (index.html's G:boot) are left out of the zoom
+   on purpose: they are covers over the whole window, which fill it the
+   same at any UI zoom, and their words are set at a size of their own. */
+.page, dialog { zoom: calc(var(--ui-zoom) / 100); }
 button, input, select { font: inherit; letter-spacing: inherit; color: inherit; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; letter-spacing: 0.14em; }
@@ -67,7 +88,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
    from a screen's frame to what is in it. */
 :root { --gap: 10px; --page-pad: 10px 12px 12px; --pad-x: 10px; --pad-y: 6px; }
 .page {
-  height: 100vh; min-height: 640px; padding: var(--page-pad);
+  height: 100%; min-height: 640px; padding: var(--page-pad);
   display: grid; column-gap: var(--gap);
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   grid-template-rows: auto auto min-content minmax(48px, 1fr) auto var(--tracks-row, minmax(160px, 24vh));
@@ -113,7 +134,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
    an icon, so the two sit level. */
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; min-width: 0; }
-.brand-name { font: 22px/30px "Share Tech Mono", monospace; letter-spacing: 0.32em; color: var(--white); text-shadow: var(--glow); }
+.brand-name { font: 22px/30px var(--font-display); letter-spacing: 0.32em; color: var(--white); text-shadow: var(--glow); }
 .brand-sub { font-size: 12px; letter-spacing: 0.18em; color: var(--muted); }
 .bar-buttons { display: flex; flex: 0 0 auto; align-self: flex-start; gap: 8px; }
 
@@ -129,7 +150,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 
 .btn {
   min-height: 30px; padding: 0 var(--pad-x); background: transparent; cursor: pointer;
-  border: 1px solid var(--frame); color: var(--text); font-size: 13px; letter-spacing: 0.12em;
+  border: 1px solid var(--frame); color: var(--text); font-size: var(--font-px); letter-spacing: 0.12em;
 }
 .btn:hover { border-color: var(--cyan); color: var(--white); }
 .btn:focus-visible, .feed:focus-visible, .choice:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
@@ -151,7 +172,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 4px var(--pad-x); border-top: 1px solid var(--frame); flex: 0 0 auto;
 }
-.title-text { font: 20px "Share Tech Mono", monospace; letter-spacing: 0.18em; color: var(--white); text-shadow: var(--glow); }
+.title-text { font: 20px var(--font-display); letter-spacing: 0.18em; color: var(--white); text-shadow: var(--glow); }
 .title-tools { display: flex; align-items: center; gap: 14px; }
 
 /* radar */
@@ -159,7 +180,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .radar-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; contain: paint; }
 .radar { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hud { position: absolute; top: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none;
-  font: 13px "Share Tech Mono", monospace; letter-spacing: 0.14em; color: var(--muted); white-space: pre; }
+  font: 13px var(--font-display); letter-spacing: 0.14em; color: var(--muted); white-space: pre; }
 .hud-left { left: var(--pad-x); align-items: flex-start; }
 .hud-right { right: var(--pad-x); align-items: flex-end; }
 /* The readouts can be boxed as the radar's labels are (prefs box_items has
@@ -177,11 +198,11 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .status-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .status-bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--gap); }
 .status-names { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.icao { font: 64px/1 "Share Tech Mono", monospace; letter-spacing: 0.12em; color: var(--white); text-shadow: var(--glow); }
-.airport-name { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; }
+.icao { font: 64px/1 var(--font-display); letter-spacing: 0.12em; color: var(--white); text-shadow: var(--glow); }
+.airport-name { font-size: var(--font-px); letter-spacing: 0.14em; text-transform: uppercase; }
 .clocks { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
-.zulu { font: 40px/1 "Share Tech Mono", monospace; letter-spacing: 0.08em; color: var(--cyan); text-shadow: var(--glow); }
-.local { font: 20px "Share Tech Mono", monospace; letter-spacing: 0.1em; color: var(--muted); }
+.zulu { font: 40px/1 var(--font-display); letter-spacing: 0.08em; color: var(--cyan); text-shadow: var(--glow); }
+.local { font: 20px var(--font-display); letter-spacing: 0.1em; color: var(--muted); }
 
 /* frequencies */
 .stack { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; }
@@ -190,7 +211,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .feed { width: 100%; text-align: left; background: transparent; }
 .feed.expanded { border: 1px solid var(--dim); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .feed-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.feed-name { font: 17px "Share Tech Mono", monospace; letter-spacing: 0.1em; color: var(--text); text-shadow: var(--glow);
+.feed-name { font: 17px var(--font-display); letter-spacing: 0.1em; color: var(--text); text-shadow: var(--glow);
   text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .feed-state { font-size: 15px; min-width: 16px; text-align: center; flex: 0 0 auto; }
 .state-live { color: var(--cyan); }
@@ -200,7 +221,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .trace { display: block; width: 100%; height: 30px; }
 /* The two chatter figures are as wide as "100%", so one does not shift as it
    changes: four characters, with no letter spacing to add to them. */
-.chatter-big { font: 18px/1 "Share Tech Mono", monospace; letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
+.chatter-big { font: 18px/1 var(--font-display); letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
 
 .feed.compact {
   min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 8px; cursor: pointer;
@@ -213,7 +234,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 /* A second audible feed (only /debug or open_feed makes one): lit as heard. */
 .feed.compact.playing .feed-name { color: var(--white); text-shadow: var(--glow); }
 .feed.compact.playing .note { color: var(--cyan); text-shadow: var(--glow); }
-.chatter-small { font: 14px "Share Tech Mono", monospace; letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); font-variant-numeric: tabular-nums; }
+.chatter-small { font: 14px var(--font-display); letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); font-variant-numeric: tabular-nums; }
 .parked .chatter-small { color: var(--muted); }
 
 /* lamps */
@@ -227,11 +248,11 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .lamp.warn { --lamp: var(--amber); }
 .lamp.fault { --lamp: var(--alarm); }
 .lamp.emerg .lamp-label { color: var(--alarm); }
-[data-glow="LOW"] .lamp.on .lamp-light, [data-glow="FULL"] .lamp.on .lamp-light { box-shadow: 0 0 10px var(--lamp); }
+.lamp.on .lamp-light { box-shadow: 0 0 var(--lamp-glow) var(--lamp); }
 
 /* tracks */
 .tracks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 8px 2px; }
-.tracks { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tracks { width: 100%; min-width: 560px; border-collapse: collapse; font-size: var(--font-px); font-variant-numeric: tabular-nums; }
 .tracks th { padding: 3px 6px; font-weight: 400; color: var(--muted); text-align: left; }
 .tracks th.num { text-align: right; }
 .empty { padding: 8px; }
@@ -267,7 +288,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 }
 .sheet::backdrop { background: rgba(0, 0, 0, 0.7); }
 .sheet-small { width: min(440px, calc(100vw - 32px)); }
-.sheet h2 { margin: 0; font: 22px "Share Tech Mono", monospace; letter-spacing: 0.16em; color: var(--white); text-shadow: var(--glow); }
+.sheet h2 { margin: 0; font: 22px var(--font-display); letter-spacing: 0.16em; color: var(--white); text-shadow: var(--glow); }
 .sheet h3 { margin: 12px 0 6px; font-weight: 400; }
 .sheet-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
@@ -356,12 +377,12 @@ label.field-row { flex-wrap: nowrap; }
 .choice { display: flex; gap: 14px; align-items: baseline; width: 100%; min-height: 32px; padding: 4px 8px; text-align: left;
   background: transparent; border: 1px solid var(--rule); cursor: pointer; }
 .choice:hover { border-color: var(--cyan); }
-.choice .code { font: 16px "Share Tech Mono", monospace; color: var(--cyan); min-width: 56px; }
+.choice .code { font: 16px var(--font-display); color: var(--cyan); min-width: 56px; }
 .choice .what { text-transform: uppercase; }
 .choice.current { border-color: var(--pink); }
 
 .ended { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.88);
-  font: 28px "Share Tech Mono", monospace; letter-spacing: 0.24em; color: var(--alarm); text-shadow: var(--glow); }
+  font: 28px var(--font-display); letter-spacing: 0.24em; color: var(--alarm); text-shadow: var(--glow); }
 
 /* -- display effects (spec, Display effects) ------------------------------------ */
 
@@ -417,6 +438,28 @@ label.field-row { flex-wrap: nowrap; }
 
 /* == G:CHROME == */
 /* Zoom, fonts, clocks and text glow: the body and page rules (Tasks 3, 4c). */
+/* The clocks' seconds (prefs clock_seconds) and the 12-hour clock's AM or
+   PM are set smaller than the hours and minutes, as a watch's are, and the
+   ICAO keeps 8 px from the clocks rather than 12, so that the longest
+   clocks (1907:42Z over 11:07:42 AM PST) stay on the ICAO's row in the
+   narrowest status pane, a phone's, and the pane keeps its height through
+   the day. The 24-hour clocks, the default, are as they were: the gap is
+   only ever the least, and they are far from it. Should a wide face or a
+   big font size not fit, the clocks go under the ICAO, on the right,
+   rather than out of the pane. */
+.clocks .secs { font-size: 0.5em; letter-spacing: 0.04em; }
+.clocks .half { font-size: 0.6em; letter-spacing: 0.04em; }
+.status-top { flex-wrap: wrap; column-gap: 8px; }
+.status-top .clocks { margin-left: auto; }
+/* Config fills the window less 16 px at any UI zoom: the margin is the
+   window's px, not the zoomed sheet's. */
+#config-sheet { width: calc(100% - 3200px / var(--ui-zoom)); height: calc(100% - 3200px / var(--ui-zoom)); }
+/* The window's height in %, not vh: under a CSS zoom Chromium zooms vh and
+   WebKit does not, where a % of the window is the window in both. (The
+   page's own height is 100% for the same reason.) */
+.sheet { width: min(560px, calc(100% - 32px)); max-height: min(80%, 720px); }
+.sheet-small { width: min(440px, calc(100% - 32px)); }
+#airport-sheet { height: min(80%, 720px); }
 
 /* == G:MAP == */
 /* The aircraft's data box, #ac-info, over the radar (Task 12). */
