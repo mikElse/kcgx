@@ -386,6 +386,31 @@ def test_an_icon_button_opens_its_sheet(page, selector, sheet):
     page.wait_for_selector(f"{sheet}[open]")
 
 
+def shut_down(page):
+    """Press the power icon and confirm. The server's answer is faked: the
+    one these tests share has to outlive this one."""
+    page.route("**/api/shutdown", lambda route: route.fulfill(status=202, json={"ok": True}))
+    page.click("#open-shutdown")
+    page.click("#confirm-shutdown")
+    page.wait_for_selector("#ended", state="visible")
+
+
+def test_shutting_down_tells_the_window_it_has_ended(page):
+    # KCGX.app gives the page a message handler named kcgx (macos/KCGXWindow.swift).
+    page.evaluate("""() => {
+        window.told = [];
+        const kcgx = { postMessage: (message) => window.told.push(message) };
+        Object.defineProperty(window, "webkit", { configurable: true, value: { messageHandlers: { kcgx } } });
+    }""")
+    shut_down(page)
+    assert page.evaluate("window.told") == ["ended"]
+
+
+def test_shutting_down_in_a_browser_has_no_window_to_tell(page):
+    assert page.evaluate("window.webkit?.messageHandlers?.kcgx === undefined")
+    shut_down(page)  # and the fixture sees no page error
+
+
 @pytest.mark.parametrize("width, height", [(1440, 900), (1280, 640), (390, 844)])
 def test_the_airport_pane_has_no_title_and_its_search_icon_sits_bottom_right(page, width, height):
     page.set_viewport_size({"width": width, "height": height})

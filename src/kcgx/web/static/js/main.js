@@ -92,6 +92,9 @@ const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, 
   store.setShutdown();
   link.stop();
   $("ended").hidden = false;
+  // In KCGX.app the window closes with the cockpit (macos/KCGXWindow.swift).
+  // A browser has no such handler, and this does nothing.
+  window.webkit?.messageHandlers?.kcgx?.postMessage("ended");
 }, log);
 
 $("open-airport").addEventListener("click", () => airportSheet.open());

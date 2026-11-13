@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- KCGX.app's Info.plist. macos/build.sh fills the two @...@ values. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.kcgx.cockpit</string>
+    <key>CFBundleName</key>
+    <string>KCGX</string>
+    <key>CFBundleDisplayName</key>
+    <string>KCGX</string>
+    <key>CFBundleExecutable</key>
+    <string>KCGX</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- kcgx://show?port=8473&fragment=... is how the launcher opens the
+         window and hands it a search. KCGXWindow.swift says what a link may
+         ask for: a port on this machine and a fragment, nothing else. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.kcgx.cockpit</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>kcgx</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- The server is plain http on 127.0.0.1. This allows that, and no
+         other plain http. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+
+    <!-- Ours. Opened from the Dock, the app starts the cockpit itself by
+         running <KCGXRepo>/bin/kcgx, and a Dock launch has no shell PATH,
+         so the one the app was built with (it has uv on it) is kept. -->
+    <key>KCGXRepo</key>
+    <string>@REPO@</string>
+    <key>KCGXPath</key>
+    <string>@PATH@</string>
+</dict>
+</plist>

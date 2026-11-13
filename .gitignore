@@ -18,3 +18,7 @@ war_games_examples/
 
 # Downloaded map sources for tools/build_geodata.py; the built map is committed.
 .geo-sources/
+
+# KCGX.app when it is built in the repo (macos/build.sh build/KCGX.app);
+# setup builds it into ~/Applications.
+/build/
