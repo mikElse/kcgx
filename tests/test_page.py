@@ -521,6 +521,73 @@ def test_m_and_s_are_small_buttons(page):
         assert 20 <= width <= 32, f"{name} is {width} px wide"
 
 
+def around(top, sides, bottom=None):
+    bottom = top if bottom is None else bottom
+    return {"paddingTop": top, "paddingRight": sides, "paddingBottom": bottom, "paddingLeft": sides}
+
+
+# How close text sits to what holds it: each is at most this many px (the
+# 11/12 list's "tighten padding around all text"; the plan's table, Task 6).
+# These are ceilings, so the page may be made tighter still, and never looser.
+DENSITY = {
+    ".page": {**around(10, 12, 12), "columnGap": 10},
+    ".page > .screen": {"marginTop": 10},  # the gap between one row of screens and the next
+    ".page > .lamps": {"marginTop": 10, **around(6, 10)},
+    ".screen-title": around(4, 10),
+    ".status-body": {**around(10, 12, 8), "rowGap": 6},
+    ".freq-counts": around(6, 10, 4),
+    ".stack": {**around(4, 8, 8), "rowGap": 4},
+    ".feed.expanded": {**around(6, 8), "rowGap": 4},
+    ".feed.compact": {**around(0, 8), "minHeight": 32, "height": 32},
+    ".tracks-body": around(4, 8, 2),
+    ".tracks th": around(3, 6),
+    ".tracks td": around(2, 6),
+    ".log": {**around(8, 10), "rowGap": 4},
+    ".hud": {"top": 8},
+    ".hud-left": {"left": 10},
+    ".hud-right": {"right": 10},
+    ".sheet": around(12, 14),
+    ".choice": {**around(4, 8), "minHeight": 32},
+    ".btn:not(.btn-small):not(.seg):not(.feed-controls .btn)": {**around(0, 10), "minHeight": 30},
+    ".btn-small": {**around(0, 8), "minHeight": 26},
+}
+
+
+def test_text_sits_close_to_its_frame_everywhere(page):
+    page.wait_for_selector(".feed.compact")
+    page.wait_for_selector("#tracks-body td")
+    set_prefs(page, lamps=True, teletype=True)
+    page.wait_for_selector(".log-line")
+    page.click("#open-airport")
+    page.fill("#airport-query", "seattle")
+    page.wait_for_selector("#airport-results .choice")
+    measured = page.evaluate(
+        """wanted => Object.entries(wanted).map(([selector, limits]) => [
+            selector,
+            [...document.querySelectorAll(selector)].map(e => {
+                const style = getComputedStyle(e);
+                return Object.keys(limits).map(name =>
+                    [name, name === "height" ? e.getBoundingClientRect().height : parseFloat(style[name])]);
+            }),
+        ])""",
+        DENSITY,
+    )
+    loose = []
+    for selector, elements in measured:
+        assert elements, f"nothing on the page is {selector}"
+        for values in elements:
+            for name, value in values:
+                # NaN (a value that is not a length) is no pass either.
+                if not value <= DENSITY[selector][name] + 0.01:
+                    loose.append(f"{selector} {name} is {value}, over {DENSITY[selector][name]}")
+    size, line = page.eval_on_selector(
+        "body", "e => { const s = getComputedStyle(e); return [parseFloat(s.fontSize), parseFloat(s.lineHeight)]; }"
+    )
+    if not line <= size * 1.3 + 0.01:
+        loose.append(f"body's lines are {line} px high for {size} px text, over 1.3")
+    assert not loose, "\n".join(sorted(set(loose)))
+
+
 # -- sheets --------------------------------------------------------------------
 
 
@@ -2429,13 +2496,25 @@ def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
     set_prefs(page, box_fill=100, box_pad=12, box_border=100, box_width=3)
     page.wait_for_function("getComputedStyle(document.getElementById('radar-range')).paddingLeft === '12px'")
     muted = css_colour(page, "--muted")
-    boxes = [bounds(page, span) for span in spans]
-    for span, (left, top, right, bottom) in zip(spans, boxes):
+    # The radar writes its readouts 500 ms after the page loads and every
+    # 500 ms from then on, and a box is as wide as its words. So: not before
+    # the first writing, each box measured as its own two pixels are read,
+    # and those read at the edge the box is held by, which stays where it is
+    # when the words change (the track count is held by its right).
+    page.wait_for_function(
+        """() => document.getElementById("radar-poll").textContent.startsWith("POLLED")
+                 && document.getElementById("radar-tracks").textContent !== "0 TRACKS" """
+    )
+    boxes = []
+    for span in spans:
         assert hud_style(page, span, "backgroundColor") == "rgb(0, 0, 0)"
-        assert hud_style(page, span, "borderLeftWidth") == "3px"
+        assert hud_style(page, span, "borderLeftWidth") == "3px" and hud_style(page, span, "borderRightWidth") == "3px"
+        left, top, right, bottom = bounds(page, span)
+        edge, inside = (right - 2, right - 7) if span == "#radar-tracks" else (left + 1, left + 6)
         # As painted: the border in the text's colour, black inside it.
-        assert pixel(page, left + 1, (top + bottom) // 2) == muted
-        assert pixel(page, left + 6, top + 6) == (0, 0, 0)
+        assert pixel(page, edge, (top + bottom) // 2) == muted
+        assert pixel(page, inside, top + 6) == (0, 0, 0)
+        boxes.append((left, top, right, bottom))
     # Each box is about its own text, the two on the left one under the
     # other, and all three inside the radar.
     assert boxes[0][3] <= boxes[1][1] and boxes[0][2] != boxes[1][2]

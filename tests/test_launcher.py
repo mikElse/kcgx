@@ -1,9 +1,11 @@
 """The `kcgx` command (kcgx.launcher), against real servers.
 
-Every server here is `--demo`: no network, no ffmpeg, no audio. Each test
-gets its own free port and its own state folder (the conftest backstop puts
-KCGX_STATE_PATH in tmp_path), and every server a test starts is stopped
-when it ends, whatever happened.
+Every server here is `--demo`: no network, no ffmpeg, no audio. Where the
+command would start the real cockpit (`kcgx go KSEA` with nothing running),
+what it asks for is collected and the demo is started in its place. Each
+test gets its own free port and its own state folder (the conftest backstop
+puts KCGX_STATE_PATH in tmp_path), and every server a test starts is
+stopped when it ends, whatever happened.
 """
 
 from __future__ import annotations
@@ -160,6 +162,33 @@ def test_a_server_that_cannot_start_says_why(kcgx, capsys):
     assert launcher.read_info() is None
 
 
+class NeverStarts:
+    """Stands in for subprocess.Popen: collects the command, and is a server
+    that exited at once."""
+
+    commands: list = []
+    pid = 999999
+    returncode = 1
+
+    def __init__(self, command, **how):
+        self.commands.append(command)
+
+    def poll(self):
+        return self.returncode
+
+
+@pytest.mark.parametrize("how, extra", [({}, []), ({"demo": False}, []), ({"demo": True}, ["--demo"])])
+def test_start_runs_the_real_server_unless_the_demo_is_asked_for(port, monkeypatch, how, extra):
+    """The command line `start` builds, with nothing run: `--demo` is there
+    only when asked for, so `kcgx` and `kcgx go` start the real cockpit."""
+    monkeypatch.setattr(NeverStarts, "commands", [])
+    monkeypatch.setattr(launcher.subprocess, "Popen", NeverStarts)
+    info, why = launcher.start(**how)
+    assert info is None and why
+    assert NeverStarts.commands == [[sys.executable, "-m", "kcgx.server", "--port", str(port), *extra]]
+    assert launcher.read_info() is None
+
+
 # -- stopping and status ---------------------------------------------------------
 
 
@@ -213,9 +242,23 @@ def test_go_with_a_query_naming_one_airport_switches_to_it(kcgx, port, capsys):
     assert wait_for_icao(port, "KSEA")
 
 
-def test_go_when_not_running_starts_at_that_airport(kcgx, port):
+def test_go_when_not_running_starts_at_that_airport(kcgx, port, monkeypatch):
+    """`kcgx go KSEA` with nothing running remembers the airport and then
+    starts the cockpit, which comes up there. What it asks for is the real
+    cockpit, which no test may start: the asking is collected, and the
+    server that then starts is the demo."""
+    asked = []
+    start = launcher.start
+
+    def demo(**how):
+        asked.append((how, read_airport()))
+        return start(**{**how, "demo": True})
+
+    monkeypatch.setattr(launcher, "start", demo)
     assert kcgx("go", "KSEA") == 0
+    assert asked == [({}, "KSEA")]  # not the demo, and the airport was remembered first
     assert launcher.health(port)["icao"] == "KSEA"
+    assert launcher.read_info()["demo"] is True  # what this test really started
     assert read_airport() == "KSEA"
 
 

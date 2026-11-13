@@ -1042,10 +1042,11 @@ can see: an app that opens and then shows no cockpit is not noticed, and
 
 | Event | What it does |
 |---|---|
-| a `kcgx://show` link | checks that `http://127.0.0.1:<port>/api/health` says `"app": "kcgx"`, then loads `http://127.0.0.1:<port>/#<fragment>`; if that page is already loaded it only sets the fragment, so the socket is kept. Shows and activates the window |
+| a `kcgx://show` link | checks that `http://127.0.0.1:<port>/api/health` says `"app": "kcgx"` (itself: a redirect is not followed), then loads `http://127.0.0.1:<port>/#<fragment>`; if that page is already loaded it only sets the fragment, so the socket is kept. Shows and activates the window |
 | launched with no link (Dock, Spotlight) | runs `<repo>/bin/kcgx --no-open` with the `PATH` it was built with, reads `server.json` for the port and loads it; shows the launcher's own words on failure |
 | the red close button | hides the app; the audio plays on; the Dock icon or Cmd-Tab shows it again |
-| Quit | posts `/api/shutdown`, then exits. While the launcher is still starting the cockpit it waits for it (30 s at most), so that it stops what was started |
+| Quit | posts `/api/shutdown`, then exits. While the launcher is still starting the cockpit it waits for it (30 s at most), so that it stops what was started. A cockpit the app started and never got to show (below) is stopped too |
+| a link while the launcher is still starting the cockpit | the link takes the window. If its port has no cockpit, the one the launcher started is shown once it is up, so it is not left playing with no window |
 | the page's power icon | the page posts shutdown as in a browser, then tells the window (`ended`, to `window.webkit.messageHandlers.kcgx`), and the app exits without asking again |
 | a link to anywhere but this server | not loaded in the window; opened in the default browser if it was pressed and is http or https |
 
@@ -1065,7 +1066,8 @@ link was refused) the window says so in words.
 
 **Not checked by hand when this was written.** The app is compiled and
 signed, and what it makes of some forty links is tested through its
-`--check` argument; an earlier build was run once for 13 s against a demo
+`--check` argument, and which ports it takes for a cockpit through
+`--answers`; an earlier build was run once for 13 s against a demo
 server and its page's socket connected. Nobody has looked at the window,
 and no link has been delivered to it through `open`. The checks owed are
 listed in the plan's "Built" section.
@@ -1087,7 +1089,9 @@ link once KCGX.app is installed, so a link can ask for very little. It is
 `kcgx://show` with a `port` and a `fragment`, once each, and nothing
 else: a path, a user, any other parameter, or a port outside 1024 to
 65535 refuses it. The host is always `127.0.0.1`. The port's health check
-must say kcgx before anything loads. The fragment is not refused for what
+must say kcgx before anything loads, and must say it itself: the app
+follows no redirect, on the health check or on the shut down it posts, so
+no other place can answer for the port. The fragment is not refused for what
 it holds: every byte a URL's fragment may not hold is escaped, so it stays
 a fragment whatever was sent, up to 512 bytes. A link that is refused, or
 whose port does not answer as kcgx, never starts the cockpit, even when
@@ -1261,7 +1265,10 @@ all of that code.
   reaches Swift through a window. One kind reaches the program: on a Mac
   with `swiftc` the real app is built into the test's own folder, checked
   with `codesign --verify`, and asked through its `--check` argument what
-  each of some forty links would show; the same file drives `build.sh`
+  each of some forty links would show, and through `--answers` whether
+  stand-ins on a port of this machine (one that says it is kcgx, some that
+  do not, one that redirects to one that does) are a cockpit to it; the
+  same file drives `build.sh`
   with a fake `swiftc` and `codesign`, which runs anywhere. Nothing in it
   opens a window or registers the app. `tests/test_launcher.py` holds the
   command the launcher would run and never runs it, and

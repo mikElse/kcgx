@@ -3,19 +3,25 @@
 Two halves. The first drives `macos/build.sh` with a fake `swiftc` and a
 fake `codesign`, so it runs anywhere and compiles nothing. The second builds
 the real app, on a Mac with the command line tools, and asks its binary
-what it would show for a `kcgx://` link; elsewhere it skips.
+what it would show for a `kcgx://` link, and whether a port says it is
+kcgx; elsewhere it skips.
 
 Nothing here opens a window, registers the app with the system, starts a
-server or writes outside the test's own folder: the app is only ever built
-into it, and `--check` answers and exits before the app starts.
+cockpit or writes outside the test's own folder: the app is only ever built
+into it, and `--check` and `--answers` answer and exit before the app
+starts. What `--answers` asks is a stand-in on this machine, in this
+process, that says what the test tells it to.
 """
 
 from __future__ import annotations
 
+import contextlib
+import http.server
 import plistlib
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -398,3 +404,97 @@ def test_whatever_the_fragment_holds_it_stays_a_fragment(app, link, fragment):
 ])
 def test_a_link_that_asks_for_anything_else_is_refused(app, link):
     assert check(app, link) is None
+
+
+# -- what answers on the port must say it is kcgx, itself -------------------------
+
+KCGX_SAYS = b'{"ok": true, "app": "kcgx", "protocol": 1, "icao": "KPDX"}'
+
+
+@contextlib.contextmanager
+def answering(status=200, body=b"", location=None):
+    """Something on a port of this machine that answers every request the
+    same way; yields the port, and then every request it was sent."""
+    asked = []
+
+    class Answer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            asked.append(f"{self.command} {self.path}")
+            self.send_response(status)
+            if location:
+                self.send_header("Location", location)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_POST = do_GET
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield server.server_address[1], asked
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def answers(app, port):
+    """Whether the app takes what is on `port` for a kcgx cockpit."""
+    result = subprocess.run(
+        [str(app / "Contents" / "MacOS" / "KCGX"), "--answers", str(port)], capture_output=True, text=True, timeout=30,
+    )
+    assert (result.returncode, result.stdout.strip()) in ((0, "kcgx"), (1, "not kcgx")), result
+    return result.returncode == 0
+
+
+def test_a_port_that_says_it_is_kcgx_is_one_the_window_shows(app):
+    with answering(body=KCGX_SAYS) as (port, asked):
+        assert answers(app, port)
+    assert asked == ["GET /api/health"]
+
+
+@pytest.mark.parametrize("status, body", [
+    (200, b'{"ok": true, "version": "9.9"}'),             # some other local app
+    (200, b'{"ok": false, "app": "kcgx"}'),
+    (200, b'{"ok": true, "app": "KCGX"}'),
+    (200, b'["kcgx"]'),
+    (200, b"kcgx"),
+    (200, b""),
+    (404, KCGX_SAYS),
+    (500, KCGX_SAYS),
+])
+def test_a_port_that_does_not_say_so_is_not(app, status, body):
+    with answering(status, body) as (port, asked):
+        assert not answers(app, port)
+    assert asked == ["GET /api/health"]
+
+
+def test_a_port_nothing_answers_on_is_not(app):
+    with answering() as (port, _):
+        pass  # closed again: a port that was free a moment ago
+    assert not answers(app, port)
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_a_port_that_sends_the_question_elsewhere_is_not(app, status):
+    """What is on the port has to say it is kcgx itself. Something there
+    that redirects /api/health to a place that says so (any host could) is
+    not followed, and nothing is asked of that place."""
+    with answering(body=KCGX_SAYS) as (elsewhere, heard):
+        location = f"http://127.0.0.1:{elsewhere}/api/health"
+        with answering(status, KCGX_SAYS, location) as (port, asked):
+            assert not answers(app, port)
+    assert asked == ["GET /api/health"]
+    assert heard == []
+
+
+def test_answers_takes_only_a_port_the_window_would_show(app):
+    for port in ("80", "65536", "8473x", ""):
+        result = subprocess.run(
+            [str(app / "Contents" / "MacOS" / "KCGX"), "--answers", port], capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 2 and result.stdout == "" and "--answers" in result.stderr

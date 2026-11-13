@@ -150,7 +150,7 @@ def parse_client(text: str) -> dict:
     """
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):  # nested too deep to read is not JSON here either
         raise BadMessage("not JSON") from None
     if not isinstance(data, dict):
         raise BadMessage("not a JSON object")

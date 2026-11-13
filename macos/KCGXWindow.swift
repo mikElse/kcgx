@@ -13,12 +13,14 @@
 //
 // Any web page can open a kcgx:// link, so a link can ask for very little:
 // a port and a fragment. The host is always 127.0.0.1, and whatever answers
-// on the port must say it is kcgx before anything is loaded from it. See
-// Target.
+// on the port must say it is kcgx, itself and not by a redirect, before
+// anything is loaded from it. See Target and ask().
 //
-// Two arguments, for checking a build from a terminal:
+// Three arguments, for checking a build from a terminal:
 //   KCGX --port N        show the cockpit on port N, as a link would
 //   KCGX --check LINK    print the page LINK would show, or "refused"; no window
+//   KCGX --answers N     print whether port N says it is kcgx, as it must
+//                        before the window shows it; no window
 
 import Cocoa
 import WebKit
@@ -87,21 +89,48 @@ struct Target {
     }
 }
 
+/// Refuses every redirect, so what answers a request is what is on the port.
+final class NoRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
+/// A session for this machine's cockpit: never by way of a proxy, and never
+/// sent on elsewhere. A redirect comes back as the answer it is, which is
+/// not a cockpit's.
+func local() -> URLSession {
+    let plain = URLSessionConfiguration.ephemeral
+    plain.connectionProxyDictionary = [:]
+    return URLSession(configuration: plain, delegate: NoRedirects(), delegateQueue: nil)
+}
+
+/// Whether what is on `target`'s port says it is kcgx, as the server's
+/// /api/health does. `then` is called off the main thread.
+func ask(_ target: Target, by session: URLSession, then: @escaping (Bool) -> Void) {
+    let request = URLRequest(
+        url: target.api("health"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
+    session.dataTask(with: request) { data, response, _ in
+        let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+        then((response as? HTTPURLResponse)?.statusCode == 200
+            && body?["app"] as? String == "kcgx" && body?["ok"] as? Bool == true)
+    }.resume()
+}
+
 final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var web: WKWebView!
     private var titleWatch: NSKeyValueObservation?
-    private let session: URLSession = {
-        let plain = URLSessionConfiguration.ephemeral
-        plain.connectionProxyDictionary = [:]  // this machine, never by way of a proxy
-        return URLSession(configuration: plain)
-    }()
+    private let session = local()
 
     private let direct: Target?  // --port
     private var linked = false  // a link has arrived, so this was no Dock launch
     private var showing: Target?  // the cockpit the window is on: its health said kcgx
     private var loaded = false  // and the cockpit's page is in the window
     private var asked = 0  // counts shows and starts, so a late answer to an old one is dropped
+    private var checking = 0  // ports asked whether they are kcgx that have not answered yet
+    private var begun: Target?  // a cockpit start() started while a link had the window, not shown yet
     private var ended = false  // the page shut the cockpit down itself
     private var launcher: Process?  // bin/kcgx, while it is starting the cockpit
     private var leaving = false  // Quit was asked for while it was, and waits for it
@@ -168,6 +197,7 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     /// Quit stops the cockpit, unless the page has stopped it already.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if let showing, !ended { stop(showing) }
+        if let begun, begun.port != showing?.port { stop(begun) }  // started here, and never in the window
         guard launcher != nil else { return .terminateNow }
         // The launcher is still starting a cockpit. There is nothing to
         // stop until it has, and left to itself that cockpit would come up
@@ -314,14 +344,14 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         reveal()
         asked += 1
         let mine = asked
-        let request = URLRequest(
-            url: target.api("health"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
-        session.dataTask(with: request) { data, response, _ in
-            let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
-            let kcgx = (response as? HTTPURLResponse)?.statusCode == 200
-                && body?["app"] as? String == "kcgx" && body?["ok"] as? Bool == true
-            DispatchQueue.main.async { if mine == self.asked { self.checked(target, kcgx) } }
-        }.resume()
+        checking += 1
+        ask(target, by: session) { kcgx in
+            DispatchQueue.main.async {
+                self.checking -= 1
+                if mine == self.asked { self.checked(target, kcgx) }
+                self.settle()
+            }
+        }
     }
 
     private func checked(_ target: Target, _ kcgx: Bool) {
@@ -339,8 +369,21 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         }
         showing = target
         loaded = false
+        if begun?.port == target.port { begun = nil }
         NSLog("KCGX: loading %@", target.page.absoluteString)
         web.load(URLRequest(url: target.page))
+    }
+
+    /// A link that comes while start() is starting the cockpit takes the
+    /// window, and the launcher's answer is then an old one. If the link
+    /// comes to nothing (no cockpit on its port), the cockpit that was
+    /// started is shown after all: it is playing, and with no window on it
+    /// Quit would have nothing to stop. Until it is shown it is `begun`,
+    /// which Quit stops too.
+    private func settle() {
+        guard let begun, checking == 0, launcher == nil, showing == nil else { return }
+        self.begun = nil
+        show(begun)
     }
 
     /// Opened with no link: start the cockpit as `kcgx --no-open` would,
@@ -391,6 +434,10 @@ final class Cockpit: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
                     self.leave()
                 } else if mine == self.asked {
                     self.started(status, said)
+                } else if status == 0, let target = self.recorded(), target.port != self.showing?.port {
+                    // A link has taken the window meanwhile, and not to this cockpit.
+                    self.begun = target
+                    self.settle()
                 }
             }
         }
@@ -507,6 +554,22 @@ if let link = argument(after: "--check") {
     }
     print(target.page.absoluteString)
     exit(0)
+}
+
+if let port = argument(after: "--answers") {
+    guard let target = Target(port: port) else {
+        FileHandle.standardError.write(Data("KCGX: --answers takes a whole number from 1024 to 65535\n".utf8))
+        exit(2)
+    }
+    let answered = DispatchSemaphore(value: 0)
+    var kcgx = false
+    ask(target, by: local()) { said in
+        kcgx = said
+        answered.signal()
+    }
+    _ = answered.wait(timeout: .now() + 5)
+    print(kcgx ? "kcgx" : "not kcgx")
+    exit(kcgx ? 0 : 1)
 }
 
 var direct: Target?

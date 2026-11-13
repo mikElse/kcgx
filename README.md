@@ -672,7 +672,7 @@ uv run playwright install chromium webkit          # once
 its tests twice: in Chromium and in WebKit, Safari's engine and the one
 KCGX.app shows the page in. Without the browser group it skips; without
 one of the two browsers, that browser's half skips. With both, the suite
-is about 1,270 tests and takes about ten minutes:
+is about 1,290 tests and takes about ten minutes:
 
 ```bash
 uv run --group browser pytest -q
@@ -682,8 +682,10 @@ uv run --group browser pytest -q
 controls to `kcgx.prefs.SCHEMA`, the one description of every setting.
 `tests/test_window.py` builds the real KCGX.app into the test's own folder
 (on a Mac with `swiftc`; elsewhere that part skips) and asks its program,
-with `--check`, what each of some forty links would show. Nothing in the
+with `--check`, what each of some forty links would show, and with
+`--answers`, whether what is on a port says it is kcgx. Nothing in the
 suite opens a window: what the window does once it is open has no test.
+Nothing in it starts the real cockpit either: every server is the demo.
 Specs and plans for everything here are in [`docs/`](docs/README.md).
 
 ## History

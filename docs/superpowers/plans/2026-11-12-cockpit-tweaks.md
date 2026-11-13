@@ -1116,6 +1116,7 @@ Mac and `kcgx` opens the browser as before.
 | 11 | `bacf859`, `0120a07` | `macos/KCGXWindow.swift`, `Info.plist.in`, `build.sh`; `tests/test_window.py`. The page tells the window when it has shut down. |
 | 12 | `809c320`, `bb8927a` | `kcgx` and `kcgx go` open the app when it is there, the browser otherwise; `--browser`, `KCGX_BROWSER`, `KCGX_APP`. Setup's step 5 builds the app on macOS; step 7 has a `window` row. |
 | 13 | this commit | The README, the spec, this section, and a row in `docs/README.md`. |
+| the branch's review | `fix: phase F review findings` | Six of nine findings mended; two are the owner's to do, one is the documented follow-up. See [The review of the whole branch](#the-review-of-the-whole-branch-2026-11-12). |
 
 Every line of the 11/12 list is in the [Coverage](#coverage) table, and
 each has code and tests behind it. Where a task built something other
@@ -1138,20 +1139,24 @@ only in the four Markdown files, and no test reads a Markdown file.
 
 Three things about it that a reader should know.
 
-- **One test starts the real server, and was left out of this task's
+- **One test started the real server, and was left out of this task's
   run.** `tests/test_launcher.py::test_go_when_not_running_starts_at_that_airport`
-  runs `kcgx go KSEA` with nothing running, so `python -m kcgx.server`
-  starts without `--demo`, is checked and is stopped about a second
-  later. It is older than this plan (phase E) and Task 12 found it. In
-  that second the server may open the audio device and begin fetching
-  LiveATC's listing for KSEA and polling adsb.lol; nobody has measured
-  whether it does. The test's home and state are in a temporary folder,
-  so nothing of the owner's is written. It breaks this plan's own
+  ran `kcgx go KSEA` with nothing running, so `python -m kcgx.server`
+  started without `--demo`. It is older than this plan (phase E) and Task
+  12 found it. This note first said the server "is checked and is stopped
+  about a second later"; the branch's review watched one (pid 82804) and
+  it was still alive more than 25 s after its test had finished, then
+  exited on its own. In that time the server may have opened the audio
+  device, fetched LiveATC's listing for KSEA and polled adsb.lol; nobody
+  measured whether it did. The test's home and state were in a temporary
+  folder, so nothing of the owner's was written. It broke this plan's own
   constraint ("no test touches the network, ffmpeg or an audio device")
-  and every full run of the suite before this one included it. It was
-  not changed, because no task was given it. **For the owner to decide:**
-  the smallest change is to start the demo first, as its neighbours do,
-  and to test "start at that airport" some other way.
+  and every full run of the suite before Task 13's included it.
+  *Mended after the branch's review:* the test now collects what `kcgx go`
+  asks `start` for (the real cockpit, with the airport already
+  remembered) and starts the demo in its place, and a new test holds the
+  command line `start` builds with nothing run. No test starts the real
+  server now, and the suite is run whole.
 - **Two page tests fail now and then.** `test_a_refused_radar_says_so_and_dims_its_lamp`
   and `test_an_emergency_squawk_lights_the_lamp_and_turns_the_row_red`
   put an aircraft frame into the page by hand and lose it if the demo's
@@ -1159,6 +1164,15 @@ Three things about it that a reader should know.
   one, each passed alone, and neither was mended. A third,
   `test_a_callsign_pressed_far_down_a_one_column_page_brings_its_row_back_into_view`,
   failed once in Task 7 for the same poll re-rendering the table under it.
+  A fourth was a race of another kind and is mended:
+  `test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes` failed 13
+  times in 20 in WebKit, alone, in the branch's review. It measured the
+  three readouts' boxes before the radar had written them for the first
+  time (500 ms after the page loads), and the track count's box, held by
+  its right edge, then grew to the left from under the pixel being read.
+  The test now waits for that first writing, measures each box as it
+  reads it, and reads the track count's border at its right. The page was
+  never at fault.
 - **`tests/test_window.py` compiles the real app** into the test's own
   temporary folder on a Mac with `swiftc`. None of those copies was ever
   listed by Launch Services.
@@ -1301,7 +1315,15 @@ to build the app; the tests drive it with a fake `swiftc`.
     70 % black backdrop, where it is dim.
 26. Problems 1 to 3 under Part 1 below: overlapping tags, a long airport
     name cut by the radar's edge, pressed buttons outside WOPR.
-27. The test that starts the real server (under "The suite" above).
+27. ~~The test that starts the real server~~ (under "The suite" above).
+    Mended after the branch's review; nothing left to decide.
+28. Added by the branch's review, and like the rest of the window never
+    run: with nothing running, open KCGX from the Dock and, while it says
+    STARTING THE COCKPIT, `open -a <app> 'kcgx://show?port=<a free
+    port>'`. The window should say nothing answers on that port and then,
+    once the cockpit is up, show it; Quit should stop it. Before the
+    review the cockpit came up playing with no window on it and Quit left
+    it running.
 
 ### Deferred
 
@@ -1352,6 +1374,37 @@ Task 13.
   within a minute; see below.
 - **Screenshots and measuring scripts** are in the workflow's scratch
   folder, not in the repo, and will not outlast it.
+
+### The review of the whole branch (2026-11-12)
+
+The branch was reviewed whole (`816af92..f115675`) and nine findings came
+back. Each was checked against the code; all nine were as described.
+Six were mended in one commit, `fix: phase F review findings`; two (2 and
+8) only the owner can do, and one (4) stays the follow-up it was.
+
+| # | Finding | What was done |
+|---|---|---|
+| 1 | "Tighten padding around all text" was done and held by no test: with every padding put back, the page's tests still passed. | `test_text_sits_close_to_its_frame_everywhere`, in both browsers: the computed padding, gaps and least heights of twenty kinds of element, each no more than Task 6's "after" column, and `body`'s line height no more than 1.3. They are ceilings, so finishing by eye may tighten further. With the stylesheet put back to the "now" column it fails on all twenty and on the line height (73 values over); the stylesheet itself did not change. |
+| 2 | Nobody has seen the window run. | Nothing a test can do. Still owed, items 11 to 16 above. |
+| 3 | A test started the real server. | Mended; see "The suite" above. |
+| 4 | Flight tags are not placed round one another or the home name, and STATES boxes nothing. | Left as the documented follow-up (Deferred, above). |
+| 5 | The HUD's box test raced the radar's first writing of its readouts. | The test was mended, and checks what it did; see "The suite" above. It then passed 20 times in 20 in WebKit and 8 in 8 in Chromium, alone. |
+| 6 | The window's health check, and the shut down it posts, followed redirects, so something on the port could send the question to a place that answers as kcgx. | The app's session refuses every redirect. A new argument, `KCGX --answers N`, prints whether port N says it is kcgx by the very check the window makes, and opens no window; through it the tests ask the real program about stand-ins on this machine: one that says kcgx (taken), eight that do not, a port nothing is on, and five kinds of redirect to one that does (none taken, and the place redirected to is never asked). Those five failed before the change. |
+| 7 | A link that came while a Dock launch was still starting the cockpit took the window; if its port had no cockpit, the one being started came up playing with no window, and Quit did not stop it. | The cockpit the launcher started is remembered, shown once the link has come to nothing, and stopped by Quit until it has been shown. **By reading only:** it compiles without a warning and no test can reach it. Owed, item 28. |
+| 8 | That a link never starts the cockpit, even when it launched the app, rests on three AppKit facts and has never been run. | Nothing a test can do. Still owed: step 10 under KCGX.app, item 14 above. Nothing in this commit adds a path from a link to the launcher: what finding 7 added only shows a cockpit a Dock launch had already started. |
+| 9 | `parse_client` could raise `RecursionError`, not `BadMessage`, on JSON nested very deep. | It is refused as "not JSON", with a test (200,000 brackets, three ways). |
+
+**The suite**, whole, with nothing left out: `uv run --quiet --group
+browser pytest -q` ended `1291 passed in 540.93s (0:09:00)`, none skipped.
+That is 22 more than before: one of the protocol, three of the launcher,
+two of the page and sixteen of the window. It ran on this commit's code
+and tests; the three documents were still being written, and no test
+reads one. It started no server without `--demo`. (One was running when
+it ended: the owner's own cockpit on port 8473, started at 20:13 from
+`~/Desktop/KCGX.app` with the owner's home, and left alone.)
+
+The app as committed has again been compiled, signed and asked through
+`--check` and `--answers`, and not started.
 
 ### Part 1 by hand (Task 9, 2026-11-12)
 

@@ -279,3 +279,10 @@ def test_a_setting_is_named_exactly():
 def test_anything_else_is_refused(text):
     with pytest.raises(BadMessage):
         parse_client(text)
+
+
+def test_json_nested_too_deep_to_read_is_refused_as_not_json():
+    # json.loads gives up on this with RecursionError, which is no ValueError.
+    for text in ("[" * 200_000, '{"t":' * 200_000, "[" * 200_000 + "]" * 200_000):
+        with pytest.raises(BadMessage, match="^not JSON$"):
+            parse_client(text)
