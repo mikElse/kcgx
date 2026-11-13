@@ -350,3 +350,278 @@ def test_the_hud_says_how_many_seconds_ago_the_radar_was_polled(page):
     page.wait_for_function(said, arg="^[56] SECONDS AGO$")
     page.evaluate(HEAR, {"ok": False, "error": "NO CONNECTION", "age": 40})
     page.wait_for_function(said, arg="^NO CONNECTION, PICTURE 4[01] SECONDS OLD$")
+
+
+# -- tails by time and speed; parked traffic; the sort's shading (Task 13) ----
+
+
+def ago(page, hex_, *steps, nm=1, **over):
+    """Fly `hex_` north along a line 10 nm west of the airport, a poll at each
+    of `steps` (seconds ago, oldest first), `nm` a poll from `nm` north,
+    standing still on the radar (no ground speed) unless given one."""
+    for n, age in enumerate(steps, 1):
+        hold_traffic(page, plane(hex_, -10, n * nm, trk=0, gs=None, age=age, **over))
+
+
+def hit_of(page, hex_):
+    return next(h for h in radar_debug(page)["hits"] if h["hex"] == hex_)
+
+
+def stored(page, hex_):
+    return page.evaluate("hex => window.kcgx.store.state.trails.get(hex)", hex_)
+
+
+def test_the_store_keeps_ten_minutes_of_positions_with_their_times(page):
+    wait_for_traffic(page)
+    set_prefs(page, tail_secs=60)
+    ago(page, "a1", 700, 500, 300, 100, 40, 20, 0)
+    points = stored(page, "a1")
+    # The one from 700 s ago is gone; every other is kept, whatever tail_secs says.
+    assert len(points) == 6
+    assert all(len(p) == 3 and all(isinstance(n, (int, float)) for n in p) for p in points)
+    now = page.evaluate("performance.now() / 1000")
+    assert [round(now - p[2]) for p in points] == pytest.approx([500, 300, 100, 40, 20, 0], abs=5)
+    # Lat rising, oldest first.
+    assert [p[0] for p in points] == sorted(p[0] for p in points)
+
+
+def test_a_tail_is_as_long_as_tail_secs_and_lengthening_it_shows_history_at_once(page):
+    wait_for_traffic(page)
+    draw(page, tail_secs=60)
+    ago(page, "a1", 500, 300, 100, 40, 20, 0)
+    frames(page)
+    _, s = scale(page)
+    hit = hit_of(page, "a1")
+    trail = hit["trail"]
+    # The chevron, the positions of 0, 20 and 40 s ago, and where it was 60 s
+    # ago, between 40 and 100 s ago's: the tail is cut at its length in time.
+    assert len(trail) == 5
+    assert trail[0] == pytest.approx([hit["x"], hit["y"]])
+    y40 = hit["y"] + 2 * s  # a nm a poll, north up: older is lower
+    y100 = hit["y"] + 3 * s
+    assert y40 < trail[-1][1] < y100
+    assert trail[-1][1] == pytest.approx(y40 + (y100 - y40) / 3, abs=0.2 * s)
+    # Ten minutes: every position the store has, at once.
+    draw(page, tail_secs=600)
+    assert len(hit_of(page, "a1")["trail"]) == 7
+    # None: no tail at all.
+    draw(page, tail_secs=0)
+    assert hit_of(page, "a1")["trail"] == []
+
+
+def test_no_tail_is_drawn_with_tail_secs_0(page):
+    wait_for_traffic(page)
+    draw(page, **glow(0), display="OFF", tag_fields=[], tail_secs=180)
+    hold_traffic(page)
+    home, s = scale(page)
+    # Between where it was 40 and 20 s ago: 10 to 15 nm north, 10 west,
+    # and well clear of its chevron, at 20.
+    x, y = home["x"] - 10 * s, home["y"] - 12.5 * s
+    band = {"x": x - 4, "y": y - s, "w": 8, "h": 2 * s}
+    picture(page)
+    bare = shine(canvas_block(page, band))
+    ago(page, "a1", 60, 40, 20, 0, nm=5)
+    picture(page)
+    tailed = shine(canvas_block(page, band))
+    assert sum(a > b + 60 for a, b in zip(tailed, bare)) >= 3, "no tail drawn"
+    draw(page, tail_secs=0)
+    picture(page)
+    assert shine(canvas_block(page, band)) == bare
+
+
+TAIL_BANDS = {"tail_alpha": 60, "tail_alpha_min": 20, "tail_alpha_max": 90, "tail_gs_low": 40, "tail_gs_high": 250}
+
+
+def test_a_tails_brightness_is_its_speeds_band(page):
+    """Under tail_gs_low, tail_alpha_min; over tail_gs_high, tail_alpha_max;
+    between, or with no speed, tail_alpha: each the aircraft's own alpha
+    times that, at the tail's newest segment."""
+    wait_for_traffic(page)
+    set_prefs(page, **TAIL_BANDS)
+    speeds = {"a1": 20, "a2": 300, "a3": 100, "a4": None, "a5": 40, "a6": 250}
+    for north in (0, 2):
+        hold_traffic(page, *[plane(h, -20 + 6 * i, north, trk=0, gs=gs) for i, (h, gs) in enumerate(speeds.items())])
+    frames(page)
+    hits = {h["hex"]: h for h in radar_debug(page)["hits"]}
+    assert {h: hits[h]["alpha"] for h in speeds} == {h: 1 for h in speeds}
+    assert {h: hits[h]["tail"] for h in speeds} == pytest.approx(
+        {"a1": 0.2, "a2": 0.9, "a3": 0.6, "a4": 0.6, "a5": 0.6, "a6": 0.6}
+    )
+    # And the focus's dimming over that.
+    focus_on(page, "a3")
+    hits = {h["hex"]: h for h in radar_debug(page)["hits"]}
+    assert hits["a3"]["tail"] == pytest.approx(0.6)
+    assert hits["a1"]["tail"] == pytest.approx(0.2 * 0.15)
+    assert hits["a2"]["tail"] == pytest.approx(0.9 * 0.15)
+    focus_on(page, None)
+
+
+def test_a_stale_aircrafts_tail_fades_with_it(page):
+    wait_for_traffic(page)
+    set_prefs(page, **TAIL_BANDS)
+    for north in (0, 2):
+        hold_traffic(page, plane("a1", -10, north, trk=0, gs=300, age=45))
+    frames(page)
+    hit = hit_of(page, "a1")
+    assert hit["alpha"] < 0.7
+    assert hit["tail"] == pytest.approx(hit["alpha"] * 0.9, rel=0.02)
+
+
+LAYER_BLOCK = """([layer, x, y, w, h]) => {
+    if (!window.radarParts) window.kcgx.radar.hook((radar) => { window.radarParts = radar; });
+    return [...window.radarParts[layer].getContext("2d").getImageData(x, y, w, h).data];
+}"""
+
+
+def light_of(page, rect, layer="trace"):
+    """How much an aircraft's lines (`trace`) or its tag (`tags`) put down
+    within a block: the sum of the layer's alpha there, the layer alone, with
+    no map under it and no persistence (display OFF)."""
+    left, top = int(rect["x"]), int(rect["y"])
+    right, bottom = -int(-(rect["x"] + rect["w"])), -int(-(rect["y"] + rect["h"]))
+    flat = page.evaluate(LAYER_BLOCK, [layer, left, top, right - left, bottom - top])
+    return sum(flat[3::4])
+
+
+def chevron_block(page, east, north):
+    home, s = scale(page)
+    ratio = page.evaluate("devicePixelRatio")
+    x, y = home["x"] + east * s, home["y"] - north * s
+    return {"x": x - 12 * ratio, "y": y - 12 * ratio, "w": 24 * ratio, "h": 24 * ratio}
+
+
+def test_the_slow_tail_is_dimmer_than_the_fast_one_on_the_screen(page):
+    wait_for_traffic(page)
+    draw(page, **glow(0), display="OFF", tag_fields=[], **TAIL_BANDS)
+    home, s = scale(page)
+    # Along each's older segment, which the reckoning does not move, and
+    # clear of its chevron.
+    spots = {h: {"x": home["x"] + e * s - 4, "y": home["y"] - 8 * s, "w": 8, "h": 4 * s} for h, e in (("a1", -10), ("a2", 10))}
+    for north in (0, 20):
+        hold_traffic(page, plane("a1", -10, north, trk=0, gs=20), plane("a2", 10, north, trk=0, gs=300))
+    frames(page)
+    slow, fast = (light_of(page, spots[h]) for h in ("a1", "a2"))
+    assert fast > 0
+    assert slow / fast == pytest.approx(20 / 90, abs=0.06)
+
+
+PARKED = 200  # seconds standing still: over ground_min's 2 minutes
+
+
+def parked_and_not(page):
+    hold_traffic(
+        page,
+        plane("a1", -10, 5, still=PARKED),
+        plane("a2", 10, 5, still=0),
+        plane("a3", 0, -8),
+        plane("a4", 10, -8, still=120),  # just the two minutes: not over them
+    )
+
+
+def test_parked_traffic_fades_to_ground_alpha(page):
+    wait_for_traffic(page)
+    set_prefs(page, ground_mode="FADE", ground_min=2, ground_alpha=25, **TAIL_BANDS)
+    parked_and_not(page)
+    parked_and_not(page)  # a second poll, for a tail
+    frames(page)
+    hits = {h["hex"]: h for h in radar_debug(page)["hits"]}
+    assert {h: hits[h]["alpha"] for h in hits} == pytest.approx({"a1": 0.25, "a2": 1, "a3": 1, "a4": 1})
+    assert hits["a1"]["tail"] == pytest.approx(0.25 * 0.2)  # standing still: the slow band
+    # SHOW changes nothing.
+    draw(page, ground_mode="SHOW")
+    assert hit_of(page, "a1")["alpha"] == 1
+    draw(page, ground_mode="FADE", ground_min=4)
+    assert hit_of(page, "a1")["alpha"] == 1
+    draw(page, ground_min=2)
+    # The focused aircraft is never faded.
+    focus_on(page, "a1")
+    assert hit_of(page, "a1")["alpha"] == 1
+    focus_on(page, None)
+
+
+def test_a_parked_aircraft_is_faded_on_the_screen_chevron_and_tag(page):
+    wait_for_traffic(page)
+    draw(page, **glow(0), display="OFF", tag_fields=[], ground_mode="SHOW", ground_alpha=25)
+    blocks = {"a1": chevron_block(page, -10, 5), "a2": chevron_block(page, 10, 5)}
+    hold_traffic(page, plane("a1", -10, 5, still=PARKED), plane("a2", 10, 5, still=PARKED))
+    frames(page)
+    shown = {h: light_of(page, r) for h, r in blocks.items()}
+    assert shown["a1"] == pytest.approx(shown["a2"], rel=0.1)
+    draw(page, ground_mode="FADE")
+    faded = {h: light_of(page, r) for h, r in blocks.items()}
+    assert faded["a1"] / shown["a1"] == pytest.approx(0.25, abs=0.03)
+    assert faded["a2"] / shown["a2"] == pytest.approx(0.25, abs=0.03)
+    # The tag as well.
+    draw(page, tag_fields=["CALLSIGN"])
+    hold_traffic(page, plane("a1", -10, 5, still=PARKED, label="AB"), plane("a2", 10, 5, still=0, label="AB"))
+    lit_ = {h: light_of(page, hit_of(page, h)["tag"], "tags") for h in ("a1", "a2")}
+    assert lit_["a1"] / lit_["a2"] == pytest.approx(0.25, abs=0.03)
+
+
+def test_hidden_parked_traffic_is_not_drawn_and_cannot_be_clicked(page):
+    wait_for_traffic(page)
+    set_prefs(page, ground_mode="SHOW")
+    parked_and_not(page)
+    where = hit_of(page, "a1")
+    set_prefs(page, ground_mode="HIDE")
+    page.wait_for_function("() => !window.kcgx.radar.debug().hits.some(h => h.hex === 'a1')")
+    debug = radar_debug(page)
+    assert sorted(h["hex"] for h in debug["hits"]) == ["a2", "a3", "a4"]
+    assert "a1" not in debug["tag_order"] and "a1" not in debug["line_order"]
+    page.mouse.click(*on_screen(page, where["x"], where["y"]))
+    frames(page)
+    assert page.evaluate("import('/static/js/focus.js').then(({ focus }) => focus.hex)") is None
+    # The table's choice brings it back, unfaded, while it is focused.
+    focus_on(page, "a1")
+    assert hit_of(page, "a1")["alpha"] == 1
+    focus_on(page, None)
+    page.wait_for_function("() => !window.kcgx.radar.debug().hits.some(h => h.hex === 'a1')")
+
+
+def test_the_sorts_first_is_brightest_and_on_top_its_last_at_the_floor(page):
+    """Sorted by DIST, as tracks.js ranks it: the nearest at full alpha and
+    drawn last within its colour, the farthest at sort_floor; reversed, the
+    other way about."""
+    wait_for_traffic(page)
+    set_prefs(page, sort_floor=40)
+    hold_traffic(
+        page,
+        plane("a1", -10, 5, dist=5), plane("a2", 0, 5, dist=10), plane("a3", 10, 5, dist=20),
+        plane("a4", 0, -5, dist=15, sq="7700"),
+    )
+    set_rank(page, {"a1": 0, "a2": 1 / 3, "a4": 2 / 3, "a3": 1})
+    debug = radar_debug(page)
+    alphas = {h["hex"]: h["alpha"] for h in debug["hits"]}
+    assert alphas == pytest.approx({"a1": 1, "a2": 0.8, "a4": 0.6, "a3": 0.4})
+    # Within a colour, the sort's last first; the colours as ever.
+    assert debug["line_order"] == ["a3", "a2", "a1", "a4"]
+    assert debug["tag_order"] == ["a3", "a4", "a2", "a1"]
+    set_rank(page, {"a3": 0, "a4": 1 / 3, "a2": 2 / 3, "a1": 1})
+    debug = radar_debug(page)
+    alphas = {h["hex"]: h["alpha"] for h in debug["hits"]}
+    assert alphas == pytest.approx({"a3": 1, "a4": 0.8, "a2": 0.6, "a1": 0.4})
+    assert debug["line_order"] == ["a1", "a2", "a3", "a4"]
+    assert debug["tag_order"] == ["a1", "a2", "a4", "a3"]
+    # The floor is a setting; at 100 the sort shades nothing.
+    draw(page, sort_floor=100)
+    assert {h["hex"]: h["alpha"] for h in radar_debug(page)["hits"]} == {"a1": 1, "a2": 1, "a3": 1, "a4": 1}
+    # The focused aircraft is first, at full alpha, and on top of its colour.
+    draw(page, sort_floor=0)
+    focus_on(page, "a1")
+    debug = radar_debug(page)
+    assert {h["hex"]: h["alpha"] for h in debug["hits"]}["a1"] == 1
+    assert debug["line_order"][-1] == "a1" and debug["tag_order"][-1] == "a1"
+    focus_on(page, None)
+
+
+def test_the_sorts_last_chevron_is_dimmed_on_the_screen(page):
+    wait_for_traffic(page)
+    draw(page, **glow(0), display="OFF", tag_fields=[], sort_floor=40)
+    blocks = {"a1": chevron_block(page, -10, 5), "a3": chevron_block(page, 10, 5)}
+    hold_traffic(page, plane("a1", -10, 5, dist=5), plane("a3", 10, 5, dist=20))
+    set_rank(page, {"a1": 0, "a3": 1})
+    light = {h: light_of(page, r) for h, r in blocks.items()}
+    assert light["a3"] / light["a1"] == pytest.approx(0.4, abs=0.03)
+    set_rank(page, {"a1": 1, "a3": 0})
+    light = {h: light_of(page, r) for h, r in blocks.items()}
+    assert light["a1"] / light["a3"] == pytest.approx(0.4, abs=0.03)

@@ -29,8 +29,12 @@
 //
 // What the pointer (view.js's hit test) may read, as the last frame left it:
 //
-//   radar.hits[]     { hex, x, y, tag, trail } an aircraft: its chevron at
-//                    (x, y), canvas px; `trail` its points, newest first.
+//   radar.hits[]     { hex, x, y, tag, trail, alpha, tail } an aircraft
+//                    drawn: its chevron at (x, y), canvas px; `trail` the
+//                    tail's points as drawn, newest (the chevron) first, or
+//                    [] when it has none; `alpha` the aircraft's and `tail`
+//                    its tail's at the newest segment. In the frame's order.
+//                    Parked traffic hidden (ground_mode HIDE) is not here.
 //   hits[].tag       null when it has no tag, else { lines, x, y, w, h,
 //                    boxed, box }: x..h is all it claims (text and, when
 //                    boxed, box); `boxed` whether it is; `box` the box as
@@ -39,6 +43,30 @@
 //                    the one on top last. A hit test wanting the tag on top
 //                    reads it from the end; a filled box hides what is
 //                    under it, chevrons and the tags further down included.
+//   radar.lineOrder  hexes, in the order their lines (tail and chevron) were
+//                    drawn: a colour at a time (cyan, the alarm colour, pink),
+//                    and within one the sort's last first, as the tags.
+//
+// One alpha per aircraft (phase G Task 13), reckoned once a frame:
+//
+//   stale × focus × rank × ground   its chevron, its tag and its tail's
+//                                   base: fading with the age of its last
+//                                   position, dimmed when another is
+//                                   focused, from 1 at the top of the sort
+//                                   (store.state.rank 0) to sort_floor % at
+//                                   its bottom (1), and to ground_alpha %
+//                                   when parked (ground_mode FADE; HIDE
+//                                   leaves it out). The focused aircraft
+//                                   is first in the sort and never parked.
+//   × the speed band                its tail: tail_alpha_min % under
+//                                   tail_gs_low kt, tail_alpha_max % over
+//                                   tail_gs_high, tail_alpha % between or
+//                                   with no speed (phase G decision 7);
+//                                   and fading along the tail as ever.
+//
+// The tail is the last prefs.tail_secs of the aircraft's track: its stored
+// positions within that, and its oldest end cut where it was that long ago,
+// so a tail is as long in time whatever the poll rate.
 
 import { glowBlur } from "../theme.js";
 import { focus } from "../focus.js";
@@ -75,10 +103,12 @@ export function init(radar) {
   radar.now = []; // [{ ...ac, now: [x, y] in nm, age }], as last drawn
   radar.hits = []; // [{ hex, x, y, tag: {lines, ...label} or null, trail: [[x, y]] }]
   radar.tagOrder = []; // the hexes whose tags were drawn, the one on top last
+  radar.lineOrder = []; // the hexes whose lines were drawn, in that order
   return {
     debug: () => ({
-      hits: radar.hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y, tag: h.tag })),
+      hits: radar.hits.map(({ hex, x, y, tag, trail, alpha, tail }) => ({ hex, x, y, tag, trail, alpha, tail })),
       tag_order: [...radar.tagOrder],
+      line_order: [...radar.lineOrder],
     }),
   };
 }
@@ -127,12 +157,58 @@ function aircraftNow(radar) {
   });
 }
 
-// One aircraft's lines, in the pen's colour and at its width: the trail,
+// Where the sort puts an aircraft: 0 first to 1 last. One it has not
+// ranked counts as first, and the focused aircraft is first whatever.
+function rankOf(radar, ac, isFocus) {
+  if (isFocus) return -Infinity;
+  const rank = radar.store.state.rank.get(ac.hex);
+  return rank === undefined ? 0 : Math.max(0, Math.min(1, rank));
+}
+
+// Whether ground_mode applies to an aircraft: parked (the server's count of
+// seconds standing still) for over ground_min minutes.
+const parked = (ac, prefs) => typeof ac.still === "number" && ac.still > prefs.ground_min * 60;
+
+// A tail's alpha for a ground speed, 0 to 1 (phase G decision 7).
+export function tailBand(gs, prefs) {
+  if (gs === null || gs === undefined) return prefs.tail_alpha / 100;
+  if (gs < prefs.tail_gs_low) return prefs.tail_alpha_min / 100;
+  if (gs > prefs.tail_gs_high) return prefs.tail_alpha_max / 100;
+  return prefs.tail_alpha / 100;
+}
+
+// The tail as drawn, newest first: the chevron, then each stored position
+// (`trail`, [[lat, lon, t]], oldest first) reported within `secs` of `now`
+// (seconds), then where the aircraft was `secs` ago, between the last kept
+// and the first older one. `at(lat, lon)` is a position on the canvas.
+// No tail (secs 0, or nothing but the chevron), [].
+export function tailPoints(head, trail, now, secs, at) {
+  if (!(secs > 0)) return [];
+  const from = now - secs;
+  const points = [head];
+  let newer = head;
+  let newerT = now;
+  for (let i = trail.length - 1; i >= 0; i -= 1) {
+    const [lat, lon, t] = trail[i];
+    const p = at(lat, lon);
+    if (t >= from) {
+      points.push(p);
+      newer = p; newerT = t;
+      continue;
+    }
+    const f = newerT > t ? (newerT - from) / (newerT - t) : 0;
+    points.push([newer[0] + (p[0] - newer[0]) * f, newer[1] + (p[1] - newer[1]) * f]);
+    break;
+  }
+  return points.length > 1 ? points : [];
+}
+
+// One aircraft's lines, in the pen's colour and at its width: the tail,
 // the chevron and, about the focused one, a ring.
-function strokeAircraft(pen, { ac, isFocus, alpha, head, points }, ratio) {
-  // The trail fades from full at the arrow to nothing at its oldest point.
+function strokeAircraft(pen, { ac, isFocus, alpha, tail, head, points }, ratio) {
+  // The tail fades from its alpha at the arrow to nothing at its oldest point.
   for (let i = 1; i < points.length; i += 1) {
-    pen.globalAlpha = alpha * 0.95 * (1 - (i - 1) / (points.length - 1));
+    pen.globalAlpha = tail * (1 - (i - 1) / (points.length - 1));
     pen.beginPath();
     pen.moveTo(points[i - 1][0], points[i - 1][1]);
     pen.lineTo(points[i][0], points[i][1]);
@@ -164,32 +240,45 @@ function strokeAircraft(pen, { ac, isFocus, alpha, head, points }, ratio) {
 // them as drawn, `radar.hits` saying what is where, for the pointer, and
 // `radar.tagOrder` the order the tags went down in.
 export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
-  const { store, project, bare, hits, now: list } = radar;
+  const { store, project, bare, hits, now: list, lineOrder } = radar;
   hits.length = 0;
   const focused = focus.hex;
   list.splice(0, list.length, ...aircraftNow(radar));
   if (focused && !list.some((ac) => ac.hex === focused)) focus.set(null);
-  const seen = list.map((ac) => {
+  const now = performance.now() / 1000;
+  const at = (lat, lon) => toScreen(radar, project(lat, lon), s, width, height);
+  const floor = prefs.sort_floor / 100;
+  const seen = [];
+  for (const ac of list) {
     const isFocus = ac.hex === focused;
+    const isParked = !isFocus && parked(ac, prefs);
+    if (isParked && prefs.ground_mode === "HIDE") continue;
     const colour = isFocus ? c.pink : EMERGENCY.has(ac.sq) ? c.alarm : c.cyan;
+    const rank = rankOf(radar, ac, isFocus);
     const stale = Math.max(0, Math.min(1, (ac.age - STALE_FADE_FROM) / 30));
     let alpha = 1 - 0.7 * stale;
     if (focused && !isFocus) alpha *= DIM_ALPHA;
+    if (!isFocus) alpha *= 1 - rank * (1 - floor);
+    if (isParked && prefs.ground_mode === "FADE") alpha *= prefs.ground_alpha / 100;
+    const tail = alpha * tailBand(ac.gs, prefs);
     const head = toScreen(radar, ac.now, s, width, height);
-    const trail = (store.state.trails.get(ac.hex) || [])
-      .map((p) => toScreen(radar, project(p.lat, p.lon), s, width, height))
-      .reverse();
-    return { ac, isFocus, colour, alpha, head, points: [head, ...trail] };
-  });
+    const points = tailPoints(head, store.state.trails.get(ac.hex) || [], now, prefs.tail_secs, at);
+    seen.push({ ac, isFocus, colour, rank, alpha, tail, head, points });
+  }
+  // The sort's last first, so that its first is drawn over it; a stable
+  // sort keeps the frame's order in a tie.
+  const stacked = [...seen].sort((a, b) => b.rank - a.rank);
 
   // The lines, a colour at a time: bare, then onto the layer under one
   // shadow, which is their glow. The focused aircraft's colour is last and
   // so on top. With no glow they go straight onto the layer.
   const blur = glowBlur() * ratio;
   const pen = blur ? bare.getContext("2d") : ctx;
+  lineOrder.length = 0;
   for (const colour of new Set([c.cyan, c.alarm, c.pink])) {
-    const mine = seen.filter((one) => one.colour === colour);
+    const mine = stacked.filter((one) => one.colour === colour);
     if (!mine.length) continue;
+    lineOrder.push(...mine.map((one) => one.ac.hex));
     if (blur) pen.clearRect(0, 0, width, height);
     pen.save();
     pen.lineWidth = 1.8 * ratio;
@@ -209,14 +298,6 @@ export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
 }
 
 // -- flight tags, on their own layer ---------------------------------------------
-
-// Where the sort puts an aircraft: 0 first to 1 last. One it has not
-// ranked counts as first, and the focused aircraft is first whatever.
-function rankOf(radar, one) {
-  if (one.isFocus) return -Infinity;
-  const rank = radar.store.state.rank.get(one.ac.hex);
-  return rank === undefined ? 0 : rank;
-}
 
 // Each aircraft's tag: placed, measured and claimed for the pointer, then
 // laid onto the cleared tags layer, the sort's last first, each its box,
@@ -242,7 +323,7 @@ function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
   typeset(ctx);
   const drawn = [];
   for (const one of seen) {
-    const { ac, colour, alpha, head, points } = one;
+    const { ac, colour, alpha, tail: tailAlpha, head, points } = one;
     const lines = tagLines(ac, prefs.tag_fields);
     let tag = null;
     if (lines.length) {
@@ -252,9 +333,9 @@ function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
       const text = { x: left, y: first - 16 * k * ratio, w, h: 20 * k * ratio + (lines.length - 1) * step };
       const ink = inked(left, first, w - trailing(spacing), px, lines.length, step);
       tag = { lines, ...claim(text, ink, radar.boxed("AIRCRAFT"), ratio, prefs) };
-      drawn.push({ one, lines, left, first, text, box: tag.box, colour, alpha, rank: rankOf(radar, one) });
+      drawn.push({ one, lines, left, first, text, box: tag.box, colour, alpha, rank: one.rank });
     }
-    hits.push({ hex: ac.hex, x: head[0], y: head[1], tag, trail: points });
+    hits.push({ hex: ac.hex, x: head[0], y: head[1], tag, trail: points, alpha, tail: tailAlpha });
   }
   ctx.restore();
   // The sort's last first; a stable sort keeps the frame's order in a tie.
