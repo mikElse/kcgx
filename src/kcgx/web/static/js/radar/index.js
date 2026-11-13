@@ -48,7 +48,8 @@ import { drawMoving, init as initMoving } from "./moving.js";
 import { init as initView, recentre, scale } from "./view.js";
 
 const FADE_FRAMES = 30; // frames the persistence fade's interval is the mean of
-const FADE_MAX_MS = 100; // the longest interval it counts
+const FADE_MAX_MS = 100; // the longest interval it counts; after a longer one the layer is cleared
+const MAX_PIXELS = 8e6; // the most a radar canvas's backing store has, width times height
 
 // One object from several, each key from one only.
 export function mergeDebug(parts) {
@@ -102,12 +103,24 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   // right by `zoomFix` (the zoom over the canvas, over how much of it the
   // rectangle already has). With the render scale under 1, the screen
   // scales the canvas up stepped (image-rendering: pixelated).
+  //
+  // No canvas is over MAX_PIXELS: where the ratio would make one so (SUPER
+  // on a 2x display gives 4, and 1440 by 900 then some 9.6 million pixels
+  // each, five canvases of them), the ratio is cut to the one that comes to
+  // it, the same both ways, and the ratio returned is the one cut, so the
+  // pointer's maths and every size drawn by the ratio follow.
   let rendering = "";
   function size() {
     const scaled = renderScale();
-    const ratio = (window.devicePixelRatio || 1) * scaled;
+    let ratio = (window.devicePixelRatio || 1) * scaled;
     const box = canvas.getBoundingClientRect();
     const k = zoomFix(canvas, box);
+    const area = box.width * k * box.height * k;
+    if (area * ratio * ratio > MAX_PIXELS) {
+      ratio = Math.sqrt(MAX_PIXELS / area);
+      // Rounded to whole pixels, each side may come out up to half a pixel more.
+      while (Math.round(box.width * k * ratio) * Math.round(box.height * k * ratio) > MAX_PIXELS) ratio *= 0.9995;
+    }
     const width = Math.max(1, Math.round(box.width * k * ratio));
     const height = Math.max(1, Math.round(box.height * k * ratio));
     for (const c of radar.canvases) {
@@ -135,18 +148,26 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   // half ms, not each frame's own: where frames come unevenly (headless
   // WebKit's at 10 and 20 ms in turn, capped to 60) a fade that changed
   // from frame to frame would make a still picture's edges shimmer, and
-  // the same fade a frame comes to the same over time. One interval counts
-  // for no more than FADE_MAX_MS, so that a stall (a hidden tab) does not
-  // clear the layer for the frames after it.
-  function frameMs(now) {
-    if (lastFrame !== null) {
-      intervals.push(Math.min(now - lastFrame, FADE_MAX_MS));
-      if (intervals.length > FADE_FRAMES) intervals.shift();
-    }
+  // the same fade a frame comes to the same over time.
+  //
+  // After a gap, an interval over FADE_MAX_MS (a hidden tab, a long frame),
+  // the layer is cleared that frame: what is on it is of where the traffic
+  // was then, and would otherwise linger, faded by the mean, as a ghost.
+  // That interval is left out of the mean, so the frames after it fade as
+  // the ones before. A new frame rate cap (prefs.fps_max) starts the mean
+  // again, from that frame's own interval. Returns the interval to fade by,
+  // or Infinity to clear.
+  function frameMs(now, fps) {
+    if (fps !== fadeFps) { fadeFps = fps; intervals.length = 0; }
+    const gap = lastFrame === null ? Infinity : now - lastFrame;
     lastFrame = now;
-    if (!intervals.length) return Infinity;
-    return Math.round((2 * intervals.reduce((a, b) => a + b)) / intervals.length) / 2;
+    if (gap > FADE_MAX_MS) return Infinity;
+    intervals.push(gap);
+    if (intervals.length > FADE_FRAMES) intervals.shift();
+    return fadeMean();
   }
+  const fadeMean = () => (intervals.length
+    ? Math.round((2 * intervals.reduce((a, b) => a + b)) / intervals.length) / 2 : null);
 
   function persistence(prefs) {
     const display = document.documentElement.dataset.display;
@@ -155,6 +176,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
   let lastHud = 0;
   let lastFrame = null; // the last frame's time, for the fade
+  let fadeFps = null; // the frame rate cap its intervals were counted under
   const intervals = []; // and the last FADE_FRAMES frames' intervals, ms
   function frame(now) {
     frames += 1; // first: a tick that throws is still a frame, and a test waiting on one sees it
@@ -169,8 +191,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const t = trace.getContext("2d");
     t.setTransform(1, 0, 0, 1, 0, 0);
     t.globalCompositeOperation = "source-over";
-    const elapsed = frameMs(now);
-    if (persistence(prefs)) {
+    const elapsed = frameMs(now, prefs.fps_max);
+    if (persistence(prefs) && elapsed !== Infinity) {
       t.globalCompositeOperation = "destination-out";
       t.fillStyle = `rgba(0,0,0,${1 - 0.5 ** (elapsed / prefs.burn_in)})`;
       t.fillRect(0, 0, width, height);
@@ -229,7 +251,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     // change with the event that changes them and `shown` with the next
     // frame, so the rest describes them once `shown` agrees with both.
     debug() {
-      return mergeDebug([{ shown: radar.shown, frames, font: FONT }, ...hooks.map((h) => (h.debug ? h.debug() : {}))]);
+      // fade_ms: the interval the persistence fade goes by, ms (null before two frames).
+      return mergeDebug([{ shown: radar.shown, frames, font: FONT, fade_ms: fadeMean() }, ...hooks.map((h) => (h.debug ? h.debug() : {}))]);
     },
   };
 }

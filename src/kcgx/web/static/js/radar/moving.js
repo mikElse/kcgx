@@ -27,18 +27,21 @@
 // hides its own letters' glow, and a tag's glow is cut only by the boxes
 // over it.
 //
-// Strokes cost by the call as well, and Chromium's software canvas by the
-// path's size besides (one path of a colour's every segment cost more than
-// a stroke each). So a tail goes down in runs: its fade is rounded to
-// TAIL_STEPS steps of alpha, and each run of segments at one step is one
-// line, stroked once. The steps are the canvas's own 255, which leaves the
-// picture as it was; 16 saved WebKit a fifth of a 600-tail frame but
-// changed 0.7 % of its pixels, and 64 saved nothing measurable. The
-// chevrons of a colour are one path for each alpha they have. What is wholly off the
-// screen is not drawn at all: a chevron, a tail's segment, a tag (whose
-// width, measured or estimated, is the margin it is given). A tail's
-// points on the screen are kept from frame to frame (`radar.tailCache`),
-// and worked out again when the view, the canvas or the trail changes.
+// Each tail segment is a stroke of its own, at its own alpha. (Chromium's
+// software canvas costs by the path's size: one path of a colour's every
+// segment cost more than a stroke each. Runs of a tail's segments at one
+// alpha hardly ever formed, and where they did their joins drew mitre
+// spikes.) The chevrons of a colour are one path for each alpha they have,
+// which is one path for all when the sort shades nothing (sort_floor 100):
+// drawn a stroke each, chevrons over one another add up where they cross,
+// and Chromium's picture changed by 1.2 % of its pixels.
+// What is wholly off the screen is not drawn at all: a chevron, a tail's
+// segment, a tag (whose width, measured or estimated, is the margin it is
+// given). A tail's points are kept in nm from frame to frame
+// (`radar.tailCache`), and projected again only when the projection or the
+// trail changes; each frame puts them on the screen by the view, a shift
+// and a scale, so a view that moves every frame (following, easing) costs
+// no projections.
 //
 // `radar` is the shared state `mountRadar` makes (see radar/index.js);
 // `init` adds this module's part of it.
@@ -74,7 +77,9 @@
 //                    under it, chevrons and the tags further down included.
 //   radar.lineOrder  hexes, in the order their lines (tail and chevron) were
 //                    drawn: a colour at a time (cyan, the alarm colour, pink),
-//                    and within one the sort's last first, as the tags.
+//                    and within one the sort's last first, as the tags. Those
+//                    culled (wholly off the screen, nothing of them drawn) are
+//                    in it too, where they would have been.
 //
 // One alpha per aircraft (phase G Task 13), reckoned once a frame:
 //
@@ -110,7 +115,6 @@ const STALE_FADE_FROM = 30; // seconds without a position before an aircraft fad
 const EMERGENCY = new Set(["7500", "7600", "7700"]);
 const TAG_PX = 16; // the text size the tag's spacings are given for (prefs.tag_px scales them),
 const TAG_STEP_PX = 18; // from one of its lines down to the next
-const TAIL_STEPS = 255; // steps of alpha a tail's fade is rounded to: the canvas's own
 const LINE_PX = 1.8; // the aircraft's lines' width
 
 // Where an aircraft will be `seconds` after its last position.
@@ -136,10 +140,11 @@ export function init(radar) {
   radar.now = []; // [{ ...ac, now: [x, y] in nm, age, reported }], as last drawn (aircraftNow)
   radar.hits = []; // [{ hex, x, y, tag: {lines, ...label} or null, trail: [[x, y]] }]
   radar.tagOrder = []; // the hexes whose tags were drawn, the one on top last
-  radar.lineOrder = []; // the hexes whose lines were drawn, in that order
+  radar.lineOrder = []; // every hex on the radar, in the order its lines are drawn (culled ones too)
   radar.drawnAt = new Map(); // hex -> [x, y], canvas px, as last drawn (whereNow)
-  radar.tailCache = new Map(); // hex -> a tail's points on the screen, while they hold
+  radar.tailCache = new Map(); // hex -> a tail's points in nm, while they hold
   radar.culled = { aircraft: [], segments: 0 }; // what the last frame left off the screen
+  radar.projected = 0; // tail points the last frame projected, not finding them kept
   return {
     debug: () => ({
       hits: radar.hits.map(({ hex, x, y, tag, trail, alpha, tail }) => ({ hex, x, y, tag, trail, alpha, tail })),
@@ -149,6 +154,7 @@ export function init(radar) {
       // The aircraft of which nothing was drawn, and how many tail segments
       // were left out, for being off the screen.
       culled: { aircraft: [...radar.culled.aircraft], segments: radar.culled.segments },
+      projected: radar.projected,
     }),
   };
 }
@@ -260,44 +266,37 @@ const offScreen = (x0, y0, x1, y1, edge, width, height) =>
   x1 < -edge || y1 < -edge || x0 > width + edge || y0 > height + edge;
 
 // A colour's tails, in the pen's colour and at its width: each fading from
-// its alpha at the arrow to nothing at its oldest point. The fade is
-// rounded to TAIL_STEPS steps of alpha, and each run of a tail's segments
-// at one step is one line, stroked once. A segment wholly off the screen is
-// left out. Returns how many were.
+// its alpha at the arrow to nothing at its oldest point, a stroke a
+// segment. A segment wholly off the screen is left out. Returns how many
+// were.
 function strokeTails(pen, group, edge, width, height) {
   let skipped = 0;
   for (const one of group) {
     const { points, tail } = one;
     one.segments = 0;
     if (!(tail > 0)) continue;
-    let step = 0; // the run's, 0 with no run open
-    const end = () => { if (step) { pen.globalAlpha = step / TAIL_STEPS; pen.stroke(); step = 0; } };
     for (let i = 1; i < points.length; i += 1) {
       const [x0, y0] = points[i - 1];
       const [x1, y1] = points[i];
       if (offScreen(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), edge, width, height)) {
-        end();
         skipped += 1;
         continue;
       }
-      const alpha = tail * (1 - (i - 1) / (points.length - 1));
-      const at = Math.max(1, Math.round(alpha * TAIL_STEPS));
-      if (at !== step) {
-        end();
-        pen.beginPath();
-        pen.moveTo(x0, y0);
-        step = at;
-      }
+      // To the canvas's own 255 steps, as the picture has been drawn.
+      pen.globalAlpha = Math.max(1, Math.round(tail * (1 - (i - 1) / (points.length - 1)) * 255)) / 255;
+      pen.beginPath();
+      pen.moveTo(x0, y0);
       pen.lineTo(x1, y1);
+      pen.stroke();
       one.segments += 1;
     }
-    end();
   }
   return skipped;
 }
 
-// A colour's chevrons, pointing along track, one stroke for each alpha
-// among them, and about the focused one a ring. Those with `chevron` false
+// A colour's chevrons, pointing along track, one path and one stroke for
+// each alpha among them (all of them when the sort shades nothing,
+// sort_floor 100), and about the focused one a ring. Those with `chevron` false
 // (off the screen) are left out.
 function strokeChevrons(pen, group, ratio) {
   const byAlpha = new Map();
@@ -336,26 +335,35 @@ function strokeChevrons(pen, group, ratio) {
   }
 }
 
-// The tails' points on the screen, kept from frame to frame: for an
-// aircraft, `at(lat, lon, i)` for tailPoints, which works out trail[i]'s
-// the first time it is asked for and gives the same after, until the view,
-// the canvas, the projection or the trail changes (a poll adds to a trail
-// and drops its oldest).
+// The tails' points, kept in nm from frame to frame: for an aircraft,
+// `at(lat, lon, i)` for tailPoints, which projects trail[i] the first time
+// it is asked for and keeps that until the projection or the trail changes
+// (a poll adds to a trail and drops its oldest), and puts it on the screen
+// by this frame's view as toScreen does. `projected()` is how many were
+// projected afresh.
 function tailsOnScreen(radar, s, width, height) {
   const { view, project, tailCache } = radar;
-  const key = `${view.nm} ${view.panX} ${view.panY} ${s} ${width} ${height}`;
-  const fresh = (lat, lon) => toScreen(radar, project(lat, lon), s, width, height);
-  return (hex, trail) => {
+  const { panX, panY } = view;
+  const cx = width / 2;
+  const cy = height / 2;
+  let projected = 0;
+  const of = (hex, trail) => {
     let kept = tailCache.get(hex);
     const first = trail.length ? trail[0][2] : null;
-    if (!kept || kept.key !== key || kept.project !== project || kept.trail !== trail
+    if (!kept || kept.project !== project || kept.trail !== trail
         || kept.length !== trail.length || kept.first !== first) {
-      kept = { key, project, trail, length: trail.length, first, points: [] };
+      kept = { project, trail, length: trail.length, first, nm: [] };
       tailCache.set(hex, kept);
     }
-    const { points } = kept;
-    return (lat, lon, i) => points[i] || (points[i] = fresh(lat, lon));
+    const { nm } = kept;
+    return (lat, lon, i) => {
+      let p = nm[i];
+      if (!p) { p = nm[i] = project(lat, lon); projected += 1; }
+      return [cx + (p[0] - panX) * s, cy + (p[1] - panY) * s];
+    };
   };
+  of.projected = () => projected;
+  return of;
 }
 
 // Draws the aircraft's lines onto `ctx` (the moving layer) and their tags
@@ -398,6 +406,7 @@ export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
     const chevron = !offScreen(head[0], head[1], head[0], head[1], chevronEdge, width, height);
     seen.push({ ac, isFocus, colour, rank, alpha, tail, head, points, chevron, segments: 0 });
   }
+  radar.projected = tailsOf.projected();
   if (tailCache.size > list.length) {
     const here = new Set(list.map((ac) => ac.hex));
     for (const hex of tailCache.keys()) if (!here.has(hex)) tailCache.delete(hex);
@@ -410,14 +419,16 @@ export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
   // shadow, which is their glow. The focused aircraft's colour is last and
   // so on top. With no glow they go straight onto the layer. Within a
   // colour the order makes no difference to the picture (one colour over
-  // itself adds up the same in any order), so its tails go down first, in
-  // their alpha groups, and then its chevrons.
+  // itself adds up the same in any order), so its tails go down first and
+  // then its chevrons.
   const pen = blur ? bare.getContext("2d") : ctx;
   lineOrder.length = 0;
   culled.segments = 0;
   for (const colour of new Set([c.cyan, c.alarm, c.pink])) {
     const mine = stacked.filter((one) => one.colour === colour);
     if (!mine.length) continue;
+    // Every one of the colour, those culled too (nothing of them drawn): the
+    // hits are sorted by this order, and every aircraft has a hit.
     lineOrder.push(...mine.map((one) => one.ac.hex));
     if (blur) pen.clearRect(0, 0, width, height);
     pen.save();

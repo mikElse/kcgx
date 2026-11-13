@@ -9,10 +9,21 @@ import math
 import pytest
 
 from page_fixtures import *  # noqa: F403  (fixtures and helpers)
+from page_fixtures import hold_traffic as hold_only
 
 pytestmark = pytest.mark.browser
 
 BLACK = (0, 0, 0, 255)
+
+
+def hold_traffic(page, *aircraft):
+    """page_fixtures' hold_traffic, then two of the radar's frames. Its own
+    wait is for the hexes, and is met at once when they are the ones already
+    there: a test reading the layers then may read part of them from the
+    frame before the poll (another label, another fade)."""
+    hold_only(page, *aircraft)
+    frames(page)
+    return tags(page)
 
 
 # -- a map and traffic of the test's own --------------------------------------
@@ -439,7 +450,7 @@ def test_a_tails_brightness_is_its_speeds_band(page):
     between, or with no speed, tail_alpha: each the aircraft's own alpha
     times that, at the tail's newest segment."""
     wait_for_traffic(page)
-    set_prefs(page, **TAIL_BANDS)
+    set_prefs(page, sort_floor=100, **TAIL_BANDS)
     speeds = {"a1": 20, "a2": 300, "a3": 100, "a4": None, "a5": 40, "a6": 250}
     for north in (0, 2):
         hold_traffic(page, *[plane(h, -20 + 6 * i, north, trk=0, gs=gs) for i, (h, gs) in enumerate(speeds.items())])
@@ -494,7 +505,7 @@ def chevron_block(page, east, north):
 
 def test_the_slow_tail_is_dimmer_than_the_fast_one_on_the_screen(page):
     wait_for_traffic(page)
-    draw(page, **glow(0), display="OFF", tag_fields=[], **TAIL_BANDS)
+    draw(page, **glow(0), display="OFF", tag_fields=[], sort_floor=100, **TAIL_BANDS)
     home, s = scale(page)
     # Along each's older segment, which the reckoning does not move, and
     # clear of its chevron.
@@ -522,7 +533,7 @@ def parked_and_not(page):
 
 def test_parked_traffic_fades_to_ground_alpha(page):
     wait_for_traffic(page)
-    set_prefs(page, ground_mode="FADE", ground_min=2, ground_alpha=25, **TAIL_BANDS)
+    set_prefs(page, ground_mode="FADE", ground_min=2, ground_alpha=25, sort_floor=100, **TAIL_BANDS)
     parked_and_not(page)
     parked_and_not(page)  # a second poll, for a tail
     frames(page)
@@ -543,7 +554,8 @@ def test_parked_traffic_fades_to_ground_alpha(page):
 
 def test_a_parked_aircraft_is_faded_on_the_screen_chevron_and_tag(page):
     wait_for_traffic(page)
-    draw(page, **glow(0), display="OFF", tag_fields=[], ground_mode="SHOW", ground_alpha=25)
+    # The sort shades nothing (sort_floor 100): the two are compared with each other.
+    draw(page, **glow(0), display="OFF", tag_fields=[], ground_mode="SHOW", ground_alpha=25, sort_floor=100)
     blocks = {"a1": chevron_block(page, -10, 5), "a2": chevron_block(page, 10, 5)}
     hold_traffic(page, plane("a1", -10, 5, still=PARKED), plane("a2", 10, 5, still=PARKED))
     frames(page)
@@ -801,6 +813,81 @@ def test_burn_in_0_leaves_no_trace_of_a_moved_aircraft(page):
     assert light_of(page, before) == 0
 
 
+# A mark on the moving layer, then a stall of `ms` (as a hidden tab or a
+# long frame gives) before the next frame: what is left of the mark at the
+# end of that next frame, and the fade's interval before the stall and after.
+STALL = """async (ms) => {
+    const trace = window.radarParts.trace.getContext("2d");
+    let state = 0, left = null, before = null;
+    const off = window.kcgx.radar.hook(() => ({ post() {
+        if (state === 0) {
+            before = window.kcgx.radar.debug().fade_ms;
+            trace.save(); trace.setTransform(1, 0, 0, 1, 0, 0); trace.globalCompositeOperation = "source-over";
+            trace.fillStyle = "#ffffff"; trace.fillRect(0, 0, 6, 6); trace.restore();
+            const until = performance.now() + ms;
+            while (performance.now() < until) { /* the stall */ }
+            state = 1;
+        } else if (state === 1) {
+            left = trace.getImageData(2, 2, 1, 1).data[3];
+            state = 2;
+        }
+    } }));
+    while (state < 2) await new Promise(requestAnimationFrame);
+    off();
+    return { left, before, after: window.kcgx.radar.debug().fade_ms };
+}"""
+
+
+def test_after_a_stall_the_moving_layer_is_cleared_and_the_fade_keeps_its_pace(page):
+    """A frame over 100 ms after the one before clears the layer, leaving no
+    ghost of where the traffic was then; and that interval is left out of
+    the frames' mean the fade goes by, so the frames after fade as before."""
+    wait_for_traffic(page)
+    page.evaluate(PARTS)
+    hold_traffic(page)
+    set_prefs(page, display="VECTOR", burn_in=100, fps_max=60)
+    frames(page, 40)
+    # A short stall is a slow frame, faded by the mean: the mark is left.
+    short = page.evaluate(STALL, 40)
+    assert short["left"] > 150, short
+    frames(page, 40)
+    stalled = page.evaluate(STALL, 250)
+    assert stalled["left"] == 0, "a ghost of the frame before the stall"
+    assert stalled["after"] == pytest.approx(stalled["before"], abs=1), stalled
+
+
+# Each radar frame's time, its frame rate cap and the fade's interval, from
+# now until `count` frames have been drawn under the cap `fps`, set here.
+CAPPED = """async ([fps, count]) => {
+    const seen = [];
+    const off = window.kcgx.radar.hook(() => ({ post(now) {
+        seen.push([now, window.kcgx.store.state.prefs.fps_max, window.kcgx.radar.debug().fade_ms]);
+    } }));
+    while (!seen.length) await new Promise(requestAnimationFrame);
+    window.kcgx.send({t: "prefs", fps_max: fps});
+    while (seen.filter(([, cap]) => cap === fps).length < count) await new Promise(requestAnimationFrame);
+    off();
+    return seen;
+}"""
+
+
+def test_the_fade_starts_its_mean_again_when_the_frame_rate_cap_changes(page):
+    """Its mean is of the frames since the change only: the first's own
+    interval (from the last frame under the old cap), then each after."""
+    wait_for_traffic(page)
+    hold_traffic(page)
+    set_prefs(page, display="VECTOR", fps_max=60)
+    frames(page, 40)
+    seen = page.evaluate(CAPPED, [30, 5])
+    start = next(i for i, (_, cap, _) in enumerate(seen) if cap == 30)
+    assert start >= 1
+    for n in range(start, len(seen)):
+        gaps = [seen[i][0] - seen[i - 1][0] for i in range(start, n + 1)]
+        # To the half ms, a half up as Math.round has it (Python's round goes to even).
+        assert seen[n][2] == pytest.approx(math.floor(2 * sum(gaps) / len(gaps) + 0.5) / 2, abs=0.01), seen
+    assert seen[-1][2] > 28, seen
+
+
 # whereNow and the hit, read in the same frame.
 WHERE_NOW = """hex => import('/static/js/radar/moving.js').then((m) => {
     const hit = window.kcgx.radar.debug().hits.find((h) => h.hex === hex);
@@ -900,3 +987,82 @@ def test_a_tail_follows_the_view_and_the_polls(page):
     hold_traffic(page, plane("a1", -10, 10, trk=0, gs=None, age=0))
     frames(page)
     assert len(hit_of(page, "a1")["trail"]) == len(after) + 1
+
+
+# The view moved every frame, as following or easing moves it, for `count`
+# frames: the tail points projected afresh in each (debug().projected) and
+# the trail as drawn in the last, with the view it was drawn with.
+FOLLOWING = """async (count) => {
+    const seen = [];
+    let n = 0;
+    const off = window.kcgx.radar.hook((radar) => ({
+        tick() { n += 1; radar.view.panX = 0.37 * n; radar.view.panY = -0.21 * n; },
+        post() { seen.push(window.kcgx.radar.debug().projected); },
+    }));
+    while (seen.length < count) await new Promise(requestAnimationFrame);
+    off();
+    const d = window.kcgx.radar.debug();
+    return { seen, hits: d.hits, view: d.shown };
+}"""
+
+
+def test_a_tails_points_are_kept_while_the_view_moves_every_frame(page):
+    """Following or easing moves the view every frame. The tails' points are
+    kept in nm, so none is projected again while it does, and each is still
+    where the view puts it."""
+    wait_for_traffic(page)
+    draw(page, tail_secs=180, motion="STEP")
+    ago(page, "a1", 60, 40, 20, 0, nm=2)
+    frames(page)
+    width, height = canvas_size(page)
+    followed = page.evaluate(FOLLOWING, 10)
+    assert followed["seen"] == [0] * 10, followed["seen"]
+    _, s = scale(page)
+    # Each point where the view it was drawn with puts it: under STEP the
+    # chevron is at its last report, 8 nm north and 10 west, then each
+    # report back to the oldest, 2 nm north.
+    view = followed["view"]
+    hit = next(h for h in followed["hits"] if h["hex"] == "a1")
+    home = (width / 2 - view["panX"] * s, height / 2 - view["panY"] * s)
+    want = [[home[0] - 10 * s, home[1] - north * s] for north in (8, 8, 6, 4, 2)]
+    assert hit["trail"] == [pytest.approx(p, abs=0.5) for p in want]
+
+
+SUPER_SIZED = """() => { const c = document.getElementById("radar"); const r = c.getBoundingClientRect();
+    return { box: [r.width, r.height], dpr: devicePixelRatio, ratio: window.radarParts.size().ratio,
+             all: window.radarParts.canvases.map((x) => [x.width, x.height]) }; }"""
+
+
+def test_a_super_render_scale_is_capped_at_8_megapixels_a_canvas(browser, server, page):
+    """SUPER on a 2x display at 1440 by 900 would be well over 8 million
+    pixels a canvas; the scale is cut, the same both ways, to come under
+    it, and the pointer still lands where it is pointed."""
+    set_prefs(page, aa="SUPER")
+    context = browser.new_context(viewport={"width": 1440, "height": 900}, device_scale_factor=2)
+    try:
+        tab = context.new_page()
+        tab.goto(server + "/")
+        tab.wait_for_selector(".feed.expanded")
+        wait_for_traffic(tab)
+        tab.evaluate(PARTS)
+        frames(tab)
+        sized = tab.evaluate(SUPER_SIZED)
+        (w, h), dpr = sized["box"], sized["dpr"]
+        assert dpr == 2
+        assert w * h * (dpr * 2) ** 2 > 8_000_000  # uncapped, it would be over
+        width, height = sized["all"][0]
+        assert width * height <= 8_000_000
+        assert {tuple(x) for x in sized["all"]} == {(width, height)}
+        # Uniformly: the ratio size() gives is the canvas's to its box, both ways.
+        ratio = sized["ratio"]
+        assert ratio < dpr * 2
+        assert width == pytest.approx(w * ratio, abs=1) and height == pytest.approx(h * ratio, abs=1)
+        assert width * height > 0.99 * 8_000_000  # cut no further than it must be
+        hold_traffic(tab, plane("a1", -10, 5))
+        hit = hit_of(tab, "a1")
+        left, top = tab.eval_on_selector("#radar", "e => { const r = e.getBoundingClientRect(); return [r.left, r.top]; }")
+        tab.mouse.click(left + hit["x"] / ratio, top + hit["y"] / ratio)
+        tab.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+    finally:
+        context.close()
+        set_prefs(page, aa="ON")
