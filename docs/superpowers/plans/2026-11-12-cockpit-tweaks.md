@@ -999,6 +999,26 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
   which the workflow that built this plan may not do. This commit changes
   three documents and an index that no test reads.
 
+*After review, 2026-11-12.*
+
+- **`kcgx go KSEA` opens nothing, and the README said it showed the
+  window.** "Running it" had "`kcgx` and `kcgx go` show the cockpit
+  there". `cmd_go` opens a page in two cases only: for the search (no
+  airport, or a query naming several), and after a switch when `--open` is
+  given. The README now says so and lists `kcgx go --open KSEA`; the
+  spec's sentence under the window carries the same clause. Task 12's
+  wording above and row 12 of "What was done" are as loose and are left
+  as written, being the record of that task. No test was added: no test
+  reads the README, and the behaviour it now states was already held by
+  `test_go_with_an_icao_switches_the_running_cockpit` (nothing opened)
+  and `test_go_open_opens_the_page_after_switching`.
+- **`docs/README.md` stays as committed.** It was outside this task's
+  files and is said so above; the review accepted it.
+- **The one test left out is still left out,** in this review's run of the
+  suite too, for the same reason: `1268 passed, 1 deselected in 602.49s
+  (0:10:02)`, run on these three documents as committed but for this one
+  line. It is the owner's to decide, under "Owed by the owner".
+
 ---
 
 ## Coverage

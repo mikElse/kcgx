@@ -201,6 +201,7 @@ kcgx --no-open          # start it without opening anything
 kcgx --browser          # open the page in your default browser instead
 kcgx go KSEA            # switch airport: an exact ICAO
 kcgx go seattle tacoma  # ...or any search that names one airport
+kcgx go --open KSEA     # switch, and show the cockpit as well
 kcgx go portland        # names several: opens the page's search with it typed
 kcgx go                 # opens the page's airport search
 kcgx status             # running at http://127.0.0.1:8473/  (KPDX)
@@ -209,10 +210,16 @@ kcgx --demo             # the demo: synthetic feeds and traffic, no audio
 ```
 
 **Its own window** (since 2026-11-12). On a Mac where setup has built
-KCGX.app, `kcgx` and `kcgx go` show the cockpit there: a small WebKit app
-with one window, in the Dock as KCGX, and not a tab in Chrome. The
-launcher looks for the app at `~/Applications/KCGX.app` (`KCGX_APP` names
-another place) and hands it the page with `open`. Where there is no app,
+KCGX.app, `kcgx` and `kcgx go` show the cockpit there, when they show it
+at all: a small WebKit app with one window, in the Dock as KCGX, and not a
+tab in Chrome. `kcgx go` with an airport it can settle on (an ICAO, or a
+search that names one) switches the cockpit and opens nothing, so a hidden
+window stays hidden; `kcgx go --open KSEA` switches and shows it. With no
+airport, or a search that names several, `kcgx go` opens the page's search,
+as above.
+
+The launcher looks for the app at `~/Applications/KCGX.app` (`KCGX_APP`
+names another place) and hands it the page with `open`. Where there is no app,
 on Linux, with `--browser`, or with `KCGX_BROWSER=1` in the environment
 (anything but empty or `0` counts), the page opens in your default browser
 as it always did; it does the same, and says so, if `open` fails. Opening

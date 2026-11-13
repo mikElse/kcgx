@@ -1025,8 +1025,9 @@ scripted, so `kcgx go seattle` could not hand it a search). The
 launcher's seam, `pick_opener`, is where a GTK WebKit window for Linux
 would later plug in.
 
-**The launcher opens it when it is there.** `kcgx` and `kcgx go` show the
-page in the app when its program exists at `$KCGX_APP` (by default
+**The launcher opens it when it is there.** `kcgx` and `kcgx go` (which
+opens a page only for the search, or with `--open`: see The launcher) show
+the page in the app when its program exists at `$KCGX_APP` (by default
 `~/Applications/KCGX.app`), by running
 `open -a <app> kcgx://show?port=<port>&fragment=<quoted fragment>`.
 Without the app, on Linux, with `--browser`, or with `KCGX_BROWSER` set to
