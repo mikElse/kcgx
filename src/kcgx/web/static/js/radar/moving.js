@@ -1,19 +1,33 @@
 // The moving layer (spec, Radar; Rendering): aircraft, their trails and
-// flight tags, and the focus ring, drawn every frame onto `radar.trace` and
-// dead reckoned between polls from ground speed and track.
+// flight tags, and the focus ring, drawn every frame and dead reckoned
+// between polls from ground speed and track.
+//
+// The aircraft's lines go onto `radar.trace`, which is added to the map and
+// fades rather than clears when the display persists. Their tags go onto a
+// layer of their own, `radar.tags`, cleared every frame and laid over
+// everything else as it is, not added (phase G decision 8): a tag and its
+// box sit over map lines, other aircraft and other trails, and leave no
+// persistence trail of their own. On it the tags go down in rank order,
+// the sort's last first, so that its first (and the focused aircraft,
+// always) is on top: each its box, then its letters over the box.
 //
 // The glow is a canvas shadow, and a shadow costs by the draw, not by the
 // pixel: with one on every trail segment and chevron, WebKit, and Chromium
 // drawing on a GPU, took 2 ms an aircraft a frame. So the aircraft's lines
 // are drawn bare on a third canvas (`radar.bare`), a colour at a time, and
-// that canvas is drawn onto the moving layer once with the shadow on.
+// that canvas is drawn onto the moving layer once with the shadow on. The
+// tags' letters glow the same way, a colour at a time, but only the shadow
+// is drawn then, under every tag; the tags themselves follow, in rank
+// order, over it. A box therefore covers its own letters' glow as it
+// covers a map line's, as much as it is filled.
 //
 // `radar` is the shared state `mountRadar` makes (see radar/index.js);
 // `init` adds this module's part of it.
 
 import { glowBlur } from "../theme.js";
 import { focus } from "../focus.js";
-import { FONT, claim, inked, trailing } from "./draw.js";
+import { FONT, claim, inked, paintBox, trailing } from "./draw.js";
+import { labelPx } from "./still.js";
 import { toScreen } from "./view.js";
 
 const DIM_ALPHA = 0.15;
@@ -34,16 +48,22 @@ export function reckon(lat, lon, gs, trk, seconds) {
 
 // -- this module's part of `radar` -------------------------------------------------
 
-// The layer's two canvases, and what its last drawing left: the aircraft
-// where they were reckoned to be, and for the pointer what is where.
+// The layer's three canvases, and what its last drawing left: the aircraft
+// where they were reckoned to be, for the pointer what is where, and the
+// order the tags were laid in.
 export function init(radar) {
-  radar.trace = document.createElement("canvas"); // the moving layer, for persistence
-  radar.bare = document.createElement("canvas"); // the aircraft's lines in one colour, before their glow
-  radar.canvases.push(radar.trace, radar.bare);
+  radar.trace = document.createElement("canvas"); // the aircraft's lines, for persistence
+  radar.tags = document.createElement("canvas"); // their tags, over everything
+  radar.bare = document.createElement("canvas"); // lines or letters in one colour, before their glow
+  radar.canvases.push(radar.trace, radar.tags, radar.bare);
   radar.now = []; // [{ ...ac, now: [x, y] in nm, age }], as last drawn
   radar.hits = []; // [{ hex, x, y, tag: {lines, ...label} or null, trail: [[x, y]] }]
+  radar.tagOrder = []; // the hexes whose tags were drawn, the one on top last
   return {
-    debug: () => ({ hits: radar.hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y, tag: h.tag })) }),
+    debug: () => ({
+      hits: radar.hits.map((h) => ({ hex: h.hex, x: h.x, y: h.y, tag: h.tag })),
+      tag_order: [...radar.tagOrder],
+    }),
   };
 }
 
@@ -123,16 +143,13 @@ function strokeAircraft(pen, { ac, isFocus, alpha, head, points }, ratio) {
   }
 }
 
-// Draws the aircraft onto `ctx` and returns them, with the boxes their tags
-// are to stand on: [{ box, colour, alpha }], each as dim as its aircraft.
-// The boxes cannot be drawn here; `frame` puts them under this layer.
-// Leaves `radar.now` holding the aircraft as drawn, and `radar.hits`
-// saying what is where, for the pointer.
+// Draws the aircraft's lines onto `ctx` (the moving layer) and their tags
+// onto `radar.tags`, and returns the aircraft. Leaves `radar.now` holding
+// them as drawn, `radar.hits` saying what is where, for the pointer, and
+// `radar.tagOrder` the order the tags went down in.
 export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
   const { store, project, bare, hits, now: list } = radar;
   hits.length = 0;
-  const boxes = [];
-  const step = TAG_STEP_PX * ratio;
   const focused = focus.hex;
   list.splice(0, list.length, ...aircraftNow(radar));
   if (focused && !list.some((ac) => ac.hex === focused)) focus.set(null);
@@ -171,32 +188,97 @@ export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
     ctx.restore();
   }
 
-  // The tags, over every aircraft's lines and without a glow. A tag is up
-  // and right of its chevron. Its last line is where the one line has
-  // always been; a line above it stands higher.
+  drawTags(radar, seen, width, height, ratio, c, prefs, blur);
+  return { list };
+}
+
+// -- flight tags, on their own layer ---------------------------------------------
+
+// Where the sort puts an aircraft: 0 first to 1 last. One it has not
+// ranked counts as first, and the focused aircraft is first whatever.
+function rankOf(radar, one) {
+  if (one.isFocus) return -Infinity;
+  const rank = radar.store.state.rank.get(one.ac.hex);
+  return rank === undefined ? 0 : rank;
+}
+
+// Each aircraft's tag: placed, measured and claimed for the pointer, then
+// laid onto the cleared tags layer over the letters' glow, the sort's last
+// first, each its box and then its letters. A tag is up and right of its
+// chevron. Its last line is where the one line has always been; a line
+// above it stands higher.
+function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
+  const { tags, bare, hits, tagOrder } = radar;
+  const ctx = tags.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.clearRect(0, 0, width, height);
+  // The text's size follows the zoom (Task 10's labelPx); its spacing and
+  // the room about it grow with it.
+  const k = labelPx(TAG_PX, radar) / TAG_PX;
+  const px = TAG_PX * k * ratio;
+  const step = TAG_STEP_PX * k * ratio;
+  const font = `${px}px ${FONT}`;
+  const spacing = 1.5 * k * ratio;
+  const typeset = (pen) => { pen.font = font; pen.letterSpacing = `${spacing}px`; };
+
   ctx.save();
-  ctx.font = `${TAG_PX * ratio}px ${FONT}`;
-  ctx.letterSpacing = `${1.5 * ratio}px`;
-  for (const { ac, colour, alpha, head, points } of seen) {
+  typeset(ctx);
+  const drawn = [];
+  for (const one of seen) {
+    const { ac, colour, alpha, head, points } = one;
     const lines = tagLines(ac, prefs.tag_fields);
     let tag = null;
     if (lines.length) {
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = colour;
       const left = head[0] + 14 * ratio;
       const first = head[1] - 10 * ratio - (lines.length - 1) * step; // the top line's baseline
-      let w = 0;
-      lines.forEach((line, i) => {
-        w = Math.max(w, ctx.measureText(line).width);
-        ctx.fillText(line, left, first + i * step);
-      });
-      const text = { x: left, y: first - 16 * ratio, w, h: 20 * ratio + (lines.length - 1) * step };
-      const ink = inked(left, first, w - trailing(1.5 * ratio), TAG_PX * ratio, lines.length, step);
+      const w = Math.max(...lines.map((line) => ctx.measureText(line).width));
+      const text = { x: left, y: first - 16 * k * ratio, w, h: 20 * k * ratio + (lines.length - 1) * step };
+      const ink = inked(left, first, w - trailing(spacing), px, lines.length, step);
       tag = { lines, ...claim(text, ink, radar.boxed("AIRCRAFT"), ratio, prefs) };
-      if (tag.box) boxes.push({ box: tag.box, colour, alpha });
+      drawn.push({ one, lines, left, first, box: tag.box, colour, alpha, rank: rankOf(radar, one) });
     }
     hits.push({ hex: ac.hex, x: head[0], y: head[1], tag, trail: points });
   }
   ctx.restore();
-  return { list, boxes };
+  // The sort's last first; a stable sort keeps the frame's order in a tie.
+  drawn.sort((a, b) => b.rank - a.rank);
+  tagOrder.splice(0, tagOrder.length, ...drawn.map((d) => d.one.ac.hex));
+
+  const letters = (pen, d) => {
+    pen.globalAlpha = d.alpha;
+    pen.fillStyle = d.colour;
+    d.lines.forEach((line, i) => pen.fillText(line, d.left, d.first + i * step));
+  };
+
+  // The letters' glow, a colour at a time: bare, then only its shadow onto
+  // the layer. The canvas itself is drawn a whole width off to the left,
+  // and its shadow as far back to the right, onto the letters' places.
+  if (blur) {
+    const pen = bare.getContext("2d");
+    for (const colour of new Set([c.cyan, c.alarm, c.pink])) {
+      const mine = drawn.filter((d) => d.colour === colour);
+      if (!mine.length) continue;
+      pen.setTransform(1, 0, 0, 1, 0, 0);
+      pen.clearRect(0, 0, width, height);
+      pen.save();
+      typeset(pen);
+      for (const d of mine) letters(pen, d);
+      pen.restore();
+      ctx.save();
+      ctx.shadowColor = colour;
+      ctx.shadowBlur = blur;
+      ctx.shadowOffsetX = width;
+      ctx.drawImage(bare, -width, 0);
+      ctx.restore();
+    }
+  }
+
+  for (const d of drawn) {
+    if (d.box) paintBox(ctx, d.box, d.colour, ratio, prefs, d.alpha);
+    ctx.save();
+    typeset(ctx);
+    letters(ctx, d);
+    ctx.restore();
+  }
 }

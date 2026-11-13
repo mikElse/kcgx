@@ -5,14 +5,16 @@
 //              order the layers are put together in, the HUD, and what the
 //              store tells the radar
 //   still.js   the static layer: map, rings, labels, the home airport
-//   moving.js  the moving layer: aircraft, trails, tags
+//   moving.js  the moving layer: aircraft and trails; and the tags' layer
 //   view.js    the view in nm, the pointer: pan, zoom, recentre, hit tests
 //   draw.js    what the two layers share: the font, label boxes
 //
 // The static layer is drawn into an offscreen canvas when it changes and
 // copied each frame. The moving one is drawn every frame. With display
 // VECTOR or CRT the moving layer fades instead of clearing, which is the
-// phosphor persistence.
+// phosphor persistence. Both are light, added to the screen. The flight
+// tags are drawn every frame onto a layer of their own, cleared each time,
+// and laid over the rest as they are (phase G decision 8).
 //
 // The parts share one object, `radar`, made here. This file puts the
 // shared core on it: the canvas, the store, the HUD, the range, whether the
@@ -35,7 +37,7 @@
 
 import { colours, reducedMotion } from "../theme.js";
 import { onFrame } from "../frames.js";
-import { FONT, paintBox } from "./draw.js";
+import { FONT } from "./draw.js";
 import { drawStatic, init as initStill } from "./still.js";
 import { drawMoving, init as initMoving } from "./moving.js";
 import { init as initView, recentre, scale } from "./view.js";
@@ -50,6 +52,14 @@ export function mergeDebug(parts) {
     }
   }
   return out;
+}
+
+// The HUD's first line: how long ago the radar was polled, `age` in whole
+// seconds or null before any picture, and what went wrong if anything did.
+const seconds = (n) => `${n} SECOND${n === 1 ? "" : "S"}`;
+export function pollWords(polled, age) {
+  if (!polled || age === null) return polled && polled.error ? `RADAR ${polled.error}` : "RADAR WAITING";
+  return polled.error ? `${polled.error}, PICTURE ${seconds(age)} OLD` : `${seconds(age)} AGO`;
 }
 
 export function mountRadar(canvas, store, { hud = {} } = {}) {
@@ -110,18 +120,17 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     } else {
       t.clearRect(0, 0, width, height);
     }
-    const { list, boxes } = drawMoving(radar, t, width, height, ratio, s, c, prefs);
+    const { list } = drawMoving(radar, t, width, height, ratio, s, c, prefs);
 
+    // The map, the aircraft added to it, and the tags over both.
     const ctx = canvas.getContext("2d");
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, width, height);
     ctx.drawImage(still, 0, 0);
-    // The tags' boxes go between the layers: over the map, under the
-    // aircraft, which are added to the screen and would not show black.
-    for (const { box, colour, alpha } of boxes) paintBox(ctx, box, colour, ratio, prefs, alpha);
     ctx.globalCompositeOperation = "lighter";
     ctx.drawImage(trace, 0, 0);
     ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(radar.tags, 0, 0);
     radar.shown = { ...radar.view, range: range() };
 
     if (now - lastHud > 500) { lastHud = now; drawHud(list); }
@@ -133,12 +142,9 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const polled = store.state.radar;
     if (hud.tracks) hud.tracks.textContent = `${list.length} TRACK${list.length === 1 ? "" : "S"}`;
     if (!hud.poll) return;
-    if (!polled || polled.age === null) {
-      hud.poll.textContent = polled && polled.error ? `RADAR ${polled.error}` : "RADAR WAITING";
-      return;
-    }
-    const age = Math.round(polled.age + (performance.now() - store.state.radarAt) / 1000);
-    hud.poll.textContent = polled.error ? `${polled.error}, PICTURE ${age}S OLD` : `POLLED ${age}S AGO`;
+    const age = !polled || polled.age === null
+      ? null : Math.round(polled.age + (performance.now() - store.state.radarAt) / 1000);
+    hud.poll.textContent = pollWords(polled, age);
   }
 
   // -- what the store says --

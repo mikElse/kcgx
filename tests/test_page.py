@@ -1989,14 +1989,15 @@ def test_the_traffics_glow_is_a_shadow_for_each_colour_not_one_for_each_stroke(p
         hold_traffic(page, *fleet(count, step, a1={"sq": "7700"}))
     picture(page)  # the map has drawn itself on; from here only the traffic is drawn each frame
     shadowed = page.evaluate(SHADOWED)
-    assert shadowed == {"drawImage": 2}, f"cyan and the alarm colour, a shadow each: {shadowed}"
+    # And as many again for the tags' letters, which glow the same way.
+    assert shadowed == {"drawImage": 4}, f"cyan and the alarm colour, a shadow each, twice: {shadowed}"
     hit = radar_debug(page)["hits"][2]
     page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
     page.mouse.move(2, 2)  # off the radar: a label brightening under the pointer redraws the map
     picture(page)
     shadowed = page.evaluate(SHADOWED)
-    assert shadowed == {"drawImage": 3}, f"cyan, the alarm colour and pink, a shadow each: {shadowed}"
+    assert shadowed == {"drawImage": 6}, f"cyan, the alarm colour and pink, a shadow each, twice: {shadowed}"
     set_prefs(page, **glow(0))
     picture(page)
     assert page.evaluate(SHADOWED) == {}
@@ -2321,7 +2322,7 @@ def bounds(page, selector):
 
 
 def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
-    spans = ["#radar-range", "#radar-poll", "#radar-tracks"]
+    spans = ["#radar-poll", "#radar-range", "#radar-tracks"]
     assert page.eval_on_selector_all(".hud span", "els => els.map(e => '#' + e.id)") == spans
     set_prefs(page, **glow(0), display="OFF")  # nothing over the readouts but themselves
     for span in spans:
@@ -2342,7 +2343,7 @@ def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
     # and those read at the edge the box is held by, which stays where it is
     # when the words change (the track count is held by its right).
     page.wait_for_function(
-        """() => document.getElementById("radar-poll").textContent.startsWith("POLLED")
+        """() => document.getElementById("radar-poll").textContent.endsWith(" AGO")
                  && document.getElementById("radar-tracks").textContent !== "0 TRACKS" """
     )
     boxes = []
