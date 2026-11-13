@@ -10,7 +10,7 @@ import { mountLamps } from "./lamps.js";
 import { mountLog } from "./log.js";
 import { mountRadar } from "./radar.js";
 import { mountTracks } from "./tracks.js";
-import { mountAirportSheet, mountConfigSheet, mountShutdownSheet } from "./sheets.js";
+import { mountAirportSheet, mountConfigSheet, mountShutdownSheet, mountVolume } from "./sheets.js";
 
 const $ = (id) => document.getElementById(id);
 const store = createStore();
@@ -87,9 +87,8 @@ mountTracks({ head: $("tracks-head"), body: $("tracks-body"), empty: $("tracks-e
 const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,
 );
-const configSheet = mountConfigSheet(
-  { sheet: $("config-sheet"), volume: $("volume"), volumeValue: $("volume-value") }, store, send,
-);
+const configSheet = mountConfigSheet({ sheet: $("config-sheet") }, store, send);
+mountVolume({ volume: $("volume"), volumeValue: $("volume-value") }, store, send);
 const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, () => {
   store.setShutdown();
   link.stop();

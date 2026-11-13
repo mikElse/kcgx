@@ -1,7 +1,8 @@
 // The three sheets: change airport, config and shut down. Each is a
 // <dialog>, so focus, Escape and the backdrop come from the browser. The
 // one exception is Escape in the airport search, which the browsers do not
-// agree on; see mountAirportSheet.
+// agree on; see mountAirportSheet. Also the master volume, which the config
+// sheet held until phase G and the frequencies pane holds now.
 
 function button(className, label, onClick) {
   const node = document.createElement("button");
@@ -98,9 +99,19 @@ export function mountAirportSheet({ sheet, query, results }, store, log) {
 
 const SLIDER_MS = 80; // a drag sends where it paused, not every step
 
+const words = (text) => (text || "").split(/\s+/).filter(Boolean);
+
 function bindSelect(node, set) {
   node.addEventListener("change", () => set(node.value));
   return (value) => { node.value = value; };
+}
+
+// What a slider's readout says: "40%", "12 PX", and with data-scale="10"
+// (a setting kept in tenths) "1.8 PX".
+function readoutText(readout, value) {
+  const { unit, scale } = readout.dataset;
+  const shown = scale ? (Number(value) / Number(scale)).toFixed(1) : value;
+  return unit === "%" ? `${shown}%` : `${shown} ${unit}`;
 }
 
 // A slider shows what it is dragged to at once and sends it a moment
@@ -108,11 +119,7 @@ function bindSelect(node, set) {
 // from the server does not move it, as the volume slider is not moved.
 function bindSlider(node, set, redraw) {
   const readout = node.parentElement.querySelector("[data-unit]");
-  const show = (value) => {
-    if (!readout) return;
-    const unit = readout.dataset.unit;
-    readout.textContent = unit === "%" ? `${value}%` : `${value} ${unit}`;
-  };
+  const show = (value) => { if (readout) readout.textContent = readoutText(readout, value); };
   let timer = 0;
   node.addEventListener("input", () => {
     show(node.value);
@@ -135,12 +142,12 @@ function bindSegments(node, options, onClick, lit) {
   };
 }
 
-function bind(node, store, send, redraw) {
-  const key = node.dataset.pref;
-  const set = (value) => send({ t: "prefs", [key]: value });
+// One control, of any kind but a table: `set(value)` sends the setting,
+// `current()` is what the server last said it is.
+function bindControl(node, store, set, current, redraw) {
   if (node.tagName === "SELECT") return bindSelect(node, set);
   if (node.tagName === "INPUT") return bindSlider(node, set, redraw);
-  const names = (node.dataset.values || "").split(" ").filter(Boolean).map((name) => [name, name]);
+  const names = words(node.dataset.values).map((name) => [name, name]);
   switch (node.dataset.kind) {
     case "flag": // OFF or ON
       return bindSegments(node, [["OFF", false], ["ON", true]], set, (value, setting) => value === Boolean(setting));
@@ -152,11 +159,11 @@ function bind(node, store, send, redraw) {
       // a reconnect is one), so nothing asked for outlives it.
       let asked = null;
       store.subscribe((kind) => {
-        const answered = kind === "prefs" && asked && String(store.state.prefs[key]) === String(asked);
+        const answered = kind === "prefs" && asked && String(current()) === String(asked);
         if (kind === "all" || answered) asked = null;
       });
       return bindSegments(node, names, (name) => {
-        const now = asked || store.state.prefs[key] || [];
+        const now = asked || current() || [];
         asked = names.map(([n]) => n).filter((n) => (n === name) !== now.includes(n));
         set(asked);
       }, (value, setting) => (setting || []).includes(value));
@@ -166,25 +173,110 @@ function bind(node, store, send, redraw) {
   }
 }
 
-export function mountConfigSheet({ sheet, volume, volumeValue }, store, send) {
+// A cell's control, made from its column's heading: a slider and its
+// readout for a number, a row of buttons for a flag or a choice.
+function cellControl(heading, label) {
+  const { kind, values, min, max, step, unit, scale } = heading.dataset;
+  if (kind === "number") {
+    const input = Object.assign(document.createElement("input"), { type: "range", min, max, step: step || "1" });
+    input.setAttribute("aria-label", label);
+    const readout = document.createElement("span");
+    readout.className = "num";
+    readout.dataset.unit = unit;
+    if (scale) readout.dataset.scale = scale;
+    return [input, readout];
+  }
+  const group = document.createElement("div");
+  group.className = "segments";
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", label);
+  group.dataset.kind = kind;
+  if (values) group.dataset.values = values;
+  return [group];
+}
+
+// A table (the map's layers): a row per data-rows entry, "ROW:col,col", and
+// a column per heading. A cell is made only where its row has that column,
+// and is bound as a control of its own that sends only itself:
+// {t: "prefs", key: {ROW: {col: value}}}. The server merges it cell by cell.
+function bindTable(table, store, send, redraw) {
+  const key = table.dataset.pref;
+  const headings = [...table.tHead.querySelectorAll("th[data-column]")];
+  const cells = [];
+  table.tBodies[0].replaceChildren(...words(table.dataset.rows).map((item) => {
+    const [row, list = ""] = item.split(":");
+    const has = list.split(",");
+    const tr = document.createElement("tr");
+    tr.dataset.row = row;
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = row.replaceAll("_", " ");
+    tr.append(name);
+    for (const heading of headings) {
+      const column = heading.dataset.column;
+      const td = document.createElement("td");
+      tr.append(td);
+      if (!has.includes(column)) continue;
+      td.dataset.row = row;
+      td.dataset.column = column;
+      const parts = cellControl(heading, `${name.textContent} ${heading.textContent}`);
+      td.append(...parts);
+      const draw = bindControl(
+        parts[0], store,
+        (value) => send({ t: "prefs", [key]: { [row]: { [column]: value } } }),
+        () => store.state.prefs[key]?.[row]?.[column],
+        redraw,
+      );
+      cells.push({ row, column, draw });
+    }
+    return tr;
+  }));
+  return (value) => { for (const { row, column, draw } of cells) draw(value?.[row]?.[column]); };
+}
+
+function bind(node, store, send, redraw) {
+  if (node.dataset.kind === "table") return bindTable(node, store, send, redraw);
+  const key = node.dataset.pref;
+  return bindControl(node, store, (value) => send({ t: "prefs", [key]: value }), () => store.state.prefs[key], redraw);
+}
+
+// The tabs: buttons over panels, one shown. A click or the arrow keys (and
+// Home and End) pick one; only the picked tab is in the Tab order. The
+// sheet reopens on the last one picked, for as long as the page is open.
+function mountTabs(sheet) {
+  const tabs = [...sheet.querySelectorAll("[role=tab]")];
+  const panel = (tab) => document.getElementById(tab.getAttribute("aria-controls"));
+  function pick(chosen) {
+    for (const tab of tabs) {
+      const on = tab === chosen;
+      tab.setAttribute("aria-selected", String(on));
+      tab.tabIndex = on ? 0 : -1;
+      panel(tab).hidden = !on;
+    }
+  }
+  for (const tab of tabs) tab.addEventListener("click", () => pick(tab));
+  sheet.querySelector("[role=tablist]").addEventListener("keydown", (event) => {
+    const at = tabs.indexOf(document.activeElement);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[event.key];
+    if (at < 0 || to === undefined) return;
+    event.preventDefault();
+    const chosen = tabs[(to + tabs.length) % tabs.length];
+    pick(chosen);
+    chosen.focus();
+  });
+  pick(tabs.find((tab) => tab.getAttribute("aria-selected") === "true") || tabs[0]);
+}
+
+export function mountConfigSheet({ sheet }, store, send) {
+  mountTabs(sheet);
   const controls = [...sheet.querySelectorAll("[data-pref]")].map((node) => {
     // data-only-when="display=CRT": the control works only with that setting so.
     const [needs, needed] = (node.dataset.onlyWhen || "").split("=");
     return { node, key: node.dataset.pref, needs, needed, draw: bind(node, store, send, () => render()) };
   });
 
-  const sendVolume = debounce((value) => send({ t: "volume", value }), 60);
-  volume.addEventListener("input", () => {
-    volumeValue.textContent = `${volume.value}%`;
-    sendVolume(Number(volume.value) / 100);
-  });
-
   function render() {
     const { state } = store;
-    if (document.activeElement !== volume) {
-      volume.value = String(Math.round(state.volume * 100));
-      volumeValue.textContent = `${volume.value}%`;
-    }
     for (const { node, key, needs, needed, draw } of controls) {
       draw(state.prefs[key]);
       if (!needs) continue;
@@ -194,9 +286,30 @@ export function mountConfigSheet({ sheet, volume, volumeValue }, store, send) {
     }
   }
 
-  store.subscribe((kind) => { if (kind === "all" || kind === "volume" || kind === "prefs") render(); });
+  store.subscribe((kind) => { if (kind === "all" || kind === "prefs") render(); });
   render();
   return { open() { render(); if (!sheet.open) sheet.showModal(); } };
+}
+
+// -- the master volume -------------------------------------------------------------
+//
+// Not a pref: it is the server's audio state, and lives in the frequencies
+// pane, not the config sheet (phase G decision 3). Like a slider in the
+// sheet, a frame from the server does not move it while it has the focus.
+
+export function mountVolume({ volume, volumeValue }, store, send) {
+  const sendVolume = debounce((value) => send({ t: "volume", value }), 60);
+  volume.addEventListener("input", () => {
+    volumeValue.textContent = `${volume.value}%`;
+    sendVolume(Number(volume.value) / 100);
+  });
+  function render() {
+    if (document.activeElement === volume) return;
+    volume.value = String(Math.round(store.state.volume * 100));
+    volumeValue.textContent = `${volume.value}%`;
+  }
+  store.subscribe((kind) => { if (kind === "all" || kind === "volume") render(); });
+  render();
 }
 
 export function mountShutdownSheet({ sheet }, store, onEnded, log) {

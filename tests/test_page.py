@@ -24,7 +24,7 @@ import zlib
 import pytest
 
 from kcgx.prefs import DEFAULTS, SCHEMA, Choice, Flag, Number, Subset
-from test_page_prefs import ON_THE_PAGE  # until phase G Task 2: the settings the sheet has controls for
+from test_page_prefs import DROPDOWNS, ON_THE_PAGE, TAB_OF, TABS
 
 playwright_api = pytest.importorskip("playwright.sync_api")
 
@@ -654,9 +654,13 @@ def test_prefs_apply_to_every_tab(page, other):
     assert other.input_value(theme) == "WOPR"
 
 
-def test_the_volume_slider_reaches_the_server(page):
-    page.click("#open-config")
+def test_the_volume_slider_is_in_the_frequencies_pane_and_reaches_the_server(page):
+    """Not a pref, and not in the config sheet: the frequencies pane has it
+    (phase G decision 3), its readout beside it."""
+    assert page.locator("#config-sheet #volume").count() == 0
+    assert page.locator(".screen-freq #volume").is_visible()
     page.fill("#volume", "40")
+    assert page.text_content("#volume-value") == "40%"
     page.dispatch_event("#volume", "input")
     page.wait_for_function("document.getElementById('freq-counts').textContent.includes('VOL 40%')")
     page.fill("#volume", "100")
@@ -669,11 +673,34 @@ def test_the_volume_slider_reaches_the_server(page):
 NUMBERS = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Number)}
 SUBSETS = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Subset)}
 FLAGS = [key for key, spec in ON_THE_PAGE.items() if isinstance(spec, Flag)]
-SEGMENTED = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Choice) and key != "palette"}
+SEGMENTED = {key: spec for key, spec in ON_THE_PAGE.items() if isinstance(spec, Choice) and key not in DROPDOWNS}
+# What a slider's readout says of its value.
 READOUTS = {
-    "scan_opacity": "{}%", "scan_size": "{} PX", "range_nm": "{} NM",
+    "ui_zoom": "{}%", "font_px": "{} PX",
+    "scan_opacity": "{}%", "scan_size": "{} PX",
+    "glow_map": "{}%", "glow_traffic": "{}%", "glow_text": "{}%",
+    "burn_in": "{} MS", "fps_max": "{} FPS", "poll_secs": "{} S", "zoom_speed": "{}%",
+    "range_nm": "{} NM",
     "box_fill": "{}%", "box_pad": "{} PX", "box_border": "{}%", "box_width": "{} PX",
+    "label_min": "{} PX", "label_max": "{} PX", "tag_px": "{} PX", "follow_nm": "{} NM",
+    "tail_secs": "{} S", "tail_alpha": "{}%", "tail_alpha_min": "{}%", "tail_alpha_max": "{}%",
+    "tail_gs_low": "{} KT", "tail_gs_high": "{} KT",
+    "ground_gs": "{} KT", "ground_alt": "{} FT", "ground_min": "{} MIN", "ground_alpha": "{}%",
+    "sort_floor": "{}%",
 }
+# The settings whose value <html> carries, as data-<key>, for the stylesheet.
+ON_HTML = ("display", "lamps", "teletype")
+
+
+def config_tab(page, key=None, tab=None):
+    """Open the config sheet, if it is not open, on the tab that holds `key`'s
+    control (or on `tab`), and wait until that tab shows."""
+    if not page.evaluate("document.getElementById('config-sheet').open"):
+        page.click("#open-config")
+        page.wait_for_selector("#config-sheet[open]")
+    name = tab or TAB_OF[key]
+    page.click(f"#config-sheet [role=tab]:text-is('{name}')")
+    page.wait_for_selector(f"#config-sheet [role=tab][aria-selected=true]:text-is('{name}')")
 
 
 def pref_is(tab, key, value):
@@ -737,17 +764,16 @@ def spy_on_sends(page):
 def test_limits_and_the_stream_count_are_gone(page):
     assert page.locator("#max-streams").count() == 0
     said = page.text_content("#config-sheet")
-    assert "LIMITS" not in said and "STREAMS AT ONCE" not in said
-    assert page.eval_on_selector_all("#config-sheet h3", "hs => hs.map(h => h.textContent)") == [
-        "OUTPUT", "LOOK", "LAYOUT", "RADAR",
-    ]
+    assert "LIMITS" not in said and "STREAMS AT ONCE" not in said and "OUTPUT" not in said
+    assert page.eval_on_selector_all("#config-sheet [role=tab]", "ts => ts.map(t => t.textContent)") == list(TABS)
     assert page.evaluate("'maxStreams' in window.kcgx.store.state") is False, "the page keeps a limit it shows nowhere"
 
 
 def test_the_sheet_opens_showing_the_defaults(page):
     page.click("#open-config")
     page.wait_for_selector("#config-sheet[open]")
-    assert page.input_value("#config-sheet select[data-pref=palette]") == DEFAULTS["palette"]
+    for key in DROPDOWNS:
+        assert page.input_value(f"#config-sheet select[data-pref={key}]") == DEFAULTS[key], key
     for key in SEGMENTED:
         assert pressed(page, key) == [DEFAULTS[key]], key
     for key in FLAGS:
@@ -763,9 +789,12 @@ def test_the_sheet_opens_showing_the_defaults(page):
     for key in NUMBERS:
         assert page.input_value(f"#config-sheet input[data-pref={key}]") == str(DEFAULTS[key]), key
         assert readout(page, key) == READOUTS[key].format(DEFAULTS[key]), key
-    # every control is one a person can reach and work
-    for key in ON_THE_PAGE:
-        assert page.locator(f"#config-sheet [data-pref={key}]").is_visible(), key
+    # every control is one a person can reach and work, on its own tab
+    for tab, keys in TABS.items():
+        config_tab(page, tab=tab)
+        for key in ON_THE_PAGE:
+            shown = page.locator(f"#config-sheet [data-pref={key}]").is_visible()
+            assert shown == (key in keys), f"{key} on the {tab} tab"
 
 
 def brightest(page, x, y):
@@ -801,11 +830,13 @@ def test_a_slider_is_drawn_by_the_page_and_its_track_shows_on_black(page, palett
     """WebKit's own slider draws a track that cannot be seen on black, and
     ignores the accent colour. The track is a line in the dim colour and the
     thumb a block in the bright one, whatever the browser."""
-    set_prefs(page, palette=palette)
-    page.click("#open-config")
-    page.wait_for_selector("#config-sheet[open]")
+    # No display effects: the volume is in the frequencies pane, under its scanlines.
+    set_prefs(page, palette=palette, display="OFF")
     track, thumb = css_colour(page, "--dim"), css_colour(page, "--cyan")
+    # The volume first: the sheet covers the pane.
     for key in ("volume", "box_width", "range_nm"):
+        if key != "volume":
+            config_tab(page, key)
         slider = page.locator("#volume" if key == "volume" else f"#config-sheet input[data-pref={key}]")
         slider.scroll_into_view_if_needed()
         box = slider.bounding_box()
@@ -823,8 +854,8 @@ def test_a_slider_is_drawn_by_the_page_and_its_track_shows_on_black(page, palett
 
 
 def test_each_number_slider_reaches_a_second_tab(page, other):
-    page.click("#open-config")
     for key, spec in NUMBERS.items():
+        config_tab(page, key)
         value = spec.low if spec.default == spec.high else spec.high
         slider = f"#config-sheet input[data-pref={key}]"
         page.fill(slider, str(value))  # sets it and fires `input`, as a drag does
@@ -838,7 +869,7 @@ def test_each_number_slider_reaches_a_second_tab(page, other):
 
 def test_a_slider_sends_whole_numbers_and_only_its_own_setting(page):
     spy_on_sends(page)
-    page.click("#open-config")
+    config_tab(page, "range_nm")
     page.fill("#config-sheet input[data-pref=range_nm]", "120")
     pref_is(page, "range_nm", 120)
     assert page.evaluate("window.sent") == [{"t": "prefs", "range_nm": 120}]
@@ -849,7 +880,7 @@ def test_dragging_a_slider_sends_where_it_stopped_not_every_step(page):
     steps are 20 ms apart, each inside the 80 ms the slider waits; a timer
     that is due sooner runs sooner, so a busy page cannot reorder them."""
     spy_on_sends(page)
-    page.click("#open-config")
+    config_tab(page, "range_nm")
     page.eval_on_selector(
         "#config-sheet input[data-pref=range_nm]",
         """async slider => { for (const value of [50, 60, 70, 80, 90, 100]) {
@@ -864,8 +895,8 @@ def test_dragging_a_slider_sends_where_it_stopped_not_every_step(page):
 
 
 def test_each_subset_button_reaches_a_second_tab(page, other):
-    page.click("#open-config")
     for key, spec in SUBSETS.items():
+        config_tab(page, key)
         chosen = set(DEFAULTS[key])
         # Twice round: every button is turned on once and off once.
         for name in spec.names * 2:
@@ -878,6 +909,7 @@ def test_each_subset_button_reaches_a_second_tab(page, other):
             assert pressed(other, key) == expected, f"{key} after {name}, in the other tab"
         assert chosen == set(DEFAULTS[key])
     # all of a subset's buttons can be off at once
+    config_tab(page, "tag_fields")
     for name in DEFAULTS["tag_fields"]:
         page.click(f"#config-sheet [data-pref=tag_fields] button:text-is('{name}')")
     pref_is(other, "tag_fields", [])
@@ -898,7 +930,7 @@ def test_two_subset_buttons_pressed_before_the_server_answers_both_count(page, o
     """The store only holds what the server has said, so the second press
     must build on what the first asked for, not on the list before it."""
     spy_on_sends(page)
-    page.click("#open-config")
+    config_tab(page, "tag_fields")
     press_at_once(page, "tag_fields", "TYPE", "GS")
     both = ["CALLSIGN", "TYPE", "ALT", "GS"]
     pref_is(other, "tag_fields", both)
@@ -920,7 +952,7 @@ def test_two_subset_buttons_pressed_before_the_server_answers_both_count(page, o
 
 def test_a_subset_button_pressed_twice_before_the_server_answers_ends_where_it_began(page, other):
     spy_on_sends(page)
-    page.click("#open-config")
+    config_tab(page, "box_items")
     press_at_once(page, "box_items", "HUD", "RINGS", "HUD")
     pref_is(other, "box_items", ["RINGS"])
     pref_is(page, "box_items", ["RINGS"])
@@ -932,7 +964,7 @@ def test_a_subset_press_the_server_never_got_is_forgotten_at_the_next_snapshot(p
     """A message sent as the socket dies is lost, and the snapshot after the
     reconnect is the whole truth: the next press builds on that, not on a
     list nobody was sent."""
-    page.click("#open-config")
+    config_tab(page, "tag_fields")
     # The next message goes nowhere, and its socket is dropped.
     page.evaluate(
         """() => { const send = WebSocket.prototype.send;
@@ -949,31 +981,45 @@ def test_a_subset_press_the_server_never_got_is_forgotten_at_the_next_snapshot(p
 
 @pytest.mark.parametrize("key", FLAGS)
 def test_a_flag_is_off_or_on_and_reaches_a_second_tab(page, other, key):
-    page.click("#open-config")
+    config_tab(page, key)
     for label, value in (("ON", True), ("OFF", False)):
         page.click(f"#config-sheet [data-pref={key}] button:text-is('{label}')")
         pref_is(other, key, value)
         pref_is(page, key, value)
         assert pressed(page, key) == [label] and pressed(other, key) == [label]
-        assert other.get_attribute("html", f"data-{key}") == label
-        assert page.get_attribute("html", f"data-{key}") == label
+        if key in ON_HTML:
+            assert other.get_attribute("html", f"data-{key}") == label
+            assert page.get_attribute("html", f"data-{key}") == label
 
 
 def test_a_choice_segment_group_has_one_pressed_button(page, other):
-    page.click("#open-config")
     for key, spec in SEGMENTED.items():
+        config_tab(page, key)
         for name in spec.names:
             page.click(f"#config-sheet [data-pref={key}] button:text-is('{name}')")
             pref_is(other, key, name)
             pref_is(page, key, name)
             assert pressed(page, key) == [name] and pressed(other, key) == [name]
-            assert other.get_attribute("html", f"data-{key}") == name
+            if key in ON_HTML:
+                assert other.get_attribute("html", f"data-{key}") == name
+        set_prefs(page, **{key: DEFAULTS[key]})
+
+
+@pytest.mark.parametrize("key", sorted(DROPDOWNS))
+def test_a_dropdown_reaches_a_second_tab(page, other, key):
+    config_tab(page, key)
+    select = f"#config-sheet select[data-pref={key}]"
+    for name in (SCHEMA[key].names[-1], DEFAULTS[key]):
+        page.select_option(select, name)
+        pref_is(other, key, name)
+        pref_is(page, key, name)
+        assert other.input_value(select) == name
 
 
 def test_a_slider_in_hand_is_not_moved_by_another_tab(page, other):
     """As the volume slider: a frame from the server must not pull a slider
     out from under the pointer. It catches up when it is let go."""
-    page.click("#open-config")
+    config_tab(page, "box_pad")
     held = "#config-sheet input[data-pref=box_pad]"
     page.focus(held)
     set_prefs(other, box_pad=9, box_width=3)
@@ -993,7 +1039,7 @@ def test_a_slider_with_a_send_still_to_go_is_not_moved_by_a_frame(page, other):
     handed to the store as the socket hands one over, in the task that drags,
     because nothing from a real second tab can be timed to land in that wait."""
     spy_on_sends(page)
-    page.click("#open-config")
+    config_tab(page, "box_pad")
     held = "#config-sheet input[data-pref=box_pad]"
     assert not page.evaluate("document.activeElement.matches('[data-pref=box_pad]')")
     # Read back in the same task: the server's answer to the drag follows
@@ -1070,28 +1116,42 @@ def test_the_radars_range_readout_follows_the_setting(page):
     page.wait_for_function("document.getElementById('radar-range').textContent === 'RNG 120 NM'")
 
 
-@pytest.mark.parametrize("width, height", [(1440, 900), (1280, 640), (390, 844)])
-def test_the_config_sheet_docks_to_the_right_edge_at_full_height(page, width, height):
+def box_of(page, selector):
+    return page.eval_on_selector(selector, "e => e.getBoundingClientRect().toJSON()")
+
+
+@pytest.mark.parametrize("width, height", SIZES)
+def test_the_config_sheet_fills_the_window_less_a_margin_and_is_centred(page, width, height):
+    """Phase G decision 2: full screen, centred, over the radar."""
     page.set_viewport_size({"width": width, "height": height})
     page.click("#open-config")
     page.wait_for_selector("#config-sheet[open]")
-    box = page.eval_on_selector("#config-sheet", "e => e.getBoundingClientRect().toJSON()")
-    inner = page.evaluate("document.documentElement.clientWidth")
-    assert abs(box["right"] - inner) <= 1, "the sheet is not against the right edge"
-    assert abs(box["top"]) <= 1 and abs(box["bottom"] - height) <= 1, "the sheet is not the window's height"
-    assert abs(box["width"] - min(420, inner)) <= 1
-    # what does not fit scrolls inside the sheet, and the last control can be reached
+    box = box_of(page, "#config-sheet")
+    inner_w, inner_h = page.evaluate("[document.documentElement.clientWidth, window.innerHeight]")
+    assert abs(box["width"] - (inner_w - 32)) <= 1 and abs(box["height"] - (inner_h - 32)) <= 1, box
+    assert abs(box["left"] - (inner_w - box["right"])) <= 1, "not centred across"
+    assert abs(box["top"] - (inner_h - box["bottom"])) <= 1, "not centred down"
     assert page.evaluate("document.documentElement.scrollWidth") <= width
-    last = page.locator("#config-sheet input[data-pref=box_width]")
-    last.scroll_into_view_if_needed()
-    at = last.evaluate("e => e.getBoundingClientRect().toJSON()")
-    assert at["top"] >= 0 and at["bottom"] <= height and at["left"] >= box["left"] and at["right"] <= box["right"]
+    # Each tab's panel scrolls, and the tab bar and CLOSE stay: the last
+    # control of every tab can be reached inside the sheet.
+    for tab, keys in TABS.items():
+        config_tab(page, tab=tab)
+        last = page.locator(f"#config-sheet [data-pref={keys[-1]}]")
+        last.scroll_into_view_if_needed()
+        at = last.evaluate("e => e.getBoundingClientRect().toJSON()")
+        assert at["top"] >= box["top"] and at["bottom"] <= box["bottom"] + 1, f"{tab}: {keys[-1]} is out of the sheet"
+        assert at["left"] >= box["left"] - 1 and at["right"] <= box["right"] + 1, f"{tab}: {keys[-1]} is out of the sheet"
+        for fixed in ("#config-sheet [role=tablist]", "#config-sheet button[value=close]"):
+            stays = box_of(page, fixed)
+            assert stays["top"] >= box["top"] and stays["bottom"] <= box["bottom"], f"{tab}: {fixed} scrolled away"
+        assert page.evaluate("document.getElementById('config-sheet').scrollTop") == 0, f"{tab}: the sheet itself scrolled"
 
 
-def test_the_config_sheet_does_not_darken_the_radar_and_the_airport_sheet_does(page):
-    """Decision 10: scanlines, boxes and range are seen changing while they
-    are set. The pixel is the radar screen's frame, halfway down its left
-    edge: with no display effects it is exactly the frame colour."""
+def test_the_config_sheet_darkens_what_it_covers_as_the_airport_sheet_does(page):
+    """It covers the radar now (phase G decision 2), and its backdrop is
+    nearly black. The pixel is the radar screen's frame, halfway down its
+    left edge, which is in the sheet's 16 px margin: with no display effects
+    it is exactly the frame colour."""
     set_prefs(page, display="OFF", **glow(0))
     frame = css_colour(page, "--frame")
     x, y = page.eval_on_selector(
@@ -1100,15 +1160,161 @@ def test_the_config_sheet_does_not_darken_the_radar_and_the_airport_sheet_does(p
     assert x == int(x) and pixel(page, x, y) == frame
     page.click("#open-config")
     page.wait_for_selector("#config-sheet[open]")
-    sheet = page.eval_on_selector("#config-sheet", "e => e.getBoundingClientRect().left")
-    assert x < sheet, "the sheet itself covers the pixel"
-    assert pixel(page, x, y) == frame, "the radar is darkened behind the config sheet"
-    # The same pixel does show a backdrop: the airport sheet still has one.
+    assert x < box_of(page, "#config-sheet")["left"], "the sheet itself covers the pixel"
+    # 85 % black, under the edge of the sheet's own glow, a few px away
+    dimmed = pixel(page, x, y)
+    assert sum(dimmed) < sum(frame) / 3, f"the config sheet's backdrop left {dimmed}"
     page.click("#config-sheet button[value=close]")
     page.click("#open-airport")
     page.wait_for_selector("#airport-sheet[open]")
     dimmed = pixel(page, x, y)
     assert sum(dimmed) < sum(frame) / 2, f"the airport sheet's backdrop left {dimmed}"
+
+
+def tabs_state(page):
+    """Each tab as [name, selected, tabbable], and the name of the panel shown."""
+    return page.evaluate(
+        """() => { const sheet = document.getElementById("config-sheet");
+                   const tabs = [...sheet.querySelectorAll("[role=tab]")];
+                   const shown = [...sheet.querySelectorAll("[role=tabpanel]")].filter(p => p.getClientRects().length);
+                   return { tabs: tabs.map(t => [t.textContent, t.getAttribute("aria-selected"), t.tabIndex]),
+                            shown: shown.map(p => document.getElementById(p.getAttribute("aria-labelledby")).textContent),
+                            focused: document.activeElement.getAttribute("role") === "tab" ? document.activeElement.textContent : null }; }"""
+    )
+
+
+def test_the_config_tabs_open_on_general_and_the_arrow_keys_move_between_them(page):
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    names = list(TABS)
+    state = tabs_state(page)
+    assert state["tabs"] == [[name, str(i == 0).lower(), 0 if i == 0 else -1] for i, name in enumerate(names)]
+    assert state["shown"] == ["GENERAL"]
+    page.focus("#config-sheet [role=tab][aria-selected=true]")
+    for key, expected in (("ArrowRight", 1), ("ArrowRight", 2), ("ArrowRight", 3), ("ArrowRight", 0),
+                          ("ArrowLeft", 3), ("Home", 0), ("End", 3), ("ArrowLeft", 2)):
+        page.keyboard.press(key)
+        state = tabs_state(page)
+        assert state["focused"] == names[expected], key
+        assert [t[1] for t in state["tabs"]] == [str(i == expected).lower() for i in range(4)], key
+        assert [t[2] for t in state["tabs"]] == [0 if i == expected else -1 for i in range(4)], key
+        assert state["shown"] == [names[expected]], key
+    # A click picks a tab too, and the sheet reopens on the last one used.
+    page.click("#config-sheet [role=tab]:text-is('TRAFFIC')")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#config-sheet", state="hidden")
+    page.click("#open-config")
+    page.wait_for_selector("#config-sheet[open]")
+    assert tabs_state(page)["shown"] == ["TRAFFIC"]
+    page.click("#config-sheet button[value=close]")
+    page.click("#open-config")
+    assert tabs_state(page)["shown"] == ["TRAFFIC"]
+
+
+def test_a_new_page_opens_the_config_sheet_on_general(page, other):
+    config_tab(page, tab="TRACKS")
+    other.click("#open-config")
+    other.wait_for_selector("#config-sheet[open]")
+    assert tabs_state(other)["shown"] == ["GENERAL"]
+
+
+# -- the map's table ----------------------------------------------------------------
+
+MAP = SCHEMA["map"]
+
+
+def cell(row, column, part=""):
+    return f"#config-sheet [data-pref=map] td[data-row={row}][data-column={column}] {part}".strip()
+
+
+def test_the_map_grid_has_a_cell_only_where_its_row_has_that_column(page):
+    config_tab(page, "map")
+    drawn = page.eval_on_selector(
+        "#config-sheet [data-pref=map]",
+        """table => [...table.tBodies[0].rows].map(tr => [tr.dataset.row,
+                       [...tr.querySelectorAll("td[data-column]")].map(td => td.dataset.column),
+                       tr.cells.length])""",
+    )
+    assert [row for row, _, _ in drawn] == list(MAP.rows)
+    for row, columns, cells in drawn:
+        assert columns == [c for c in MAP.columns if c in MAP.rows[row]], row
+        assert cells == 1 + len(MAP.columns), f"{row}: a row's cells do not line up under the headings"
+    # each cell shows the default
+    for row, cells in MAP.rows.items():
+        for column, value in cells.items():
+            spec = MAP.columns[column]
+            if isinstance(spec, Number):
+                assert page.input_value(cell(row, column, "input[type=range]")) == str(value), (row, column)
+            else:
+                lit = page.eval_on_selector_all(cell(row, column, "button[aria-pressed=true]"), "bs => bs.map(b => b.textContent)")
+                assert lit == [value if isinstance(spec, Choice) else ("ON" if value else "OFF")], (row, column)
+    assert page.text_content(cell("COAST", "width", "[data-unit]")) == "1.8 PX"  # tenths of a pixel
+    assert page.text_content(cell("COAST", "alpha", "[data-unit]")) == "100%"
+
+
+def test_one_cell_of_the_map_grid_reaches_a_second_tab_and_sends_only_itself(page, other):
+    spy_on_sends(page)
+    config_tab(page, "map")
+    page.fill(cell("CLASS_D", "alpha", "input"), "60")
+    assert page.text_content(cell("CLASS_D", "alpha", "[data-unit]")) == "60%"
+    other.wait_for_function("window.kcgx.store.state.prefs.map.CLASS_D.alpha === 60")
+    assert other.input_value(cell("CLASS_D", "alpha", "input")) == "60"
+    page.click(cell("CLASS_D", "line", "button:text-is('DASH')"))
+    other.wait_for_function("window.kcgx.store.state.prefs.map.CLASS_D.line === 'DASH'")
+    page.click(cell("RIVER", "show", "button:text-is('OFF')"))
+    other.wait_for_function("window.kcgx.store.state.prefs.map.RIVER.show === false")
+    page.wait_for_function("window.kcgx.store.state.prefs.map.RIVER.show === false")
+    assert page.evaluate("window.sent") == [
+        {"t": "prefs", "map": {"CLASS_D": {"alpha": 60}}},
+        {"t": "prefs", "map": {"CLASS_D": {"line": "DASH"}}},
+        {"t": "prefs", "map": {"RIVER": {"show": False}}},
+    ]
+    assert other.eval_on_selector_all(cell("RIVER", "show", "button[aria-pressed=true]"), "bs => bs.map(b => b.textContent)") == ["OFF"]
+    # every other cell is as it was
+    final = other.evaluate("window.kcgx.store.state.prefs.map")
+    expected = MAP.default
+    expected["CLASS_D"].update(alpha=60, line="DASH")
+    expected["RIVER"]["show"] = False
+    assert final == expected
+
+
+def test_a_map_slider_in_hand_is_not_moved_by_another_tab(page, other):
+    config_tab(page, "map")
+    held = cell("COAST", "width", "input")
+    page.focus(held)
+    set_prefs(other, map={**MAP.default, "COAST": {**MAP.rows["COAST"], "width": 40}, "LAKE": {**MAP.rows["LAKE"], "width": 30}})
+    page.wait_for_function("window.kcgx.store.state.prefs.map.COAST.width === 40")
+    assert page.input_value(held) == "18"
+    assert page.input_value(cell("LAKE", "width", "input")) == "30", "a cell not in hand did not follow"
+    page.focus(cell("LAKE", "width", "input"))
+    assert page.input_value(held) == "40"
+    assert page.text_content(cell("COAST", "width", "[data-unit]")) == "4.0 PX"
+
+
+# -- the airport picker -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("width, height", [(1440, 900), (1280, 640), (390, 844)])
+def test_the_airport_sheet_is_a_fixed_size_centred_whatever_it_finds(page, width, height):
+    """Phase G decision 20: 840 px wide, min(80vh, 720px) high, whether it
+    has found nothing or forty; the results scroll inside it."""
+    page.set_viewport_size({"width": width, "height": height})
+    page.click("#open-airport")
+    page.wait_for_selector("#airport-sheet[open]")
+    inner_w, inner_h = page.evaluate("[document.documentElement.clientWidth, window.innerHeight]")
+    empty = box_of(page, "#airport-sheet")
+    assert abs(empty["width"] - min(840, inner_w - 32)) <= 1, empty
+    assert abs(empty["height"] - min(0.8 * inner_h, 720)) <= 1, empty
+    page.fill("#airport-query", "international")
+    page.wait_for_function("document.querySelectorAll('#airport-results .choice').length === 40")
+    full = box_of(page, "#airport-sheet")
+    assert full == empty, "the sheet changed size with its results"
+    assert abs(full["left"] - (inner_w - full["right"])) <= 1 and abs(full["top"] - (inner_h - full["bottom"])) <= 1
+    results = page.eval_on_selector("#airport-results", "e => [e.scrollHeight, e.clientHeight, e.getBoundingClientRect().bottom]")
+    assert results[0] > results[1], "forty results do not scroll inside their list"
+    assert results[2] <= full["bottom"] + 1
+    assert page.evaluate("document.getElementById('airport-sheet').scrollTop") == 0
+    assert box_of(page, "#airport-query")["top"] >= full["top"], "the search scrolled away"
 
 
 # -- errors with the teletype hidden ---------------------------------------------

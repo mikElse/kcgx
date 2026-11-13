@@ -69,6 +69,11 @@
 
   <section class="screen screen-freq" aria-label="Frequencies">
     <div class="ovl" aria-hidden="true"></div>
+    <!-- The master volume is not a pref (phase G decision 3); sheets.js mountVolume binds it. -->
+    <label class="field-row freq-volume"><span class="muted small">VOLUME</span>
+      <input id="volume" type="range" min="0" max="100" step="5" aria-label="Master volume">
+      <span class="num" id="volume-value">100%</span>
+    </label>
     <div class="freq-counts muted small" id="freq-counts"></div>
     <div class="stack" id="stack"></div>
     <div class="screen-title"><span class="title-text">FREQUENCIES</span></div>
@@ -110,50 +115,213 @@
 
 <!-- Every setting is one [data-pref] control, declared here with its range
      or its names; sheets.js binds them by kind and knows none by name. They
-     must agree with kcgx.prefs.SCHEMA, which tests/test_page_prefs.py checks. -->
+     must agree with kcgx.prefs.SCHEMA, and sit in the tab the plan puts them
+     in, which tests/test_page_prefs.py checks. A table (the map's layers)
+     declares its rows, each row's columns, and each column's range or names
+     on its headings; sheets.js makes a cell where a row has a column. -->
 <dialog class="sheet" id="config-sheet" aria-labelledby="config-title">
   <form method="dialog" class="sheet-head">
     <h2 id="config-title">CONFIG</h2>
     <button class="btn btn-small" value="close" aria-label="Close">CLOSE</button>
   </form>
+  <div class="tabs" role="tablist" aria-label="Config">
+    <button type="button" class="btn seg" role="tab" id="config-tab-general" aria-controls="config-general" aria-selected="true" tabindex="0">GENERAL</button>
+    <button type="button" class="btn seg" role="tab" id="config-tab-traffic" aria-controls="config-traffic" aria-selected="false" tabindex="-1">TRAFFIC</button>
+    <button type="button" class="btn seg" role="tab" id="config-tab-tracks" aria-controls="config-tracks" aria-selected="false" tabindex="-1">TRACKS</button>
+    <button type="button" class="btn seg" role="tab" id="config-tab-frequencies" aria-controls="config-frequencies" aria-selected="false" tabindex="-1">FREQUENCIES</button>
+  </div>
 
-  <h3 class="muted small">OUTPUT</h3>
-  <label class="field field-row"><span>MASTER VOLUME</span>
-    <input id="volume" type="range" min="0" max="100" step="5">
-    <span class="num" id="volume-value">100%</span>
-  </label>
+  <section class="tab-panel" role="tabpanel" id="config-general" aria-labelledby="config-tab-general">
+    <div class="group">
+      <h3 class="muted small">PAGE</h3>
+      <div class="field-row" role="group" aria-label="Boot animation"><span>BOOT ANIMATION</span>
+        <div class="segments" data-pref="boot_anim" data-kind="flag"></div></div>
+      <label class="field-row"><span>UI ZOOM</span>
+        <input type="range" data-pref="ui_zoom" min="50" max="200" step="5"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>FONT</span>
+        <select data-pref="font"><option>CLASSIC</option><option value="B612">B612 MONO</option><option value="SHARETECH">SHARE TECH MONO</option><option value="PLEX">IBM PLEX MONO</option><option value="JETBRAINS">JETBRAINS MONO</option><option>VT323</option><option>SYSTEM</option></select></label>
+      <label class="field-row"><span>FONT SIZE</span>
+        <input type="range" data-pref="font_px" min="10" max="20" step="1"><span class="num" data-unit="PX"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">CLOCKS</h3>
+      <div class="field-row" role="group" aria-label="24-hour local"><span>24-HOUR LOCAL</span>
+        <div class="segments" data-pref="clock_24h" data-kind="flag"></div></div>
+      <div class="field-row" role="group" aria-label="Seconds"><span>SECONDS</span>
+        <div class="segments" data-pref="clock_seconds" data-kind="flag"></div></div>
+      <div class="field-row" role="group" aria-label="Zone name"><span>ZONE NAME</span>
+        <div class="segments" data-pref="clock_zone" data-kind="flag"></div></div>
+    </div>
+    <div class="group">
+      <h3 class="muted small">LOOK</h3>
+      <label class="field-row"><span>THEME</span>
+        <select data-pref="palette"><option>WOPR</option><option>AMBER</option><option>MATRIX</option><option>MONO</option></select></label>
+      <div class="field-row" role="group" aria-label="Display"><span>DISPLAY</span>
+        <div class="segments" data-pref="display" data-kind="choice" data-values="OFF VECTOR CRT"></div></div>
+      <label class="field-row"><span>SCANLINE OPACITY</span>
+        <input type="range" data-pref="scan_opacity" data-only-when="display=CRT" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>SCANLINE SIZE</span>
+        <input type="range" data-pref="scan_size" data-only-when="display=CRT" min="2" max="8" step="1"><span class="num" data-unit="PX"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">GLOW</h3>
+      <label class="field-row"><span>GLOW: MAP</span>
+        <input type="range" data-pref="glow_map" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>GLOW: TRAFFIC</span>
+        <input type="range" data-pref="glow_traffic" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>GLOW: TEXT</span>
+        <input type="range" data-pref="glow_text" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">RENDERING</h3>
+      <div class="field-row" role="group" aria-label="Anti-aliasing"><span>ANTI-ALIASING</span>
+        <div class="segments" data-pref="aa" data-kind="choice" data-values="OFF ON SUPER"></div></div>
+      <label class="field-row"><span>BURN-IN</span>
+        <input type="range" data-pref="burn_in" min="0" max="100" step="1"><span class="num" data-unit="MS"></span></label>
+      <label class="field-row"><span>MAX FRAME RATE</span>
+        <input type="range" data-pref="fps_max" min="15" max="120" step="1"><span class="num" data-unit="FPS"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">RADAR</h3>
+      <label class="field-row"><span>RADAR POLL</span>
+        <input type="range" data-pref="poll_secs" min="15" max="120" step="5"><span class="num" data-unit="S"></span></label>
+      <div class="field-row" role="group" aria-label="Aircraft motion"><span>AIRCRAFT MOTION</span>
+        <div class="segments" data-pref="motion" data-kind="choice" data-values="GLIDE STEP"></div></div>
+      <div class="field-row" role="group" aria-label="View moves"><span>VIEW MOVES</span>
+        <div class="segments" data-pref="view_ease" data-kind="choice" data-values="OFF QUICK SMOOTH"></div></div>
+      <label class="field-row"><span>ZOOM SPEED</span>
+        <input type="range" data-pref="zoom_speed" min="25" max="400" step="1"><span class="num" data-unit="%"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">LAYOUT</h3>
+      <div class="field-row" role="group" aria-label="Status lamps"><span>STATUS LAMPS</span>
+        <div class="segments" data-pref="lamps" data-kind="flag"></div></div>
+      <div class="field-row" role="group" aria-label="Teletype"><span>TELETYPE</span>
+        <div class="segments" data-pref="teletype" data-kind="flag"></div></div>
+    </div>
+  </section>
 
-  <h3 class="muted small">LOOK</h3>
-  <label class="field-row"><span>THEME</span>
-    <select data-pref="palette"><option>WOPR</option><option>AMBER</option><option>MATRIX</option><option>MONO</option></select></label>
-  <div class="field-row" role="group" aria-label="Display"><span>DISPLAY</span>
-    <div class="segments" data-pref="display" data-kind="choice" data-values="OFF VECTOR CRT"></div></div>
-  <label class="field-row"><span>SCANLINE OPACITY</span>
-    <input type="range" data-pref="scan_opacity" data-only-when="display=CRT" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
-  <label class="field-row"><span>SCANLINE SIZE</span>
-    <input type="range" data-pref="scan_size" data-only-when="display=CRT" min="2" max="8" step="1"><span class="num" data-unit="PX"></span></label>
+  <section class="tab-panel" role="tabpanel" id="config-traffic" aria-labelledby="config-tab-traffic" hidden>
+    <div class="group">
+      <h3 class="muted small">RADAR</h3>
+      <label class="field-row"><span>RANGE</span>
+        <input type="range" data-pref="range_nm" min="10" max="250" step="10"><span class="num" data-unit="NM"></span></label>
+      <div class="field-row" role="group" aria-label="Flight tag"><span>FLIGHT TAG</span>
+        <div class="segments" data-pref="tag_fields" data-kind="subset" data-values="CALLSIGN TYPE SQWK ALT GS TRK DIST"></div></div>
+    </div>
+    <div class="group">
+      <h3 class="muted small">BOXES</h3>
+      <div class="field-row" role="group" aria-label="Label boxes"><span>LABEL BOXES</span>
+        <div class="segments" data-pref="box_items" data-kind="subset" data-values="AIRCRAFT HOME AIRPORTS NAVAIDS CITIES PEAKS STATES RINGS HUD"></div></div>
+      <label class="field-row"><span>BOX FILL</span>
+        <input type="range" data-pref="box_fill" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>BOX PADDING</span>
+        <input type="range" data-pref="box_pad" min="0" max="12" step="1"><span class="num" data-unit="PX"></span></label>
+      <label class="field-row"><span>BOX BORDER</span>
+        <input type="range" data-pref="box_border" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>BORDER WIDTH</span>
+        <input type="range" data-pref="box_width" min="1" max="5" step="1"><span class="num" data-unit="PX"></span></label>
+    </div>
+    <div class="group group-wide">
+      <div class="field-row field-table"><span>MAP LAYERS</span>
+        <div class="grid-scroll">
+        <table class="grid" data-pref="map" data-kind="table" data-columns="show alpha line width label"
+          data-rows="COAST:show,alpha,line,width
+            LAKE:show,alpha,line,width
+            RIVER:show,alpha,line,width
+            COUNTRY:show,alpha,line,width
+            STATE:show,alpha,line,width
+            AIRWAY:show,alpha,line,width
+            CLASS_B:show,alpha,line,width
+            CLASS_C:show,alpha,line,width
+            CLASS_D:show,alpha,line,width
+            RUNWAYS:show,alpha,width
+            RINGS:show,alpha,line,width,label
+            HOME:show,alpha,width,label
+            AIRPORTS:show,alpha,width,label
+            NAVAIDS:show,alpha,width,label
+            CITIES:show,alpha,width,label
+            PEAKS:show,alpha,width,label
+            STATE_NAMES:show,alpha,label">
+          <thead><tr><th scope="col">LAYER</th>
+            <th scope="col" data-column="show" data-kind="flag">SHOW</th>
+            <th scope="col" data-column="alpha" data-kind="number" data-min="0" data-max="100" data-step="1" data-unit="%">ALPHA</th>
+            <th scope="col" data-column="line" data-kind="choice" data-values="SOLID DASH DOT">LINE</th>
+            <th scope="col" data-column="width" data-kind="number" data-min="5" data-max="80" data-step="1" data-unit="PX" data-scale="10">WIDTH</th>
+            <th scope="col" data-column="label" data-kind="number" data-min="8" data-max="32" data-step="1" data-unit="PX">LABEL</th></tr></thead>
+          <tbody></tbody>
+        </table></div></div>
+    </div>
+    <div class="group">
+      <h3 class="muted small">LABELS</h3>
+      <label class="field-row"><span>LABEL MIN</span>
+        <input type="range" data-pref="label_min" min="6" max="20" step="1"><span class="num" data-unit="PX"></span></label>
+      <label class="field-row"><span>LABEL MAX</span>
+        <input type="range" data-pref="label_max" min="12" max="48" step="1"><span class="num" data-unit="PX"></span></label>
+      <label class="field-row"><span>TAG SIZE</span>
+        <input type="range" data-pref="tag_px" min="10" max="28" step="1"><span class="num" data-unit="PX"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">FOCUS</h3>
+      <label class="field-row"><span>FOLLOW RADIUS</span>
+        <input type="range" data-pref="follow_nm" min="1" max="50" step="1"><span class="num" data-unit="NM"></span></label>
+      <div class="field-row" role="group" aria-label="Data box"><span>DATA BOX</span>
+        <div class="segments" data-pref="info_box" data-kind="flag"></div></div>
+    </div>
+    <div class="group">
+      <h3 class="muted small">TAILS</h3>
+      <label class="field-row"><span>TAIL LENGTH</span>
+        <input type="range" data-pref="tail_secs" min="0" max="600" step="15"><span class="num" data-unit="S"></span></label>
+      <label class="field-row"><span>TAIL DEFAULT</span>
+        <input type="range" data-pref="tail_alpha" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>TAIL SLOW</span>
+        <input type="range" data-pref="tail_alpha_min" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>TAIL FAST</span>
+        <input type="range" data-pref="tail_alpha_max" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+      <label class="field-row"><span>SLOW BELOW</span>
+        <input type="range" data-pref="tail_gs_low" min="0" max="600" step="1"><span class="num" data-unit="KT"></span></label>
+      <label class="field-row"><span>FAST ABOVE</span>
+        <input type="range" data-pref="tail_gs_high" min="0" max="600" step="1"><span class="num" data-unit="KT"></span></label>
+    </div>
+    <div class="group">
+      <h3 class="muted small">PARKED</h3>
+      <div class="field-row" role="group" aria-label="Parked traffic"><span>PARKED TRAFFIC</span>
+        <div class="segments" data-pref="ground_mode" data-kind="choice" data-values="SHOW FADE HIDE"></div></div>
+      <label class="field-row"><span>BELOW SPEED</span>
+        <input type="range" data-pref="ground_gs" min="0" max="50" step="1"><span class="num" data-unit="KT"></span></label>
+      <label class="field-row"><span>BELOW ALTITUDE</span>
+        <input type="range" data-pref="ground_alt" min="0" max="5000" step="100"><span class="num" data-unit="FT"></span></label>
+      <label class="field-row"><span>AFTER</span>
+        <input type="range" data-pref="ground_min" min="0" max="30" step="1"><span class="num" data-unit="MIN"></span></label>
+      <label class="field-row"><span>FADE TO</span>
+        <input type="range" data-pref="ground_alpha" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+    </div>
+  </section>
 
-  <h3 class="muted small">LAYOUT</h3>
-  <div class="field-row" role="group" aria-label="Status lamps"><span>STATUS LAMPS</span>
-    <div class="segments" data-pref="lamps" data-kind="flag"></div></div>
-  <div class="field-row" role="group" aria-label="Teletype"><span>TELETYPE</span>
-    <div class="segments" data-pref="teletype" data-kind="flag"></div></div>
+  <section class="tab-panel" role="tabpanel" id="config-tracks" aria-labelledby="config-tab-tracks" hidden>
+    <div class="group">
+      <h3 class="muted small">TABLE</h3>
+      <div class="field-row" role="group" aria-label="Columns"><span>COLUMNS</span>
+        <div class="segments" data-pref="track_cols" data-kind="subset" data-values="CALLSIGN TYPE REG ALT VS GS TRK DIST BRG SQWK HEX DESC OPER CAT AGE LAT LON"></div></div>
+      <label class="field-row"><span>SORT BY</span>
+        <select data-pref="track_sort"><option>CALLSIGN</option><option>TYPE</option><option>REG</option><option>ALT</option><option>VS</option><option>GS</option><option>TRK</option><option>DIST</option><option>BRG</option><option>SQWK</option><option>HEX</option><option>DESC</option><option>OPER</option><option>CAT</option><option>AGE</option><option>LAT</option><option>LON</option></select></label>
+      <div class="field-row" role="group" aria-label="Descending"><span>DESCENDING</span>
+        <div class="segments" data-pref="track_desc" data-kind="flag"></div></div>
+    </div>
+    <div class="group">
+      <h3 class="muted small">RADAR</h3>
+      <label class="field-row"><span>DIMMEST (RADAR)</span>
+        <input type="range" data-pref="sort_floor" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
+    </div>
+  </section>
 
-  <h3 class="muted small">RADAR</h3>
-  <label class="field-row"><span>RANGE</span>
-    <input type="range" data-pref="range_nm" min="10" max="250" step="10"><span class="num" data-unit="NM"></span></label>
-  <div class="field-row" role="group" aria-label="Flight tag"><span>FLIGHT TAG</span>
-    <div class="segments" data-pref="tag_fields" data-kind="subset" data-values="CALLSIGN TYPE SQWK ALT GS TRK DIST"></div></div>
-  <div class="field-row" role="group" aria-label="Label boxes"><span>LABEL BOXES</span>
-    <div class="segments" data-pref="box_items" data-kind="subset" data-values="AIRCRAFT HOME AIRPORTS NAVAIDS CITIES PEAKS STATES RINGS HUD"></div></div>
-  <label class="field-row"><span>BOX FILL</span>
-    <input type="range" data-pref="box_fill" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
-  <label class="field-row"><span>BOX PADDING</span>
-    <input type="range" data-pref="box_pad" min="0" max="12" step="1"><span class="num" data-unit="PX"></span></label>
-  <label class="field-row"><span>BOX BORDER</span>
-    <input type="range" data-pref="box_border" min="0" max="100" step="1"><span class="num" data-unit="%"></span></label>
-  <label class="field-row"><span>BORDER WIDTH</span>
-    <input type="range" data-pref="box_width" min="1" max="5" step="1"><span class="num" data-unit="PX"></span></label>
+  <section class="tab-panel" role="tabpanel" id="config-frequencies" aria-labelledby="config-tab-frequencies" hidden>
+    <div class="group">
+      <h3 class="muted small">NAMES</h3>
+      <div class="field-row" role="group" aria-label="Drop the airport from names"><span>DROP THE AIRPORT FROM NAMES</span>
+        <div class="segments" data-pref="short_names" data-kind="flag"></div></div>
+    </div>
+  </section>
 </dialog>
 
 <dialog class="sheet sheet-small" id="shutdown-sheet" aria-labelledby="shutdown-title">

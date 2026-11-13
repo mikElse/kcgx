@@ -185,6 +185,9 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 
 /* frequencies */
 .freq-counts { display: flex; justify-content: space-between; gap: 8px; padding: var(--pad-y) var(--pad-x) 4px; }
+/* The master volume, over the counts, until phase G Task 6 gives the pane its header. */
+.field-row.freq-volume { margin: 0; padding: var(--pad-y) var(--pad-x) 0; flex-wrap: nowrap; }
+.freq-volume > span:first-child { min-width: 0; }
 .stack { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; }
 .stack-empty { margin: auto; text-align: center; color: var(--muted); letter-spacing: 0.16em; }
 
@@ -279,6 +282,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .field input[type="search"]:focus { outline: none; border-color: var(--pink); }
 .field-row, .field.field-row { display: flex; flex-direction: row; align-items: center; gap: 4px 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .field-row > span:first-child { min-width: 150px; }
+label.field-row { flex-wrap: nowrap; }
 .field-row .num { min-width: 52px; text-align: right; }
 /* The sliders and the dropdown are drawn here and not by the browser, so
    that they are the same in each: WebKit's own slider has a track that does
@@ -306,12 +310,54 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .segments { display: flex; flex-wrap: wrap; gap: 4px; }
 .seg { min-height: 26px; padding: 0 8px; font-size: 12px; }
 
-/* Config docks to the right edge, the window's height, and has no backdrop:
-   what it sets (scanlines, boxes, the range) is seen changing behind it.
-   100%, not 100vw and 100vh: the sheet is fixed, so 100% is the window
-   without its scrollbar and without a phone's address bar. */
-#config-sheet { margin: 0 0 0 auto; width: min(420px, 100%); max-width: none; height: 100%; max-height: none; }
-#config-sheet::backdrop { background: transparent; }
+/* Config is the window less a 16 px margin, centred, over a nearly black
+   backdrop (phase G decision 2). 100%, not 100vw and 100vh: the sheet is
+   fixed, so 100% is the window without its scrollbar and without a phone's
+   address bar. The head and the tab bar stay; the panel under them scrolls. */
+#config-sheet { inset: 0; margin: auto; width: calc(100% - 32px); height: calc(100% - 32px);
+  max-width: none; max-height: none; overflow: hidden; }
+#config-sheet[open] { display: flex; flex-direction: column; }
+#config-sheet::backdrop { background: rgb(0 0 0 / 0.85); }
+#config-sheet .sheet-head, .tabs { flex: 0 0 auto; }
+/* One line of tabs: on a phone they close up, and scroll across if they must. */
+.tabs { display: flex; gap: 4px; padding: 2px 2px 8px; overflow-x: auto; border-bottom: 1px solid var(--rule); }
+.tabs .seg { flex: 0 0 auto; }
+@media (max-width: 480px) {
+  .tabs .seg { padding: 0 6px; letter-spacing: 0.04em; }
+  .field-row > span:first-child { min-width: 120px; }
+}
+.btn[aria-selected="true"] { border-color: var(--pink); color: var(--pink); }
+/* A panel is groups of rows side by side, as many as fit at 440 px or more;
+   a wide group (the map's grid) takes the whole width. */
+.tab-panel { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 4px 4px 2px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 0 28px; align-content: start; }
+.tab-panel[hidden] { display: none; }
+.group { min-width: 0; }
+.group-wide { grid-column: 1 / -1; }
+/* The map's grid: a row per layer, a column per style, a cell only where the
+   layer has that style. It scrolls across inside itself on a narrow window. */
+.field-row.field-table { flex-direction: column; align-items: stretch; }
+.field-table > span:first-child { color: var(--muted); font-size: 12px; letter-spacing: 0.14em; margin: 12px 0 0; }
+/* inline-size containment: the grid's least width stays inside, and does not widen the panel. */
+.grid-scroll { overflow-x: auto; padding: 2px; contain: inline-size; }
+.grid { border-collapse: collapse; min-width: 860px; width: 100%; }
+.grid th { padding: 3px 8px 3px 0; font-weight: 400; text-align: left; white-space: nowrap; }
+.grid thead th { color: var(--muted); font-size: 12px; letter-spacing: 0.14em; }
+.grid tbody th { color: var(--text); }
+.grid td { padding: 3px 12px 3px 0; border-top: 1px solid var(--rule); white-space: nowrap; }
+.grid tbody th { border-top: 1px solid var(--rule); }
+.grid td[data-column] { display: table-cell; }
+.grid td .segments { flex-wrap: nowrap; }
+.grid td input[type="range"] { width: 110px; vertical-align: middle; }
+.grid td .num { display: inline-block; min-width: 64px; margin-left: 6px; text-align: right; vertical-align: middle; }
+
+/* The airport picker is one size whatever it finds (phase G decision 20):
+   the results scroll inside it, under the search. */
+#airport-sheet { width: min(840px, calc(100% - 32px)); height: min(80vh, 720px); max-height: none; overflow: hidden; }
+#airport-sheet[open] { display: flex; flex-direction: column; }
+#airport-sheet .sheet-head, #airport-sheet .field { flex: 0 0 auto; }
+#airport-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -3px; padding: 3px; }
+#airport-results > * { flex: 0 0 auto; } /* a result is as tall as its words; the list scrolls */
 .choices { display: flex; flex-direction: column; gap: 4px; }
 .choice { display: flex; gap: 14px; align-items: baseline; width: 100%; min-height: 32px; padding: 4px 8px; text-align: left;
   background: transparent; border: 1px solid var(--rule); cursor: pointer; }
