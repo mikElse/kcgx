@@ -1294,11 +1294,15 @@ def test_a_map_slider_in_hand_is_not_moved_by_another_tab(page, other):
 # -- the airport picker -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("width, height", [(1440, 900), (1280, 640), (390, 844)])
-def test_the_airport_sheet_is_a_fixed_size_centred_whatever_it_finds(page, width, height):
+@pytest.mark.parametrize("font", [None, "18px"])
+@pytest.mark.parametrize("width, height", SIZES)
+def test_the_airport_sheet_is_a_fixed_size_centred_whatever_it_finds(page, width, height, font):
     """Phase G decision 20: 840 px wide, min(80vh, 720px) high, whether it
-    has found nothing or forty; the results scroll inside it."""
+    has found nothing or forty; the results scroll inside it. At any text
+    size: the browser's own dialog width cap is in em, and must not apply."""
     page.set_viewport_size({"width": width, "height": height})
+    if font:
+        page.evaluate(f"document.getElementById('airport-sheet').style.fontSize = '{font}'")
     page.click("#open-airport")
     page.wait_for_selector("#airport-sheet[open]")
     inner_w, inner_h = page.evaluate("[document.documentElement.clientWidth, window.innerHeight]")
@@ -2784,3 +2788,12 @@ def test_a_link_with_a_query_that_cannot_be_decoded_still_opens_the_search(brows
     assert page.input_value("#airport-query") == "100%"
     assert errors == [], errors
     page.close()
+
+
+def test_the_volume_label_takes_only_its_own_width(page):
+    """The frequencies pane's VOLUME row is not a config row: its label is
+    as wide as its text, so the slider has the rest of the pane."""
+    page.set_viewport_size({"width": 1440, "height": 900})
+    label = box_of(page, ".freq-volume > span:first-child")
+    natural = page.eval_on_selector(".freq-volume > span:first-child", "e => { const r = document.createRange(); r.selectNodeContents(e); return r.getBoundingClientRect().width; }")
+    assert label["width"] <= natural + 1, (label, natural)

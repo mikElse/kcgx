@@ -187,7 +187,7 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .freq-counts { display: flex; justify-content: space-between; gap: 8px; padding: var(--pad-y) var(--pad-x) 4px; }
 /* The master volume, over the counts, until phase G Task 6 gives the pane its header. */
 .field-row.freq-volume { margin: 0; padding: var(--pad-y) var(--pad-x) 0; flex-wrap: nowrap; }
-.freq-volume > span:first-child { min-width: 0; }
+.field-row.freq-volume > span:first-child { min-width: 0; }
 .stack { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; }
 .stack-empty { margin: auto; text-align: center; color: var(--muted); letter-spacing: 0.16em; }
 
@@ -353,7 +353,7 @@ label.field-row { flex-wrap: nowrap; }
 
 /* The airport picker is one size whatever it finds (phase G decision 20):
    the results scroll inside it, under the search. */
-#airport-sheet { width: min(840px, calc(100% - 32px)); height: min(80vh, 720px); max-height: none; overflow: hidden; }
+#airport-sheet { width: min(840px, calc(100% - 32px)); height: min(80vh, 720px); max-width: none; max-height: none; overflow: hidden; }
 #airport-sheet[open] { display: flex; flex-direction: column; }
 #airport-sheet .sheet-head, #airport-sheet .field { flex: 0 0 auto; }
 #airport-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -3px; padding: 3px; }
