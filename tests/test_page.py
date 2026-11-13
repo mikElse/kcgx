@@ -1480,12 +1480,17 @@ def nearest(box, x, y):
 
 
 def test_ring_numbers_sit_on_the_north_east_diagonal_just_outside_their_rings(page):
+    """All but the 10's: it would lie on the airport's name, and a ring
+    number gives way to the name, bare or boxed (the owner's decision in
+    phase G's Task 10 review)."""
     wait_for_traffic(page)
     debug = radar_drawn(page)
     ratio = page.evaluate("devicePixelRatio")
     home = debug["home"]
-    assert [ring["text"] for ring in debug["rings"] if ring["label"]] == ["10", "20", "30", "40"]
+    assert [ring["text"] for ring in debug["rings"] if ring["label"]] == ["20", "30", "40"]
     for ring in debug["rings"]:
+        if not ring["label"]:
+            continue
         d = ring["r"] * 0.5**0.5
         label = ring["label"]
         assert label["x"] == pytest.approx(home["x"] + d + 4 * ratio)
@@ -1493,10 +1498,13 @@ def test_ring_numbers_sit_on_the_north_east_diagonal_just_outside_their_rings(pa
         assert label["w"] > 0 and label["h"] == 12 * ratio
 
 
-@pytest.mark.parametrize("range_nm, dim, unnumbered", [(210, [50, 100, 150, 200], [200]), (120, [50, 100], [])])
+@pytest.mark.parametrize(
+    "range_nm, dim, unnumbered", [(210, [50, 100, 150, 200], [50, 200]), (120, [50, 100], [50])],
+)
 def test_a_ring_number_that_would_touch_the_ranges_is_left_off(page, range_nm, dim, unnumbered):
     """Ten miles past a multiple of a 50 nm step, the last dim ring is a few
-    pixels inside the range's: its number gives way, the ring stays."""
+    pixels inside the range's: its number gives way, the ring stays. (The
+    50's gives way to the airport's name.)"""
     wait_for_traffic(page)
     set_prefs(page, range_nm=range_nm)
     debug = radar_drawn(page)
@@ -1552,7 +1560,8 @@ def test_a_ring_number_that_would_sit_on_the_home_ring_is_left_off(page):
     by_nm = {ring["nm"]: ring for ring in debug["rings"]}
     assert by_nm[0.5]["r"] < home["r"], "the test wants a ring inside the home ring"
     assert by_nm[0.5]["label"] is None
-    assert [nm for nm in (1, 1.5, 2, 2.5) if by_nm[nm]["label"]] == [1, 1.5, 2, 2.5]
+    # (the 1's is left off for the airport's name)
+    assert [nm for nm in (1, 1.5, 2, 2.5) if by_nm[nm]["label"]] == [1.5, 2, 2.5]
     for ring in debug["rings"]:
         if ring["label"]:
             assert nearest(ring["label"], home["x"], home["y"]) >= home["r"] + 4 * ratio, ring
@@ -2074,18 +2083,19 @@ def test_a_box_on_the_still_layer_blacks_out_the_ring_it_lies_across(page):
 
 
 @pytest.mark.parametrize("items", [["HOME"], ["RINGS"], ["HOME", "RINGS"]])
-def test_a_ring_number_on_the_airports_name_is_left_off_once_either_is_boxed(page, items):
-    """Bare, the airport's name is written across the ring number nearest
-    it: light on light, and both read. A box under either would hide the
-    other, so the number, placed after the name, is the one to give way."""
+def test_a_ring_number_on_the_airports_name_is_left_off_bare_or_boxed(page, items):
+    """The number, placed after the name, is the one to give way: boxed, as
+    a box under either would hide the other, and bare too (phase F let the
+    two cross; the owner's decision in phase G's Task 10 review)."""
     wait_for_traffic(page)
     hold_traffic(page)
     plain = draw(page, **glow(0), display="OFF")
     assert plain["placed"][0]["key"] == "home"
     bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
-    assert [text for text, label in bare.items() if overlap(label, plain["placed"][0])] == ["10"]
+    assert [text for text, label in bare.items() if not label] == ["10"]
+    assert not [text for text, label in bare.items() if label and overlap(label, plain["placed"][0])]
     picture(page)
-    lit = {text: canvas_block(page, label) for text, label in bare.items()}
+    lit = {text: canvas_block(page, label) for text, label in bare.items() if label}
     assert all(ink(block) > 10 for block in lit.values())
 
     debug = draw(page, box_items=items, box_fill=100, box_border=100)
@@ -2121,23 +2131,29 @@ def test_a_ring_number_takes_its_other_place_when_a_boxed_name_has_its_first(pag
     page.wait_for_function("window.kcgx.radar.debug().hovered === null")
     plain = radar_drawn(page)
     home = plain["home"]
-    bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
-    assert overlap(bare["10"], plain["placed"][0]) and bare["10"]["y"] < home["y"]
-
-    debug = draw(page, box_items=["HOME"], box_fill=100, box_border=100)
-    name = debug["placed"][0]
-    numbers = {ring["text"]: ring["label"] for ring in debug["rings"]}
-    assert all(numbers.values()), numbers
-    assert not [text for text, label in numbers.items() if overlap(label, name)]
-    # South east of the airport now, towards the middle, and still beside its ring.
-    ten = numbers["10"]
     ratio = page.evaluate("devicePixelRatio")
-    ring = next(ring for ring in debug["rings"] if ring["text"] == "10")
-    assert ten["x"] > home["x"] and ten["y"] > home["y"]
-    assert ring["r"] <= nearest(ten, home["x"], home["y"]) <= ring["r"] + 8 * ratio
-    picture(page)
-    assert ink(canvas_block(page, ten)) > 10
-    assert all(label == bare[text] for text, label in numbers.items() if text != "10")
+    # Its first place, on the north east diagonal, is on the airport's name:
+    # bare too, the number takes its other (the owner's decision in phase
+    # G's Task 10 review; phase F let the two cross).
+    ring = next(ring for ring in plain["rings"] if ring["text"] == "10")
+    d = ring["r"] * 0.5**0.5
+    bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
+    w, h = bare["10"]["w"], bare["10"]["h"]
+    first = {"x": home["x"] + d + 4 * ratio, "y": home["y"] - d - 4 * ratio - h, "w": w, "h": h}
+    assert overlap(first, plain["placed"][0]), "the test wants the first place on the name"
+
+    for debug in (plain, draw(page, box_items=["HOME"], box_fill=100, box_border=100)):
+        name = debug["placed"][0]
+        numbers = {ring["text"]: ring["label"] for ring in debug["rings"]}
+        assert all(numbers.values()), numbers
+        assert not [text for text, label in numbers.items() if overlap(label, name)]
+        # South east of the airport, towards the middle, and still beside its ring.
+        ten = numbers["10"]
+        assert ten["x"] > home["x"] and ten["y"] > home["y"]
+        assert ring["r"] <= nearest(ten, home["x"], home["y"]) <= ring["r"] + 8 * ratio
+        picture(page)
+        assert ink(canvas_block(page, ten)) > 10
+        assert numbers == bare
 
 
 @pytest.mark.parametrize("range_nm", [120, 250])
@@ -2149,14 +2165,15 @@ def test_a_boxed_place_keeps_off_a_bare_ring_number(page, range_nm):
     hold_traffic(page)
     places = ["AIRPORTS", "NAVAIDS", "CITIES", "PEAKS"]
     plain = draw(page, **glow(0), display="OFF", range_nm=range_nm)
-    numbers = [ring["label"] for ring in plain["rings"]]
-    assert all(numbers)
+    # (one, the 50's, is left off for the airport's name)
+    numbers = [ring["label"] for ring in plain["rings"] if ring["label"]]
+    assert len(numbers) >= 2
     across = {p["key"] for p in plain["placed"][1:] for n in numbers if overlap(p, n)}
     assert across, "the test wants a place's name on a ring number"
     # First with boxes that cannot be seen: the places as they will be, the
     # numbers as nothing but themselves and the map.
     unseen = draw(page, box_items=places, box_fill=0, box_border=0)
-    assert [ring["label"] for ring in unseen["rings"]] == numbers
+    assert [ring["label"] for ring in unseen["rings"] if ring["label"]] == numbers
     placed = unseen["placed"][1:]
     assert len(placed) >= 10 and all(p["boxed"] for p in placed)
     assert not [(p["key"], n) for p in placed for n in numbers if overlap(p, n)]

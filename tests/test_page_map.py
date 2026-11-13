@@ -19,22 +19,53 @@ pytestmark = pytest.mark.browser
 ROOT = Path(__file__).resolve().parent.parent
 FT_PER_NM = 6076.12
 
-# still.js as it was before Task 10 (the last commit of phase G's Phase 0),
-# with its glow moved to the map's own number as 4d moves it: the picture
-# the default `map` table must reproduce.
+# The static layer as it was before Task 10 (the last commit of phase G's
+# Phase 0), with its glow moved to the map's own number as 4d moves it and
+# its ring numbers kept off the airport's name, bare too, as the owner has
+# them since: the picture the default `map` table must reproduce. still.js is served with
+# the draw.js and view.js of the same commit, under names of their own
+# (`draw.before.js`, `view.before.js`) so that the rest of today's page
+# keeps today's: a later change to either (Task 12 edits view.js) moves
+# neither picture's reference. What is still shared is the rest of the
+# page: theme.js (the palette and glowBlur), focus.js, which view.js
+# imports, and radar/index.js, which calls the old still.js's init,
+# loadMap and drawStatic. The test must be re-pinned to a later commit, or
+# retired, when
+# - a task means the default table to draw other pixels than these (5a,
+#   the map's glow by colour, does: retire it there, or re-pin to 5a's
+#   commit and compare later work with that);
+# - index.js changes what it asks of still.js, so the old one no longer
+#   draws (the test fails on a page error or an empty map, not a picture);
+# - draw.js or view.js stop being what still.js imports.
 BEFORE = "2bc8561"
-STILL = "src/kcgx/web/static/js/radar/still.js"
+RADAR_JS = "src/kcgx/web/static/js/radar"
 
 
-def still_before():
+def before(name):
+    """`name` (still, draw or view) as it was at BEFORE."""
     try:
-        source = subprocess.run(
-            ["git", "show", f"{BEFORE}:{STILL}"], cwd=ROOT, capture_output=True, text=True, check=True,
+        return subprocess.run(
+            ["git", "show", f"{BEFORE}:{RADAR_JS}/{name}.js"], cwd=ROOT, capture_output=True, text=True, check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         pytest.skip(f"no git history to take the picture from before Task 10: {error}")
-    assert "glowBlur() * ratio" in source
-    return source.replace("glowBlur() * ratio", 'glowBlur("map") * ratio')
+
+
+def modules_before():
+    """The old still.js, draw.js and view.js, by the path each is served at."""
+    still = before("still")
+    for name in ("draw", "view"):
+        line = f'from "./{name}.js";'
+        assert still.count(line) == 1, name
+        still = still.replace(line, f'from "./{name}.before.js";')
+    assert "glowBlur() * ratio" in still
+    still = still.replace("glowBlur() * ratio", 'glowBlur("map") * ratio')
+    # And a ring number gives way to the airport's name, bare too (the
+    # owner's decision in phase G's Task 10 review), as today's does.
+    keep_off = 'const keepOff = name && (radar.boxed("HOME") || radar.boxed("RINGS")) ? name.label : null;'
+    assert still.count(keep_off) == 1
+    still = still.replace(keep_off, "const keepOff = name ? name.label : null;")
+    return {"still.js": still, "draw.before.js": before("draw"), "view.before.js": before("view")}
 
 
 # -- helpers --------------------------------------------------------------------
@@ -57,20 +88,30 @@ HIDDEN = {row: {"show": False} for row in DEFAULTS["map"]}
 # The radar's shared state, for a test to look at the static layer itself.
 GRAB = "() => { if (!window.still) window.kcgx.radar.hook((radar) => { window.still = radar; }); }"
 
-# Wait until the static layer has drawn itself on in full with the fonts
-# loaded, draw it once more, and return it as a PNG data URL.
-STILL_PICTURE = """async () => {
+# Wait until the static layer has drawn itself on in full (the coast, the
+# lakes, rivers, borders and states draw on over DRAW_ON_MS, 2 s, from the
+# map's arrival) with the fonts loaded. Its pixels are read only after
+# this: read during the draw-on, they are of a part-drawn map.
+DRAWN_ON = """async () => {
     const radar = window.still;
     const frame = () => new Promise(requestAnimationFrame);
     await document.fonts.ready;
     for (let tries = 0; tries < 600; tries += 1) {
-        if (radar.map && performance.now() - radar.drawOnFrom > 2100 && !radar.staticDirty) break;
+        if (radar.map && performance.now() - radar.drawOnFrom > 2100 && !radar.staticDirty) return;
         await frame();
     }
+    throw new Error("the static layer never finished drawing on");
+}"""
+
+# As DRAWN_ON, then draw it once more and return it as a PNG data URL.
+STILL_PICTURE = f"""async () => {{
+    const radar = window.still;
+    const frame = () => new Promise(requestAnimationFrame);
+    await ({DRAWN_ON})();
     radar.staticDirty = true;
     while (radar.staticDirty) await frame();
     return radar.still.toDataURL();
-}"""
+}}"""
 
 # The share of pixels of two pictures (data URLs of the same size) that
 # differ by more than `over` in any channel.
@@ -100,6 +141,14 @@ DIFFER = """async ([a, b, over]) => {
 def still_picture(page):
     page.evaluate(GRAB)
     return page.evaluate(STILL_PICTURE)
+
+
+def drawn_on(page):
+    """Let the radar draw what was just set, then wait out the draw-on."""
+    page.evaluate(GRAB)
+    frames(page)
+    radar_drawn(page)
+    page.evaluate(DRAWN_ON)
 
 
 def differ(page, a, b, over=0):
@@ -163,14 +212,22 @@ def test_at_the_default_table_the_static_layer_is_as_it_was(page, browser, serve
     context = browser.new_context(viewport={"width": 1440, "height": 900})
     try:
         before = context.new_page()
-        source = still_before()
-        before.route("**/static/js/radar/still.js", lambda route: route.fulfill(
-            status=200, content_type="text/javascript", body=source,
-        ))
+        def serve(source):
+            return lambda route: route.fulfill(status=200, content_type="text/javascript", body=source)
+
+        for path, source in modules_before().items():
+            before.route(f"**/static/js/radar/{path}", serve(source))
+        errors = []
+        before.on("pageerror", lambda error: errors.append(str(error)))
         before.goto(server + "/")
         before.wait_for_selector(".feed.expanded")
         wait_for_traffic(before)
         then = still_picture(before)
+        served = before.evaluate(
+            "() => performance.getEntriesByType('resource').map((e) => e.name.split('/').pop())"
+        )
+        assert {"draw.before.js", "view.before.js"} <= set(served), "the old still.js is drawn with its own modules"
+        assert errors == [], errors
     finally:
         context.close()
     result = differ(page, now, then, over=2)
@@ -207,7 +264,7 @@ def test_with_every_row_hidden_the_static_layer_is_empty_and_coast_alone_draws(p
     assert debug["layers"]["coast"] == 0
     assert debug["placed"] == [] and debug["rings"] == []
     set_map(page, **{**HIDDEN, "COAST": {"show": True}})
-    frames(page)
+    drawn_on(page)
     debug = radar_drawn(page)
     assert debug["layers"]["coast"] > 0
     assert page.evaluate(INKED) > 1000
@@ -259,15 +316,13 @@ def test_a_lighter_layer_draws_brighter(page):
     page.evaluate(GRAB)
     lone = {**HIDDEN, "COAST": {"show": True, "alpha": 100}}
     set_map(page, **lone)
-    frames(page)
-    radar_drawn(page)
+    drawn_on(page)  # the coast draws on: the sums are of the whole of it
     total = """() => { const c = window.still.still;
         const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
         let n = 0; for (let i = 3; i < d.length; i += 4) n += d[i]; return n; }"""
     bright = page.evaluate(total)
     set_map(page, **{**lone, "COAST": {"show": True, "alpha": 30}})
-    frames(page)
-    radar_drawn(page)
+    drawn_on(page)
     assert 0 < page.evaluate(total) < 0.5 * bright
 
 
@@ -367,10 +422,21 @@ def test_every_still_labels_size_follows_the_zoom(page):
 # The wheel's quarter mile: test_page.py's test_the_wheel_zooms_in_to_a_quarter_mile_and_no_further.
 
 
-def test_at_a_quarter_mile_the_rings_are_a_tenth_apart(page):
+def test_at_a_quarter_mile_the_rings_are_a_twentieth_apart(page):
+    """At 0.1 nm apart only two and a half rings would lie between the
+    airport and the nearer edge; at 0.05, five do."""
     wait_for_traffic(page)
     debug = set_view(page, 0.25)
     shown = [ring["text"] for ring in debug["rings"]]
+    assert shown[:2] == ["0.05", "0.1"]
+    within = [ring for ring in debug["rings"] if ring["nm"] <= 0.25 + 1e-9]
+    assert 3 <= len(within) <= 5, shown
+    assert [ring["nm"] for ring in within] == pytest.approx([0.05 * n for n in range(1, len(within) + 1)])
+
+
+def test_at_half_a_mile_the_rings_are_a_tenth_apart(page):
+    wait_for_traffic(page)
+    shown = [ring["text"] for ring in set_view(page, 0.5)["rings"]]
     assert shown[:2] == ["0.1", "0.2"]
 
 
@@ -402,10 +468,12 @@ ALONG_AN_AIRWAY = """() => {
 }"""
 
 
-@pytest.mark.parametrize("nm", [40, 0.5])
+@pytest.mark.parametrize("nm", [40, 0.5, 0.25])
 def test_an_airway_is_dashed_far_out_and_up_close(page, nm):
     """Up close an airway runs many thousands of px off the screen, and a
-    path that long was drawn solid: only what reaches the screen is drawn."""
+    path that long was drawn solid: only what reaches the screen is drawn.
+    At 0.25 nm a single segment of a piece runs tens of thousands of px, so
+    each segment is cut to the screen, not only each piece left out."""
     wait_for_traffic(page)
     page.evaluate(GRAB)
     set_prefs(page, glow_map=0)
@@ -414,6 +482,67 @@ def test_an_airway_is_dashed_far_out_and_up_close(page, nm):
     lit, total = page.evaluate(ALONG_AN_AIRWAY)
     assert total > 200, "the test wants an airway across the screen"
     assert 0.25 < lit / total < 0.75, (lit, total)
+
+
+# -- the rings' line -----------------------------------------------------------
+
+
+def test_the_rings_line_is_drawn(page):
+    """RINGS.line dashes the rings; SOLID draws them as they were drawn."""
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    set_prefs(page, glow_map=0)  # a glow inks about the gaps as well
+    lone = {**HIDDEN, "RINGS": {"show": True}}
+    set_map(page, **lone)
+    solid = still_picture(page)
+    solid_inked = page.evaluate(INKED)
+    set_map(page, **{**lone, "RINGS": {"show": True, "line": "DASH"}})
+    assert styles(page)["RINGS"]["dash"] == [5 * ratio, 5 * ratio]
+    dashed = still_picture(page)
+    assert differ(page, solid, dashed)["differ"] > 0.002
+    assert page.evaluate(INKED) < 0.8 * solid_inked, "a dashed ring inks less of itself"
+    set_map(page, **{**lone, "RINGS": {"show": True, "line": "SOLID"}})
+    assert still_picture(page) == solid
+
+
+# -- ring numbers and the home name (the owner's decision) --------------------
+
+
+def meets(a, b):
+    """draw.js's meets: two rectangles meet, touching is meeting."""
+    return not (
+        a["x"] + a["w"] < b["x"] or b["x"] + b["w"] < a["x"] or a["y"] + a["h"] < b["y"] or b["y"] + b["h"] < a["y"]
+    )
+
+
+def numbers_and_name(debug):
+    home = next(p for p in debug["placed"] if p["key"] == "home")
+    return {ring["text"]: ring["label"] for ring in debug["rings"]}, home
+
+
+def test_up_close_no_bare_ring_number_crosses_the_home_name(page):
+    """Phase F let a bare ring number and the airport's name cross; the
+    owner has the number give way to the name, boxed or not."""
+    wait_for_traffic(page)
+    assert not DEFAULTS["box_items"]
+    numbers, home = numbers_and_name(set_view(page, 0.5))
+    assert [text for text, label in numbers.items() if label], "the test wants ring numbers drawn"
+    assert not [text for text, label in numbers.items() if label and meets(label, home)]
+
+
+def test_at_the_ranges_view_only_a_ring_number_on_the_home_name_is_left_off(page):
+    """With the name hidden, the numbers go where they always went; shown,
+    those that would meet it are left off and the rest are just as they were."""
+    wait_for_traffic(page)
+    set_map(page, HOME={"show": False})
+    frames(page)
+    free = {ring["text"]: ring["label"] for ring in radar_drawn(page)["rings"]}
+    set_map(page, HOME={"show": True})
+    frames(page)
+    numbers, home = numbers_and_name(radar_drawn(page))
+    assert list(numbers) == list(free), "every ring is still drawn"
+    crossing = {text for text, label in free.items() if label and meets(label, home)}
+    assert numbers == {text: None if text in crossing else label for text, label in free.items()}
 
 
 def runways_drawn(page):

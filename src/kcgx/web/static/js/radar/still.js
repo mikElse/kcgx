@@ -26,7 +26,7 @@ import { recentre, scale, toScreen } from "./view.js";
 
 const NM_PER_RADIAN = 3440.065;
 const FT_PER_NM = 6076.12;
-const RING_STEPS_NM = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50];
+const RING_STEPS_NM = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50];
 const RINGS_IN_VIEW = 5; // at most this many between the centre and the nearer edge
 const SMALL_AIRPORTS_NM = 27; // small airports show from this view inwards
 const HOME_NM = 2.5; // the home ring's true size,
@@ -275,10 +275,10 @@ function ringsOn(radar, centre, s, width, height) {
 // diagonal while the airport is on the screen and, once it is panned off,
 // where the ring passes nearest the middle of the screen. Either gives way
 // to the other when it is off the screen, on the home ring or on `name`,
-// the airport's name, which is given only when it or the numbers are
-// boxed: bare, the two cross as they always have. null when neither has
-// room, or when the number would touch one of `numbered`, those already
-// placed. A boxed number needs the room for its box.
+// the airport's name, boxed or bare (the owner's decision in phase G: phase
+// F let a bare number and the name cross, as places still may). null when
+// neither has room, or when the number would touch one of `numbered`,
+// those already placed. A boxed number needs the room for its box.
 function ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, numbered, name, h) {
   const w = ctx.measureText(ring.text).width;
   const gap = RING_GAP_PX * ratio;
@@ -311,24 +311,78 @@ function ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, number
 
 // -- the layer -------------------------------------------------------------------
 
-// The pieces that come within `margin` px of the screen, and no others:
-// up close, the rest run many thousands of px off it, and a dashed path
-// that long is drawn solid (Skia gives up on dashing past a count) as well
-// as slowly. A piece's dashes start afresh with it, so leaving one out
-// moves no other's.
-function strokeLines(radar, ctx, lines, s, width, height, progress, margin) {
+// The part of the segment from (x0, y0) to (x0 + dx, y0 + dy) inside the
+// rectangle [left, right] x [top, bottom], as the share of the way along it
+// that the part starts and ends: [t0, t1], or null when none is inside
+// (Liang and Barsky).
+function clip(x0, y0, dx, dy, left, top, right, bottom) {
+  let t0 = 0;
+  let t1 = 1;
+  for (const [p, q] of [[-dx, x0 - left], [dx, right - x0], [-dy, y0 - top], [dy, bottom - y0]]) {
+    if (p === 0) {
+      if (q < 0) return null;
+    } else {
+      const r = q / p;
+      if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; }
+    }
+  }
+  return [t0, t1];
+}
+
+// The lines as they cross the screen and `margin` px about it, which no
+// line or glow reaches past: each segment is cut to that rectangle and the
+// rest left out. Up close one segment runs tens of thousands of px off the
+// screen, and a dashed path that long is drawn solid (Skia gives up on
+// dashing past a count) as well as slowly. A line that comes back onto the
+// screen starts a new subpath, whose dashes would start afresh: it starts
+// instead the dash's phase back along its way, outside the rectangle, so
+// its dashes fall where they would have along the whole line. `period` is
+// the dash pattern's length in px, 0 for a solid line.
+function strokeLines(radar, ctx, lines, s, width, height, progress, margin, period) {
   ctx.beginPath();
   const ox = width / 2 - radar.view.panX * s;
   const oy = height / 2 - radar.view.panY * s;
-  const [left, top] = [(-margin - ox) / s, (-margin - oy) / s];
-  const [right, bottom] = [(width + margin - ox) / s, (height + margin - oy) / s];
+  const [left, top, right, bottom] = [-margin, -margin, width + margin, height + margin];
+  const [boxLeft, boxTop] = [(left - ox) / s, (top - oy) / s];
+  const [boxRight, boxBottom] = [(right - ox) / s, (bottom - oy) / s];
   for (const line of lines) {
     const [x0, y0, x1, y1] = line.box;
-    if (x1 < left || x0 > right || y1 < top || y0 > bottom) continue;
+    if (x1 < boxLeft || x0 > boxRight || y1 < boxTop || y0 > boxBottom) continue;
     const n = line.length / 2;
     const upto = progress >= 1 ? n : Math.max(2, Math.ceil(n * progress));
-    ctx.moveTo(ox + line[0] * s, oy + line[1] * s);
-    for (let i = 1; i < upto; i += 1) ctx.lineTo(ox + line[2 * i] * s, oy + line[2 * i + 1] * s);
+    let along = 0; // px from the piece's start to this segment's
+    let pen = false; // whether the subpath runs up to this segment's start
+    let ax = ox + line[0] * s;
+    let ay = oy + line[1] * s;
+    for (let i = 1; i < upto; i += 1) {
+      const bx = ox + line[2 * i] * s;
+      const by = oy + line[2 * i + 1] * s;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const length = Math.hypot(dx, dy);
+      const inside = clip(ax, ay, dx, dy, left, top, right, bottom);
+      if (!inside) {
+        pen = false;
+      } else {
+        const [t0, t1] = inside;
+        if (!pen || t0 > 0) {
+          const sx = ax + dx * t0;
+          const sy = ay + dy * t0;
+          const back = period && length ? (along + t0 * length) % period : 0;
+          if (back) {
+            ctx.moveTo(sx - (dx / length) * back, sy - (dy / length) * back);
+            ctx.lineTo(sx, sy);
+          } else {
+            ctx.moveTo(sx, sy);
+          }
+        }
+        ctx.lineTo(ax + dx * t1, ay + dy * t1);
+        pen = t1 === 1;
+      }
+      along += length;
+      ax = bx;
+      ay = by;
+    }
   }
   ctx.stroke();
 }
@@ -374,7 +428,8 @@ export function drawStatic(radar, now) {
       ctx.setLineDash(style.dash);
       glow(ctx, c[colour], ratio);
       const margin = style.width + 3 * radar.blurMap; // past which neither a line nor its glow reaches the screen
-      strokeLines(radar, ctx, lines, s, width, height, DRAWN_ON.has(layer) ? progress : 1, margin);
+      const period = style.dash.reduce((a, b) => a + b, 0) * (style.dash.length % 2 ? 2 : 1);
+      strokeLines(radar, ctx, lines, s, width, height, DRAWN_ON.has(layer) ? progress : 1, margin, period);
       ctx.restore();
     }
   }
@@ -382,16 +437,16 @@ export function drawStatic(radar, now) {
   // Range rings, dim, and the range itself, bright. Each is numbered where
   // there is room; the range's number is placed first, so a dim ring's
   // that would touch it is the one left off. The airport's name has its
-  // place before any of them: a box under it, or under a number, is not to
-  // be drawn across the other.
+  // place before any of them, and no number is drawn across it.
   const { rings } = radar;
   const ringStyle = styles.RINGS;
   rings.splice(0, rings.length, ...(ringStyle.show ? ringsOn(radar, centre, s, width, height) : []));
   const name = styles.HOME.show ? homeName(radar, ctx, centre, s, ratio, prefs) : null;
-  const keepOff = name && (radar.boxed("HOME") || radar.boxed("RINGS")) ? name.label : null;
+  const keepOff = name ? name.label : null;
   ctx.save();
   ctx.strokeStyle = c.cyan;
   ctx.lineWidth = ringStyle.width;
+  ctx.setLineDash(ringStyle.dash);
   glow(ctx, c.cyan, ratio);
   for (const ring of rings) {
     ctx.globalAlpha = part(ringStyle, ring.bright ? 0.8 : 0.35);
