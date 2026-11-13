@@ -512,6 +512,32 @@ def test_changing_airport_redraws_everything(page):
     page.wait_for_function("document.getElementById('icao').textContent === 'KPDX'")
 
 
+def test_escape_closes_the_airport_sheet_at_once_whether_or_not_a_query_is_typed(page):
+    """Left to itself a browser does as it likes with Escape in a search
+    field: Chromium empties the field and leaves the sheet open, WebKit
+    closes the sheet. The page closes it, in each, and the next opening
+    starts empty."""
+    is_open = "document.getElementById('airport-sheet').open"
+    page.click("#open-airport")
+    page.wait_for_selector("#airport-sheet[open]")
+    page.keyboard.press("Escape")
+    assert not page.evaluate(is_open), "Escape with nothing typed left the sheet open"
+    page.click("#open-airport")
+    page.wait_for_selector("#airport-sheet[open]")
+    assert page.evaluate("document.activeElement.id") == "airport-query"
+    page.keyboard.type("seattle")
+    page.wait_for_selector("#airport-results .choice:has-text('KSEA')")
+    page.keyboard.press("Escape")
+    assert not page.evaluate(is_open), "Escape with a query typed left the sheet open"
+    # Where the focus goes is the browser's (the button in Chromium, the page in WebKit); it leaves the field.
+    page.wait_for_function("document.activeElement.id !== 'airport-query'")
+    assert page.evaluate("document.getElementById('icao').textContent") == "KPDX", "Escape chose an airport"
+    page.click("#open-airport")
+    page.wait_for_selector("#airport-sheet[open]")
+    assert page.input_value("#airport-query") == ""
+    assert page.locator("#airport-results .choice").count() == 0
+
+
 def test_prefs_apply_to_every_tab(page, other):
     theme = "#config-sheet select[data-pref=palette]"
     page.click("#open-config")
@@ -899,6 +925,22 @@ def test_the_scanline_sliders_are_disabled_unless_the_display_is_crt(page):
         for key in NUMBERS:
             off = page.is_disabled(f"#config-sheet input[data-pref={key}]")
             assert off == (key in scan and display != "CRT"), f"{key} with display {display}"
+
+
+def test_a_slider_that_is_off_does_not_offer_itself_to_the_pointer(page):
+    """The page draws its own sliders, with a pointer over them. One that is
+    disabled must still say so: the rule that draws it must not outrank the
+    rule for a control that is off."""
+    page.click("#open-config")
+    scan = ["scan_opacity", "scan_size"]
+    for display in ("VECTOR", "CRT"):
+        page.click(f"#config-sheet [data-pref=display] button:text-is('{display}')")
+        pref_is(page, "display", display)
+        for key in NUMBERS:
+            cursor = page.eval_on_selector(f"#config-sheet input[data-pref={key}]", "e => getComputedStyle(e).cursor")
+            off = key in scan and display != "CRT"
+            assert cursor == ("not-allowed" if off else "pointer"), f"{key} with display {display}"
+    assert page.eval_on_selector("#volume", "e => getComputedStyle(e).cursor") == "pointer"
 
 
 def scan_properties(page):
@@ -2033,14 +2075,14 @@ def test_the_traffics_glow_is_a_shadow_for_each_colour_not_one_for_each_stroke(p
         hold_traffic(page, *fleet(count, step, a1={"sq": "7700"}))
     picture(page)  # the map has drawn itself on; from here only the traffic is drawn each frame
     shadowed = page.evaluate(SHADOWED)
-    assert 1 <= sum(shadowed.values()) <= 2, f"cyan and the alarm colour: {shadowed}"
+    assert shadowed == {"drawImage": 2}, f"cyan and the alarm colour, a shadow each: {shadowed}"
     hit = radar_debug(page)["hits"][2]
     page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
     page.mouse.move(2, 2)  # off the radar: a label brightening under the pointer redraws the map
     picture(page)
     shadowed = page.evaluate(SHADOWED)
-    assert 1 <= sum(shadowed.values()) <= 3, f"cyan, the alarm colour and pink: {shadowed}"
+    assert shadowed == {"drawImage": 3}, f"cyan, the alarm colour and pink, a shadow each: {shadowed}"
     set_prefs(page, glow="OFF")
     picture(page)
     assert page.evaluate(SHADOWED) == {}

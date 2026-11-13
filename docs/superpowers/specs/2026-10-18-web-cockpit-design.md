@@ -818,7 +818,9 @@ all of that code.
   solos, that a trace draws, the feed picker, an airport change, prefs
   reaching a second tab, and the volume slider. Playwright is its own
   dependency group (`uv sync --group browser`, then `uv run playwright
-  install chromium`); without it these tests skip. The logic still lives in
+  install chromium webkit`); without it these tests skip. Since 2026-11-12
+  every one of them runs in WebKit as well, and a browser that is not
+  installed skips its half. The logic still lives in
   Python where it is cheap to test.
   Phase D adds the radar: the map loads for the airport and places its
   labels, every aircraft on the radar is a row in the table, clicking an

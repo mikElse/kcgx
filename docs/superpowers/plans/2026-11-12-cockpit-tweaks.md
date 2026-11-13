@@ -58,8 +58,9 @@ writes the changes into the spec.
 - **Nothing reads `protocol.PROTOCOL` but the health reply**, so the new
   pref keys are additive and the number stays 1.
 - **Not checked:** whether WebKit honours `ctx.letterSpacing` on a canvas
-  (`radar.js:264`, `:289`, `:362`, `:445`). Task 11 finds out; the radar must
-  measure and draw consistently either way.
+  (`radar.js:264`, `:289`, `:362`, `:445`). Task 10 finds out; the radar must
+  measure and draw consistently either way. *Task 10, 2026-11-12:* it
+  does, and measures with it.
 
 ## Decisions this plan makes that the list did not
 
@@ -718,7 +719,10 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
   - *`<dialog>` and `::backdrop`:* the same. The config sheet docks right
     with a clear backdrop, the airport sheet is centred over 70 % black.
     One difference, the browsers' own: with a query typed, Escape closes
-    the airport sheet at once in WebKit; Chromium clears the field first.
+    the airport sheet in WebKit; Chromium clears the field first and
+    leaves the sheet open. *Fixed after review, in `sheets.js`:* the
+    search field takes Escape itself and closes the sheet, so both do as
+    WebKit did, and a test holds it in each.
   - *The `.jit` filter:* no cost that could be measured (10.0 ms a frame
     with and without it, at 1x and 2x; twelve blurred shadows in its place
     took 12.2, so the measure does see a filter).
@@ -990,11 +994,12 @@ teletype.
    leaves the sheet open.** The field is `type="search"`, and that is what
    Chromium does with one. Left as it is; Task 10 will show what WebKit
    does. *Task 10:* WebKit closes the sheet at the first Escape, text or
-   no text.
+   no text, and the page now does the same in both (`sheets.js`).
 
 **For the owner, on the Mac (Task 9's third step, not run).** `kcgx` at
 KPDX: the range to 250 and back; a 2.5 nm zoom on the runways; boxes on
 with a busy picture, which is where problem 1 will show; the frame rate at
 250 nm with real traffic (Task 7 measured 34.7 ms a frame with 600
-injected aircraft); and the look of CRT, glow and scanlines on the real
-display.
+injected aircraft, in a browser drawing in software; after Task 10's
+change to the glow it is 10.7 ms in WebKit and 8.3 ms in Chromium on a
+GPU); and the look of CRT, glow and scanlines on the real display.

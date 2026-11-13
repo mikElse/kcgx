@@ -1,5 +1,7 @@
 // The three sheets: change airport, config and shut down. Each is a
-// <dialog>, so focus, Escape and the backdrop come from the browser.
+// <dialog>, so focus, Escape and the backdrop come from the browser. The
+// one exception is Escape in the airport search, which the browsers do not
+// agree on; see mountAirportSheet.
 
 function button(className, label, onClick) {
   const node = document.createElement("button");
@@ -67,6 +69,14 @@ export function mountAirportSheet({ sheet, query, results }, store, log) {
   }
 
   query.addEventListener("input", search);
+  // Escape closes the sheet, typed query or none. Left to the browser, a
+  // search field with text in it takes the key for itself in Chromium (it
+  // empties the field, and the sheet stays), and not in WebKit.
+  query.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.isComposing) return;
+    event.preventDefault();
+    sheet.close();
+  });
   return {
     // `text` prefills the search: `kcgx go seattle` opens the page this way.
     open(text = "") {

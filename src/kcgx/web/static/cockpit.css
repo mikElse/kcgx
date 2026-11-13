@@ -286,7 +286,8 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
    A slider is a line with a block on it; the dropdown is a square frame
    with an arrow made of two gradients, which take the text's colour. */
 .field-row input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1 1 100px; min-width: 0;
-  height: 18px; margin: 0; background: transparent; cursor: pointer; }
+  height: 18px; margin: 0; background: transparent; }
+.field-row input[type="range"]:enabled { cursor: pointer; }
 .field-row input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--dim); }
 .field-row input[type="range"]::-moz-range-track { height: 2px; background: var(--dim); }
 .field-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
