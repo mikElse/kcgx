@@ -184,10 +184,6 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .local { font: 20px "Share Tech Mono", monospace; letter-spacing: 0.1em; color: var(--muted); }
 
 /* frequencies */
-.freq-counts { display: flex; justify-content: space-between; gap: 8px; padding: var(--pad-y) var(--pad-x) 4px; }
-/* The master volume, over the counts, until phase G Task 6 gives the pane its header. */
-.field-row.freq-volume { margin: 0; padding: var(--pad-y) var(--pad-x) 0; flex-wrap: nowrap; }
-.field-row.freq-volume > span:first-child { min-width: 0; }
 .stack { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; }
 .stack-empty { margin: auto; text-align: center; color: var(--muted); letter-spacing: 0.16em; }
 
@@ -202,11 +198,6 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .state-offline { color: var(--alarm); }
 .state-parked { color: var(--muted); }
 .trace { display: block; width: 100%; height: 30px; }
-.feed-controls { display: flex; align-items: center; gap: 6px; }
-.feed-controls .btn { min-height: 24px; min-width: 28px; padding: 0; font-size: 12px; border-color: var(--dim); }
-.feed-controls .btn[aria-pressed="true"] { border-color: var(--pink); color: var(--pink); }
-.spacer { flex: 1 1 auto; }
-.chatter-label { font-size: 11px; letter-spacing: 0.14em; color: var(--muted); }
 /* The two chatter figures are as wide as "100%", so one does not shift as it
    changes: four characters, with no letter spacing to add to them. */
 .chatter-big { font: 18px/1 "Share Tech Mono", monospace; letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
@@ -219,6 +210,9 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
 .feed.compact .feed-name { font-size: 15px; flex: 1 1 auto; text-shadow: none; }
 .feed.compact.parked .feed-name { color: var(--muted); }
 .note { font-size: 12px; color: var(--muted); }
+/* A second audible feed (only /debug or open_feed makes one): lit as heard. */
+.feed.compact.playing .feed-name { color: var(--white); text-shadow: var(--glow); }
+.feed.compact.playing .note { color: var(--cyan); text-shadow: var(--glow); }
 .chatter-small { font: 14px "Share Tech Mono", monospace; letter-spacing: 0; min-width: 4ch; text-align: right; color: var(--cyan); font-variant-numeric: tabular-nums; }
 .parked .chatter-small { color: var(--muted); }
 

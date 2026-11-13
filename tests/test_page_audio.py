@@ -63,6 +63,35 @@ def test_a_click_on_a_compact_feed_selects_it_and_on_the_expanded_one_sends_noth
         page.wait_for_selector(f".feed.expanded[data-ident={playing}]")
 
 
+def test_a_second_audible_feed_reads_as_playing_in_its_compact_row(page):
+    """Only /debug (a `mute` message) or open_feed makes two audible: the
+    first in the stack expanded, the other a compact row that says it is
+    playing. The unmute reorders, so either may come first."""
+    page.wait_for_selector(".feed.compact")
+    target = page.get_attribute(".feed.compact", "data-ident")
+    try:
+        page.evaluate("ident => window.kcgx.send({t: 'mute', ident})", target)
+        page.wait_for_selector(".feed.compact.playing")
+        assert page.locator(".feed.compact.playing").count() == 1
+        assert len(expanded_ident(page)) == 1
+        lit = page.get_attribute(".feed.compact.playing", "data-ident")
+        quiet = page.get_attribute(".feed.compact:not(.playing):not(.parked)", "data-ident")
+        row, other = f".feed.compact[data-ident={lit}]", f".feed.compact[data-ident={quiet}]"
+        title = page.text_content(f"{row} .feed-name")
+        label = page.get_attribute(row, "aria-label")
+        assert label.startswith(f"{title}, playing"), label
+        assert "Listen to" not in label
+        assert page.get_attribute(other, "aria-label").startswith("Listen to ")
+        style = "e => { const s = getComputedStyle(e); return [s.color, s.textShadow]; }"
+        for part in (".feed-name", ".note"):
+            on = page.eval_on_selector(f"{row} {part}", style)
+            off = page.eval_on_selector(f"{other} {part}", style)
+            assert on != off, (part, on, off)
+    finally:
+        page.evaluate("ident => window.kcgx.send({t: 'mute', ident})", target)
+        page.wait_for_function("() => !document.querySelector('.feed.compact.playing')")
+
+
 def test_the_expanded_head_reads_name_chatter_state_as_a_compact_row_does(page):
     page.wait_for_selector(".feed.compact")
     for shape, chatter in (("expanded", "chatter-big"), ("compact", "chatter-small")):
@@ -102,6 +131,7 @@ def test_the_header_holds_the_mute_the_volume_and_its_readout(page):
         "master-mute", "volume", "volume-value",
     ]
     assert page.get_attribute("#master-mute", "aria-pressed") == "false"
+    assert page.get_attribute("#master-mute", "aria-label") == "Mute all feeds"
     assert page.locator("#master-mute svg").count() == 1
     assert page.locator(".screen-freq #freq-head").is_visible()
     # Above the stack, as the counts were.
@@ -116,6 +146,8 @@ def test_the_master_mute_reaches_a_second_tab_and_keeps_the_volume(page, other):
         wait_for_master_mute(page, True)
         wait_for_master_mute(other, True)
         for tab in (page, other):
+            # The label names the control; aria-pressed carries its state.
+            assert tab.get_attribute("#master-mute", "aria-label") == "Mute all feeds"
             # The speaker is crossed out, its waves gone.
             assert tab.eval_on_selector("#master-mute .cross", "e => getComputedStyle(e).display") != "none"
             assert tab.eval_on_selector("#master-mute .waves", "e => getComputedStyle(e).display") == "none"

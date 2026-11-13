@@ -83,14 +83,18 @@ export function mountStack({ stack }, store, send) {
     if (row.shape === "expanded") {
       row.node.setAttribute("aria-label", `Playing ${title}, ${said}`);
     } else {
+      // Audible but not first: only /debug or open_feed makes two.
+      const audible = feed.muted === false;
+      row.node.classList.toggle("playing", audible);
       row.node.classList.toggle("parked", feed.state === "parked");
-      row.node.setAttribute("aria-label", `Listen to ${title}, ${said}`);
+      row.node.setAttribute("aria-label", audible ? `${title}, playing, ${said}` : `Listen to ${title}, ${said}`);
     }
   }
 
   // The expanded row is the feed that is not muted. The server keeps that
   // to one; should /debug unmute more, the first in the stack is expanded,
-  // and a click on another of them selects it.
+  // the others are compact rows marked playing, and a click on one of them
+  // selects it.
   function playing() {
     const { state } = store;
     return state.order.find((ident) => state.feeds.get(ident)?.muted === false);
@@ -231,9 +235,8 @@ export function mountVolume({ mute, volume, volumeValue }, store, send) {
   });
   function render() {
     const { muted } = store.state;
+    // The label names the control and stays; aria-pressed says its state.
     mute.setAttribute("aria-pressed", String(muted));
-    mute.setAttribute("aria-label", muted ? "Unmute all feeds" : "Mute all feeds");
-    mute.title = muted ? "UNMUTE" : "MUTE";
     if (document.activeElement === volume) return;
     volume.value = String(Math.round(store.state.volume * 100));
     volumeValue.textContent = `${volume.value}%`;

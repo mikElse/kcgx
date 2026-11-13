@@ -371,13 +371,30 @@ def test_select_announces_every_changed_feed_and_reorders_at_once():
     untouched = cockpit.session("kpdx3_atis")
     rec.events.clear()
     cockpit.select("kpdx_app_124350")
-    announced = {s.feed.ident for s in rec.of(FEED)}
-    assert announced == {"kpdx3_twr", "kpdx3_gnd", "kpdx_app_124350"}
+    announced = sorted(s.feed.ident for s in rec.of(FEED))
+    assert announced == ["kpdx3_gnd", "kpdx3_twr", "kpdx_app_124350"], "one frame per changed feed"
     assert untouched not in rec.of(FEED)
     assert rec.of(ORDER), "a select must reorder without waiting to settle"
     assert ident(cockpit, 0) == "kpdx_app_124350"
     kinds = [k for k, _ in rec.events]
     assert kinds.index(FEED) < kinds.index(ORDER)
+
+
+def test_selecting_a_parked_feed_announces_each_changed_feed_once():
+    cockpit, rec, _ = make(5, limit=3, connected=False)
+    cockpit.start()
+    target = next(s for s in cockpit.sessions if not s.connected)
+    before = {s.feed.ident: (s.muted, s.connected, s.state) for s in cockpit.sessions}
+    rec.events.clear()
+    cockpit.select(target.feed.ident)
+    announced = [s.feed.ident for s in rec.of(FEED)]
+    changed = [
+        s.feed.ident for s in cockpit.sessions
+        if before[s.feed.ident] != (s.muted, s.connected, s.state)
+    ]
+    assert target.feed.ident in announced
+    assert sorted(announced) == sorted(changed)
+    assert len(announced) == len(set(announced)), announced
 
 
 def test_selecting_the_audible_feed_changes_nothing_and_says_nothing():

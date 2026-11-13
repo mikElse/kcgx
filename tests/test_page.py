@@ -391,7 +391,7 @@ DENSITY = {
     ".hud-right": {"right": 10},
     ".sheet": around(12, 14),
     ".choice": {**around(4, 8), "minHeight": 32},
-    ".btn:not(.btn-small):not(.seg):not(.feed-controls .btn)": {**around(0, 10), "minHeight": 30},
+    ".btn:not(.btn-small):not(.seg)": {**around(0, 10), "minHeight": 30},
     ".btn-small": {**around(0, 8), "minHeight": 26},
 }
 
