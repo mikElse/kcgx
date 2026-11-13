@@ -16,13 +16,29 @@
 // drawing on a GPU, took 2 ms an aircraft a frame. So the aircraft's lines
 // are drawn bare on a third canvas (`radar.bare`), a colour at a time, and
 // that canvas is drawn onto the moving layer once with the shadow on. The
-// tags' letters glow the same way, a colour at a time, but only the shadow
-// is drawn then, under every tag; the tags themselves follow, in rank
-// order, over it. A box therefore covers its own letters' glow as it
-// covers a map line's, as much as it is filled.
+// tags' letters, unboxed, glow from the same canvas a colour at a time,
+// under every tag (the tags following over it in rank order), only the
+// shadow drawn and only about the letters. Boxed ("AIRCRAFT" in
+// prefs.box_items, and the boxes filled or edged), a tag glows by itself,
+// its letters drawn with the shadow on, after its own box: a box never
+// hides its own letters' glow, and a tag's glow is cut only by the boxes
+// over it.
 //
 // `radar` is the shared state `mountRadar` makes (see radar/index.js);
 // `init` adds this module's part of it.
+//
+// What the pointer (view.js's hit test) may read, as the last frame left it:
+//
+//   radar.hits[]     { hex, x, y, tag, trail } an aircraft: its chevron at
+//                    (x, y), canvas px; `trail` its points, newest first.
+//   hits[].tag       null when it has no tag, else { lines, x, y, w, h,
+//                    boxed, box }: x..h is all it claims (text and, when
+//                    boxed, box); `boxed` whether it is; `box` the box as
+//                    painted, { x, y, w, h } on whole pixels, or null.
+//   radar.tagOrder   hexes, in the order the tags were drawn: BOTTOM FIRST,
+//                    the one on top last. A hit test wanting the tag on top
+//                    reads it from the end; a filled box hides what is
+//                    under it, chevrons and the tags further down included.
 
 import { glowBlur } from "../theme.js";
 import { focus } from "../focus.js";
@@ -33,8 +49,8 @@ import { toScreen } from "./view.js";
 const DIM_ALPHA = 0.15;
 const STALE_FADE_FROM = 30; // seconds without a position before an aircraft fades
 const EMERGENCY = new Set(["7500", "7600", "7700"]);
-const TAG_PX = 16; // a flight tag's text,
-const TAG_STEP_PX = 18; // and from one of its lines down to the next
+const TAG_PX = 16; // the text size the tag's spacings are given for (prefs.tag_px scales them),
+const TAG_STEP_PX = 18; // from one of its lines down to the next
 
 // Where an aircraft will be `seconds` after its last position.
 export function reckon(lat, lon, gs, trk, seconds) {
@@ -203,8 +219,8 @@ function rankOf(radar, one) {
 }
 
 // Each aircraft's tag: placed, measured and claimed for the pointer, then
-// laid onto the cleared tags layer over the letters' glow, the sort's last
-// first, each its box and then its letters. A tag is up and right of its
+// laid onto the cleared tags layer, the sort's last first, each its box,
+// its glow (see the top of this file) and its letters. A tag is up and right of its
 // chevron. Its last line is where the one line has always been; a line
 // above it stands higher.
 function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
@@ -213,10 +229,10 @@ function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = "source-over";
   ctx.clearRect(0, 0, width, height);
-  // The text's size follows the zoom (Task 10's labelPx); its spacing and
-  // the room about it grow with it.
-  const k = labelPx(TAG_PX, radar) / TAG_PX;
-  const px = TAG_PX * k * ratio;
+  // The text's size is prefs.tag_px, following the zoom (Task 10's
+  // labelPx); its spacing and the room about it grow with it.
+  const px = labelPx(prefs.tag_px, radar) * ratio;
+  const k = px / ratio / TAG_PX;
   const step = TAG_STEP_PX * k * ratio;
   const font = `${px}px ${FONT}`;
   const spacing = 1.5 * k * ratio;
@@ -236,7 +252,7 @@ function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
       const text = { x: left, y: first - 16 * k * ratio, w, h: 20 * k * ratio + (lines.length - 1) * step };
       const ink = inked(left, first, w - trailing(spacing), px, lines.length, step);
       tag = { lines, ...claim(text, ink, radar.boxed("AIRCRAFT"), ratio, prefs) };
-      drawn.push({ one, lines, left, first, box: tag.box, colour, alpha, rank: rankOf(radar, one) });
+      drawn.push({ one, lines, left, first, text, box: tag.box, colour, alpha, rank: rankOf(radar, one) });
     }
     hits.push({ hex: ac.hex, x: head[0], y: head[1], tag, trail: points });
   }
@@ -251,33 +267,62 @@ function drawTags(radar, seen, width, height, ratio, c, prefs, blur) {
     d.lines.forEach((line, i) => pen.fillText(line, d.left, d.first + i * step));
   };
 
-  // The letters' glow, a colour at a time: bare, then only its shadow onto
-  // the layer. The canvas itself is drawn a whole width off to the left,
-  // and its shadow as far back to the right, onto the letters' places.
-  if (blur) {
-    const pen = bare.getContext("2d");
+  // Unboxed tags' letters' glow, in one colour: the letters bare, then only
+  // their shadow onto the layer. The bare canvas is drawn a whole width off
+  // to the left, and its shadow as far back to the right, onto the
+  // letters' places, clipped to their text widened by twice the blur (which
+  // holds all of the shadow): a blur costs by its area, and the shadow is
+  // reckoned only within the clip. (Drawing only that part of the canvas,
+  // drawImage's nine arguments, would do as well, but WebKit then draws no
+  // shadow at all for an image put down wholly off the canvas.) The bare
+  // canvas is empty before and after each: cleared once, and each time
+  // where its letters went.
+  const pen = bare.getContext("2d");
+  const glowOf = (group, colour) => {
+    const margin = 2 * blur;
+    const x0 = Math.max(0, Math.floor(Math.min(...group.map((d) => d.text.x)) - margin));
+    const y0 = Math.max(0, Math.floor(Math.min(...group.map((d) => d.text.y)) - margin));
+    const x1 = Math.min(width, Math.ceil(Math.max(...group.map((d) => d.text.x + d.text.w)) + margin));
+    const y1 = Math.min(height, Math.ceil(Math.max(...group.map((d) => d.text.y + d.text.h)) + margin));
+    if (x1 <= x0 || y1 <= y0) return; // all off the canvas
+    pen.save();
+    typeset(pen);
+    for (const d of group) letters(pen, d);
+    pen.restore();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, y0, x1 - x0, y1 - y0);
+    ctx.clip();
+    ctx.shadowColor = colour;
+    ctx.shadowBlur = blur;
+    ctx.shadowOffsetX = width;
+    ctx.drawImage(bare, -width, 0);
+    ctx.restore();
+    pen.clearRect(x0, y0, x1 - x0, y1 - y0);
+  };
+
+  // Unboxed, the glow goes down a colour at a time under every tag. So it
+  // does under boxes that paint nothing (no fill, no border), which leave
+  // the picture as it was.
+  const boxed = radar.boxed("AIRCRAFT") && (prefs.box_fill > 0 || prefs.box_border > 0);
+  if (blur && !boxed) {
+    pen.setTransform(1, 0, 0, 1, 0, 0);
+    pen.clearRect(0, 0, width, height);
     for (const colour of new Set([c.cyan, c.alarm, c.pink])) {
       const mine = drawn.filter((d) => d.colour === colour);
-      if (!mine.length) continue;
-      pen.setTransform(1, 0, 0, 1, 0, 0);
-      pen.clearRect(0, 0, width, height);
-      pen.save();
-      typeset(pen);
-      for (const d of mine) letters(pen, d);
-      pen.restore();
-      ctx.save();
-      ctx.shadowColor = colour;
-      ctx.shadowBlur = blur;
-      ctx.shadowOffsetX = width;
-      ctx.drawImage(bare, -width, 0);
-      ctx.restore();
+      if (mine.length) glowOf(mine, colour);
     }
   }
 
+  // Boxed, each tag's glow goes over its own box: its letters are drawn
+  // with the shadow on, which puts the shadow down under them. That is a
+  // shadowed draw a line, but small ones: a tag at a time from the bare
+  // canvas, even clipped, cost Chromium and WebKit ten times as much.
   for (const d of drawn) {
     if (d.box) paintBox(ctx, d.box, d.colour, ratio, prefs, d.alpha);
     ctx.save();
     typeset(ctx);
+    if (blur && boxed) { ctx.shadowColor = d.colour; ctx.shadowBlur = blur; }
     letters(ctx, d);
     ctx.restore();
   }

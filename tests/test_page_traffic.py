@@ -239,6 +239,72 @@ def test_a_tags_letters_glow_with_the_traffic_and_not_with_the_glow_off(page):
     assert added() == 0, "the tag's letters glow with the glow off"
 
 
+def test_a_boxed_tags_letters_glow_over_its_own_box(page):
+    """Boxed and filled, a tag's glow goes down over its own box, under its
+    letters: the box's padding just above the capitals is lit in the tag's
+    colour, and with the glow off it is black."""
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    cyan = css_colour(page, "--cyan")
+    set_prefs(page, display="OFF", box_items=["AIRCRAFT"], box_fill=100, box_border=0, box_pad=8)
+
+    def padding():
+        tag = hold_traffic(page, plane("a1", -10, 5))["a1"]
+        assert tag["boxed"] and tag["box"]
+        box = tag["box"]
+        # Inside the box, clear of its border, between its top and the
+        # letters, whose capitals start a padding and a border in.
+        margin = 8 * ratio + max(1, round(ratio))
+        band = {
+            "x": box["x"] + margin + 2 * ratio, "y": box["y"] + margin - 3 * ratio,
+            "w": box["w"] - 2 * margin - 4 * ratio, "h": 2 * ratio,
+        }
+        assert holds(box, band)
+        picture(page)
+        return list(block_of(page, band).values())
+
+    draw(page, **glow(75))
+    lit_ = [p for p in padding() if max(p[:3]) > 8]
+    assert lit_, "the box hides its own letters' glow"
+    brightest = max(lit_, key=lambda p: max(p[:3]))
+    # The tag's colour, dimmed: each channel cyan's in the same proportion.
+    share = max(brightest[:3]) / max(cyan)
+    assert all(abs(got - want * share) <= 4 for got, want in zip(brightest[:3], cyan)), (brightest, cyan)
+    draw(page, **glow(0))
+    dark = padding()
+    assert dark == [BLACK] * len(dark), "glow over the box with the glow off"
+
+
+def test_a_bigger_tag_size_draws_a_bigger_tag_and_claims_more_for_the_pointer(page):
+    wait_for_traffic(page)
+    ratio = page.evaluate("devicePixelRatio")
+    small = hold_traffic(page, plane("a1", -10, 5), plane("a2", 10, -5))["a1"]
+    draw(page, tag_px=28)
+    big = tags(page)["a1"]
+    assert big["h"] == pytest.approx(small["h"] * 28 / 16)
+    assert big["w"] > small["w"] * 1.5
+    # Its last line stays where it was over the chevron; it grows up and right.
+    assert big["x"] == pytest.approx(small["x"])
+    # A point in the big tag that the small one did not reach focuses its aircraft.
+    x, y = big["x"] + big["w"] - 3 * ratio, big["y"] + 3 * ratio
+    assert not (small["x"] <= x <= small["x"] + small["w"] and small["y"] <= y <= small["y"] + small["h"])
+    page.mouse.click(*on_screen(page, x, y))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+
+
+def test_the_tags_order_and_boxes_are_there_for_the_pointer(page):
+    """radar.tagOrder (debug tag_order) is bottom first, the one on top
+    last; each hit's tag says whether it is boxed and where its box is."""
+    wait_for_traffic(page)
+    hold_traffic(page, plane("a1", -10, 5), plane("a2", 10, -5))
+    set_rank(page, {"a1": 0, "a2": 1})
+    assert radar_debug(page)["tag_order"] == ["a2", "a1"]
+    assert all(tag["boxed"] is False and tag["box"] is None for tag in tags(page).values())
+    draw(page, box_items=["AIRCRAFT"])
+    for tag in tags(page).values():
+        assert tag["boxed"] is True and holds(tag, tag["box"])
+
+
 # -- the HUD ------------------------------------------------------------------
 
 HEAR = """frame => {
