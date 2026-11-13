@@ -396,3 +396,25 @@ label.field-row { flex-wrap: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   .screen, .jit { animation: none !important; }
 }
+
+/* == phase G lanes (plan, Execution) =========================================
+   One section per lane, so that lanes add rules without meeting. A lane
+   writes only in its own section, unless it owns the rules it changes. */
+
+/* == G:AUDIO == */
+/* The frequencies pane's header: one feed at a time, master mute, volume (Task 6). */
+
+/* == G:TRACKS == */
+/* The table's columns, filters and sticky header; the pane's grip and collapse (Tasks 8, 9). */
+
+/* == G:CHROME == */
+/* Zoom, fonts, clocks and text glow: the body and page rules (Tasks 3, 4c). */
+
+/* == G:MAP == */
+/* The aircraft's data box, #ac-info, over the radar (Task 12). */
+
+/* == G:TRAFFIC == */
+/* The tags canvas and the HUD's two readouts (Task 11). */
+
+/* == G:BOOT == */
+/* The boot animation over the page (Task 14). */

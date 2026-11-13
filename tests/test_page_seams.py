@@ -1,14 +1,15 @@
-"""The seams phase G's lanes code to (plan, Phase 0, P0.4a): the one frame
-clock and its cap, the theme's render scale and glow by layer, and the
-radar's debug() put together from its parts."""
+"""The seams phase G's lanes code to (plan, Phase 0, P0.4a and P0.4b): the
+one frame clock and its cap, the theme's render scale and glow by layer, the
+radar's debug() put together from its parts, and the tracks columns."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from test_page import browser, page, server, set_prefs  # noqa: F401  (fixtures)
-
-pytest.importorskip("playwright.sync_api")
+from kcgx.prefs import SCHEMA
+from page_fixtures import *  # noqa: F403  (fixtures and helpers)
 
 pytestmark = pytest.mark.browser
 
@@ -94,3 +95,66 @@ def test_the_radar_s_debug_is_its_parts_and_two_may_not_give_one_key(page):
         "frames", "shown", "view", "placed", "hovered", "mapFor", "loaded", "rings", "home", "symbols",
         "layers", "hits",
     }
+
+
+COLUMNS = """() => import('/static/js/columns.js').then(({ COLUMNS, COLUMN }) => ({
+  names: COLUMNS.map((c) => c.key),
+  byName: COLUMNS.every((c) => COLUMN[c.key] === c),
+  columns: COLUMNS.map((c) => ({ key: c.key, title: c.title, filter: c.filter, num: c.num })),
+  read: [FULL, {}, { alt: "GND" }, { alt: null, gs: null, trk: null, sq: null }].map(
+    (ac) => Object.fromEntries(COLUMNS.map((c) => [c.key, [c.text(ac), c.sort(ac)]]))),
+}))"""
+FULL = {
+    "hex": "a1b2c3", "label": "DAL1388", "type": "A321", "reg": "N123DX", "lat": 45.58899, "lon": -122.5975,
+    "alt": 5900, "vs": -640, "gs": 310, "trk": 30, "sq": "2251", "age": 3.4, "dist": 14.3, "brg": 7,
+    "desc": "AIRBUS A-321", "oper": "DELTA AIR LINES", "cat": "A3", "still": 0,
+}
+TITLES = {
+    "CALLSIGN": "CALLSIGN", "TYPE": "TYPE", "REG": "REG", "ALT": "ALT FT", "VS": "V/S FPM", "GS": "GS KT",
+    "TRK": "TRK", "DIST": "DIST NM", "BRG": "BRG", "SQWK": "SQWK", "HEX": "HEX", "DESC": "DESC", "OPER": "OPER",
+    "CAT": "CAT", "AGE": "AGE S", "LAT": "LAT", "LON": "LON",
+}
+TEXT_FILTERS = {"CALLSIGN", "TYPE", "REG", "SQWK", "HEX", "DESC", "OPER", "CAT"}  # Task 8; the rest are numbers
+RIGHT = {"ALT", "VS", "GS", "TRK", "DIST", "BRG", "SQWK", "AGE", "LAT", "LON"}  # figures, set right
+
+
+def test_every_tracks_column_reads_an_aircraft_and_one_that_reports_nothing(page):
+    found = page.evaluate(COLUMNS.replace("FULL", json.dumps(FULL)))
+    assert found["names"] == list(SCHEMA["track_cols"].names)
+    assert found["byName"]
+    assert found["columns"] == [
+        {"key": name, "title": TITLES[name], "filter": "text" if name in TEXT_FILTERS else "number",
+         "num": name in RIGHT}
+        for name in found["names"]
+    ]
+    full, empty, ground, unknown = found["read"]
+    assert {name: text for name, (text, _) in full.items()} == {
+        "CALLSIGN": "DAL1388", "TYPE": "A321", "REG": "N123DX", "ALT": "5900", "VS": "-640", "GS": "310",
+        "TRK": "030", "DIST": "14.3", "BRG": "007", "SQWK": "2251", "HEX": "A1B2C3", "DESC": "AIRBUS A-321",
+        "OPER": "DELTA AIR LINES", "CAT": "A3", "AGE": "3", "LAT": "45.5890", "LON": "-122.5975",
+    }
+    assert {name: sort for name, (_, sort) in full.items()} == {
+        "CALLSIGN": "DAL1388", "TYPE": "A321", "REG": "N123DX", "ALT": 5900, "VS": -640, "GS": 310, "TRK": 30,
+        "DIST": 14.3, "BRG": 7, "SQWK": "2251", "HEX": "a1b2c3", "DESC": "AIRBUS A-321",
+        "OPER": "DELTA AIR LINES", "CAT": "A3", "AGE": 3.4, "LAT": 45.58899, "LON": -122.5975,
+    }
+    # Nothing reported, or not yet sent by the server: an empty cell, sorted
+    # below every figure (as phase F's table sorted a missing one).
+    for read in (empty, unknown):
+        assert {name: text for name, (text, _) in read.items()} == {name: "" for name in TITLES}
+    assert {name: sort for name, (_, sort) in empty.items()} == {
+        name: "" if name in TEXT_FILTERS else -1 for name in TITLES
+    }
+    assert ground["ALT"] == ["GND", 0]
+
+
+def test_the_table_shows_phase_f_s_seven_columns_until_tracks_reads_track_cols(page):
+    titles = page.eval_on_selector_all("#tracks-head th", "ths => ths.map(th => th.textContent)")
+    assert titles == ["CALLSIGN", "TYPE", "ALT FT", "GS KT", "TRK", "DIST NM", "SQWK"]
+    assert page.eval_on_selector_all("#tracks-head th", "ths => ths.map(th => th.className)") == [
+        "", "", "num", "num", "num", "num", "num",
+    ]
+
+
+def test_the_store_starts_with_no_rank(page):
+    assert page.evaluate("window.kcgx.store.state.rank instanceof Map && window.kcgx.store.state.rank.size === 0")

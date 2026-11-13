@@ -4,25 +4,20 @@
 // the radar does; the focused row is pink, outlined, set larger and moved to
 // the top of the table, and the rest dim.
 
+import { COLUMN } from "./columns.js";
 import { focus } from "./focus.js";
 
 const EMERGENCY = new Set(["7500", "7600", "7700"]);
-const COLUMNS = [
-  { key: "label", title: "CALLSIGN", text: (a) => a.label },
-  { key: "type", title: "TYPE", text: (a) => a.type || "" },
-  { key: "alt", title: "ALT FT", num: true, text: (a) => (a.alt === null ? "" : String(a.alt)), sort: (a) => (a.alt === "GND" ? 0 : a.alt ?? -1) },
-  { key: "gs", title: "GS KT", num: true, text: (a) => (a.gs === null ? "" : String(a.gs)), sort: (a) => a.gs ?? -1 },
-  { key: "trk", title: "TRK", num: true, text: (a) => (a.trk === null ? "" : String(a.trk).padStart(3, "0")), sort: (a) => a.trk ?? -1 },
-  { key: "dist", title: "DIST NM", num: true, text: (a) => a.dist.toFixed(1), sort: (a) => a.dist },
-  { key: "sq", title: "SQWK", num: true, text: (a) => a.sq || "" },
-];
+// Today's seven columns, in today's order: prefs.track_cols' default. The
+// table is to show prefs.track_cols itself (phase G, Task 8).
+const SHOWN = ["CALLSIGN", "TYPE", "ALT", "GS", "TRK", "DIST", "SQWK"].map((name) => COLUMN[name]);
 
 export function mountTracks({ head, body, empty }, store) {
-  let sortKey = "dist";
+  let sortKey = "DIST";
   let ascending = true;
   let pressedHere = false;  // true while a callsign in this table is being pressed
 
-  head.replaceChildren(...COLUMNS.map((column) => {
+  head.replaceChildren(...SHOWN.map((column) => {
     const th = document.createElement("th");
     if (column.num) th.className = "num";
     const button = document.createElement("button");
@@ -42,8 +37,8 @@ export function mountTracks({ head, body, empty }, store) {
   function render() {
     const radar = store.state.radar;
     const list = radar ? [...radar.ac] : [];
-    const column = COLUMNS.find((c) => c.key === sortKey);
-    const value = column.sort || column.text;
+    const column = SHOWN.find((c) => c.key === sortKey);
+    const value = column.sort;
     list.sort((a, b) => {
       const x = value(a);
       const y = value(b);
@@ -63,7 +58,7 @@ export function mountTracks({ head, body, empty }, store) {
       tr.dataset.hex = ac.hex;
       if (EMERGENCY.has(ac.sq)) tr.classList.add("emergency");
       if (focused) tr.classList.add(ac.hex === focused ? "focused" : "dimmed");
-      COLUMNS.forEach((c, i) => {
+      SHOWN.forEach((c, i) => {
         const td = document.createElement("td");
         if (c.num) td.className = "num";
         if (i === 0) {

@@ -97,9 +97,18 @@ export function createStore() {
     },
     log: [],
     history: new Map(), // ident -> { samples: Float32Array, next: number }
-    radar: null, // the last aircraft frame
+    // The last aircraft frame. Each of its `ac` may carry `still`: seconds
+    // the aircraft has stood still on the ground, counted by the server from
+    // the poll it first did (phase G, Task 7). Absent until the server sends
+    // it; a view reads a missing `still` as moving.
+    radar: null,
     radarAt: 0, // performance.now() when it arrived
     trails: new Map(), // hex -> [{ lat, lon }], oldest first
+    // Where each aircraft stands in the tracks table's sort, filters not
+    // applied: hex -> 0 for the first to 1 for the last (phase G, Task 8).
+    // tracks.js fills it and emits "rank"; the radar shades by it (Task 13).
+    // Empty until then, and an aircraft missing from it is ranked first.
+    rank: new Map(),
   };
   const listeners = new Set();
   const emit = (kind, detail) => { for (const fn of listeners) fn(kind, detail, state); };
