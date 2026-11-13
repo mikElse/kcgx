@@ -625,3 +625,44 @@ def test_the_sorts_last_chevron_is_dimmed_on_the_screen(page):
     set_rank(page, {"a1": 1, "a3": 0})
     light = {h: light_of(page, r) for h, r in blocks.items()}
     assert light["a1"] / light["a3"] == pytest.approx(0.4, abs=0.03)
+
+
+def focused(page):
+    return page.evaluate("import('/static/js/focus.js').then(({ focus }) => focus.hex)")
+
+
+def test_a_click_on_overlapping_chevrons_focuses_the_one_drawn_on_top(page):
+    """radar.hits is topmost first, the reverse of line_order (the focused
+    aircraft first), so a chevron over another is the one a click takes."""
+    wait_for_traffic(page)
+    hold_traffic(page, plane("a1", -10, 5), plane("a2", -10, 5), plane("a3", 10, -5, sq="7700"))
+    for top, under in (("a1", "a2"), ("a2", "a1")):
+        set_rank(page, {top: 0, under: 1, "a3": 0.5})
+        debug = radar_debug(page)
+        assert debug["line_order"] == [under, top, "a3"]
+        assert [h["hex"] for h in debug["hits"]] == ["a3", top, under]
+        where = hit_of(page, top)
+        page.mouse.click(*on_screen(page, where["x"], where["y"]))
+        frames(page)
+        assert focused(page) == top
+        # Focused, the one underneath is drawn last of all, and is first.
+        focus_on(page, under)
+        debug = radar_debug(page)
+        assert debug["line_order"][-1] == under
+        assert [h["hex"] for h in debug["hits"]] == [under, "a3", top]
+        focus_on(page, None)
+
+
+def test_the_hud_counts_the_tracks_drawn_not_those_hidden(page):
+    wait_for_traffic(page)
+    said = "words => document.getElementById('radar-tracks').textContent === words"
+    set_prefs(page, ground_mode="SHOW")
+    parked_and_not(page)
+    page.wait_for_function(said, arg="4 TRACKS")
+    set_prefs(page, ground_mode="HIDE")
+    page.wait_for_function(said, arg="3 TRACKS")
+    # The table's choice brings it back, and it counts while it is shown.
+    focus_on(page, "a1")
+    page.wait_for_function(said, arg="4 TRACKS")
+    focus_on(page, None)
+    page.wait_for_function(said, arg="3 TRACKS")

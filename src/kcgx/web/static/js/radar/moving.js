@@ -33,7 +33,11 @@
 //                    drawn: its chevron at (x, y), canvas px; `trail` the
 //                    tail's points as drawn, newest (the chevron) first, or
 //                    [] when it has none; `alpha` the aircraft's and `tail`
-//                    its tail's at the newest segment. In the frame's order.
+//                    its tail's at the newest segment. TOPMOST FIRST: the
+//                    reverse of lineOrder, so the focused aircraft first,
+//                    then the alarm colour's, then cyan's, each the sort's
+//                    first first; a hit test taking the first chevron it
+//                    finds takes the one drawn over the others there.
 //                    Parked traffic hidden (ground_mode HIDE) is not here.
 //   hits[].tag       null when it has no tag, else { lines, x, y, w, h,
 //                    boxed, box }: x..h is all it claims (text and, when
@@ -236,9 +240,10 @@ function strokeAircraft(pen, { ac, isFocus, alpha, tail, head, points }, ratio) 
 }
 
 // Draws the aircraft's lines onto `ctx` (the moving layer) and their tags
-// onto `radar.tags`, and returns the aircraft. Leaves `radar.now` holding
-// them as drawn, `radar.hits` saying what is where, for the pointer, and
-// `radar.tagOrder` the order the tags went down in.
+// onto `radar.tags`, and returns the aircraft (`list`) and how many of them
+// were drawn (`drawn`: ground_mode HIDE leaves some out). Leaves
+// `radar.now` holding them as drawn, `radar.hits` saying what is where, for
+// the pointer, and `radar.tagOrder` the order the tags went down in.
 export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
   const { store, project, bare, hits, now: list, lineOrder } = radar;
   hits.length = 0;
@@ -294,7 +299,10 @@ export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
   }
 
   drawTags(radar, seen, width, height, ratio, c, prefs, blur);
-  return { list };
+  // The hits topmost first: the reverse of the lines' order.
+  const order = new Map(lineOrder.map((hex, i) => [hex, i]));
+  hits.sort((a, b) => order.get(b.hex) - order.get(a.hex));
+  return { list, drawn: seen.length };
 }
 
 // -- flight tags, on their own layer ---------------------------------------------

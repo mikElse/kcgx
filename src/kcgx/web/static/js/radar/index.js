@@ -120,7 +120,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     } else {
       t.clearRect(0, 0, width, height);
     }
-    const { list } = drawMoving(radar, t, width, height, ratio, s, c, prefs);
+    const { drawn } = drawMoving(radar, t, width, height, ratio, s, c, prefs);
 
     // The map, the aircraft added to it, and the tags over both.
     const ctx = canvas.getContext("2d");
@@ -133,14 +133,16 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     ctx.drawImage(radar.tags, 0, 0);
     radar.shown = { ...radar.view, range: range() };
 
-    if (now - lastHud > 500) { lastHud = now; drawHud(list); }
+    if (now - lastHud > 500) { lastHud = now; drawHud(drawn); }
     for (const h of hooks) if (h.post) h.post(now);
   }
   onFrame(frame);
 
-  function drawHud(list) {
+  // `drawn` the aircraft on the radar: those ground_mode HIDE leaves out
+  // are not counted.
+  function drawHud(drawn) {
     const polled = store.state.radar;
-    if (hud.tracks) hud.tracks.textContent = `${list.length} TRACK${list.length === 1 ? "" : "S"}`;
+    if (hud.tracks) hud.tracks.textContent = `${drawn} TRACK${drawn === 1 ? "" : "S"}`;
     if (!hud.poll) return;
     const age = !polled || polled.age === null
       ? null : Math.round(polled.age + (performance.now() - store.state.radarAt) / 1000);
