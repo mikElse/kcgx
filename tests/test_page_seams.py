@@ -253,8 +253,10 @@ def test_the_table_shows_phase_f_s_seven_columns_until_tracks_reads_track_cols(p
     ]
 
 
-def test_the_store_starts_with_no_rank(page):
-    assert page.evaluate("window.kcgx.store.state.rank instanceof Map && window.kcgx.store.state.rank.size === 0")
+def test_the_store_holds_the_rank_as_a_map(page):
+    # Empty until the tracks table sorts the traffic (Task 8), which fills
+    # this Map in place: test_page_tracks.py holds what is in it.
+    assert page.evaluate("window.kcgx.store.state.rank instanceof Map")
 
 
 def test_the_tracks_row_is_a_custom_property_tracks_can_set(page):

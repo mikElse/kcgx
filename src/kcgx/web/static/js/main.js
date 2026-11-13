@@ -99,7 +99,10 @@ mountLamps($("lamps"), store);
 const radar = mountRadar($("radar"), store, {
   hud: { poll: $("radar-poll"), tracks: $("radar-tracks"), position: $("radar-position") },
 });
-mountTracks({ head: $("tracks-head"), body: $("tracks-body"), empty: $("tracks-empty") }, store);
+mountTracks({
+  head: $("tracks-head"), filters: $("tracks-filters"), body: $("tracks-body"), empty: $("tracks-empty"),
+  columns: $("tracks-columns"), openColumns: $("open-columns"), clear: $("tracks-clear"),
+}, store, send);
 
 const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,

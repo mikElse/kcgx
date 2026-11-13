@@ -435,6 +435,34 @@ label.field-row { flex-wrap: nowrap; }
 
 /* == G:TRACKS == */
 /* The table's columns, filters and sticky header; the pane's grip and collapse (Tasks 8, 9). */
+/* The header and the filter row under it stay at the top of the scrolling
+   table, opaque over the rows. The scroller has no top padding, so the
+   header sits at its very top; --tracks-head-h is the header row's height
+   (tracks.js measures it). */
+.tracks-body { padding-top: 0; }
+.tracks thead th { position: sticky; top: 0; background: #000; z-index: 1; }
+.tracks thead tr.filters th { top: var(--tracks-head-h, 21px); padding: 1px 6px 3px; box-shadow: inset 0 -1px var(--rule); }
+.tracks .filters input { width: 100%; min-width: 8.5ch; height: 20px; padding: 0 4px; background: #000;
+  border: 1px solid var(--rule); color: var(--text); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.tracks .filters input::placeholder { color: var(--muted); opacity: 0.55; }
+.tracks .filters input:hover { border-color: var(--dim); }
+.tracks .filters input:focus-visible { outline: 1px solid var(--pink); outline-offset: 0; border-color: var(--pink); }
+.tracks .filters input[aria-invalid="true"] { border-color: var(--alarm); color: var(--alarm); }
+.tracks .filters th.number { white-space: nowrap; }
+.tracks .filters th.number input { width: 5.5ch; min-width: 5.5ch; text-align: right; }
+.tracks .filters th.number input + input { margin-left: 2px; }
+.tracks-tools { gap: 6px; margin-left: auto; }
+.tracks-tools .btn:disabled { opacity: 0.4; cursor: default; border-color: var(--frame); color: var(--text); }
+/* The checklist of columns, over the page above its button (tracks.js places it). */
+.columns-pop { position: fixed; inset: auto; margin: 0; padding: 8px; width: max-content; max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px); overflow: auto;
+  background: #000; color: var(--text); border: 1px solid var(--frame);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--frame) 40%, transparent); }
+.columns-pop:popover-open { display: grid; grid-template-columns: repeat(3, minmax(9ch, auto)); gap: 4px; }
+.columns-pop .check { text-align: left; }
+.columns-pop .check::before { content: "[ ] "; color: var(--muted); }
+.columns-pop .check[aria-pressed="true"]::before { content: "[X] "; color: var(--pink); }
+.columns-pop .check:disabled { cursor: not-allowed; opacity: 0.7; }
 
 /* == G:CHROME == */
 /* Zoom, fonts, clocks and text glow: the body and page rules (Tasks 3, 4c). */

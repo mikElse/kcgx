@@ -98,12 +98,19 @@
       <table class="tracks">
         <thead>
           <tr id="tracks-head"></tr>
+          <tr id="tracks-filters" class="filters" aria-label="Filters"></tr>
         </thead>
         <tbody id="tracks-body"></tbody>
       </table>
       <p class="muted small empty" id="tracks-empty">WAITING FOR THE RADAR</p>
     </div>
-    <div class="screen-title"><span class="title-text">TRACKS</span><!-- G:tracks-tools --></div>
+    <div class="screen-title"><span class="title-text">TRACKS</span><!-- G:tracks-tools -->
+      <div class="title-tools tracks-tools">
+        <button type="button" class="btn btn-small" id="tracks-clear" disabled>CLEAR</button>
+        <button type="button" class="btn btn-small" id="open-columns" popovertarget="tracks-columns" aria-expanded="false" aria-controls="tracks-columns">COLUMNS</button>
+      </div>
+      <div class="columns-pop" id="tracks-columns" popover role="group" aria-label="Columns shown in the tracks table"></div>
+      <!-- /G:tracks-tools --></div>
   </section>
 
   <section class="screen screen-log" aria-label="Teletype">
