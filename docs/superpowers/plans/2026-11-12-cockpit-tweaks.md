@@ -969,18 +969,35 @@ seam (Task 12) is where a GTK WebKit window would later plug in.
 **Files:** `README.md`,
 `docs/superpowers/specs/2026-10-18-web-cockpit-design.md`, this plan
 
-- [ ] **README:** "Running it" (the window, `--browser`, close versus
+- [x] **README:** "Running it" (the window, `--browser`, close versus
   quit); "The cockpit" (no FEEDS or PALETTE, the icons, lamps and teletype
   off by default, the focused track); "The radar" (range, 2.5 nm, double
   click, tags, boxes); "Configuration" (the CONFIG table from this plan;
   `radar_range_nm` retired from `squelch.toml`, with the date); "When it
   opens on one feed" (choose the airport again); "Install" step 5;
   "Development" (WebKit in the browser group).
-- [ ] **Spec:** write the fifteen decisions into their sections, dated
+- [x] **Spec:** write the fifteen decisions into their sections, dated
   2026-11-12, as phase E did.
-- [ ] Add a "Built" section here: what was done, what was seen by hand,
+- [x] Add a "Built" section here: what was done, what was seen by hand,
   the 250 nm frame time, anything deferred.
-- [ ] Commit `docs: phase F built`.
+- [x] Commit `docs: phase F built`.
+
+  **As done, 2026-11-12.** Four things beyond the list above. The README
+  also says what the list could not have known: that with the teletype
+  off the one-feed fallback's line is not seen, that flight tags overlap,
+  that STATES has nothing to box, and that the window had not been
+  watched when it was written. Its "Known limitations", "What it needs",
+  "Doing it by hand" and "History" were brought up to date as well as the
+  sections named. The spec gained the settings table, the window, the
+  `kcgx:` scheme's rules and three open questions, beside the fifteen
+  decisions. And `docs/README.md`, which is not in this task's files,
+  gained a row for phase F, as phase E's docs commit gave it one.
+
+  The suite for this commit was run without one test,
+  `tests/test_launcher.py::test_go_when_not_running_starts_at_that_airport`,
+  for the reason given under [Built](#built): it starts the real server,
+  which the workflow that built this plan may not do. This commit changes
+  three documents and an index that no test reads.
 
 ---
 
@@ -1045,7 +1062,276 @@ needs only Part 1's `main.js`, and Task 10 can start any time after 5.
 
 ## Built
 
-Started by Task 9; Task 13 finishes it.
+Built on 2026-11-12, on `feat/web-cockpit`, in 24 commits from `5c0df95`
+to `bb8927a` and the docs commit that carries this section: one commit
+for each task and one or two of review fixes after it. Task 9 started
+this section and Task 11 added to it; Task 13 wrote the rest and left
+theirs as they were, below.
+
+**Read this first.** The plan was built by a workflow of agents that may
+not start the real server, contact LiveATC or adsb.lol, open an audio
+device or write to `~/Applications`. So **nothing in phase F has been
+seen by a person at a screen, heard, or run against real feeds or real
+traffic**, and nobody has looked at the window. Everything below was
+tested, measured in headless browsers, or read from screenshots a script
+took of the demo. What that leaves is listed under
+[Owed by the owner](#owed-by-the-owner). Until `./setup.sh` or
+`macos/build.sh` is run, there is no `~/Applications/KCGX.app` on this
+Mac and `kcgx` opens the browser as before.
+
+### What was done
+
+| Task | Commits | What |
+|---|---|---|
+| 1 | `5c0df95`, `ece0c4f` | `kcgx.prefs.SCHEMA`: fourteen settings of four kinds. The file is read leniently through it, the protocol strictly; a setting the schema does not have refuses the message. |
+| 2 | `7bbffd8`, `2af3087` | The range is the pref `range_nm`, 10 to 250. `Radar.set_range` retunes the running radar and never wakes the poller; shrinking drops what is beyond at once. `radar_range_nm` left `Config`. The map is clipped at 320 nm. The demo sends what is inside the range. |
+| 3 | `2d1c865`, `d50e65c` | One page grid of eight named parts. Lamps and teletype are prefs, off by default. A page error shows in the banner for 8 s while the teletype is hidden. |
+| 4 | `b637dc8`, `fe9a02b` | The header is a gear and a power icon; FEEDS, PALETTE, the feeds sheet and RECENTRE are gone; the airport pane has no title and a search icon bottom right. A double click recentres (it came in here, with RECENTRE's going, so the page was never without a way back). The retry hint reads "choose the airport again". |
+| 5 | `73813b8`, `ff10b96` | The config sheet: one `[data-pref]` control for each setting, bound by kind, docked right with a clear backdrop. THEME is a dropdown, the scanlines are two sliders, LIMITS is gone. `tests/test_page_prefs.py` holds the markup to the schema. |
+| 6 | `d18b8e9`, `66b4ebc` | The spacing tokens and the denser values. Chatter reads `NN%` at 18 and 14 px; M and S are 28 by 24 px. The focused aircraft is the table's first row, a fifth larger. |
+| 7 | `37cfa27`, `24d2fbe` | The view is held in nm: the wheel runs from 2.5 nm to 160 or the range; rings are computed and their numbers placed; the home ring is held between 24 and 64 px. The 250 nm frame time was measured (below). |
+| 8 | `d2720e5`, `20aaace` | Flight tags from `tag_fields`, one line or two. Label boxes for nine kinds of item, painted `source-over`; no box lies across another still label. |
+| 9 | `c4d1bab`, `224f150` | Part 1 walked by a script; no code changed. Written up below. |
+| 10 | `1d2ac37`, `54b0c57` | Every page test runs in Chromium and in WebKit. Three fixes: the aircraft's glow is one shadow for each colour; sliders and the dropdown are drawn by the stylesheet; Escape in the airport search closes the sheet in both. |
+| 11 | `bacf859`, `0120a07` | `macos/KCGXWindow.swift`, `Info.plist.in`, `build.sh`; `tests/test_window.py`. The page tells the window when it has shut down. |
+| 12 | `809c320`, `bb8927a` | `kcgx` and `kcgx go` open the app when it is there, the browser otherwise; `--browser`, `KCGX_BROWSER`, `KCGX_APP`. Setup's step 5 builds the app on macOS; step 7 has a `window` row. |
+| 13 | this commit | The README, the spec, this section, and a row in `docs/README.md`. |
+
+Every line of the 11/12 list is in the [Coverage](#coverage) table, and
+each has code and tests behind it. Where a task built something other
+than its steps said, the task's own "As built" note says so.
+
+### The suite
+
+It was 650 tests before the plan. After each task, as that task reported
+it: 798 after Task 4, 867 after 5, 879 after 6, 890 after 7, 926 after 8,
+934 after 9, 1136 after 10 (when every page test began to run twice, once
+in each browser), 1199 after 11, 1249 after 12 and 1269 after its
+review. The quoted 90 s became about ten minutes, most of it Chromium's
+half of the page tests.
+
+For this commit, `uv run --quiet --group browser pytest -q` with the one
+test named below left out: `1268 passed, 1 deselected in 597.55s
+(0:09:57)`, none skipped and none failed. It was run while these
+documents were being written; the tree it ran on differs from this commit
+only in the four Markdown files, and no test reads a Markdown file.
+
+Three things about it that a reader should know.
+
+- **One test starts the real server, and was left out of this task's
+  run.** `tests/test_launcher.py::test_go_when_not_running_starts_at_that_airport`
+  runs `kcgx go KSEA` with nothing running, so `python -m kcgx.server`
+  starts without `--demo`, is checked and is stopped about a second
+  later. It is older than this plan (phase E) and Task 12 found it. In
+  that second the server may open the audio device and begin fetching
+  LiveATC's listing for KSEA and polling adsb.lol; nobody has measured
+  whether it does. The test's home and state are in a temporary folder,
+  so nothing of the owner's is written. It breaks this plan's own
+  constraint ("no test touches the network, ffmpeg or an audio device")
+  and every full run of the suite before this one included it. It was
+  not changed, because no task was given it. **For the owner to decide:**
+  the smallest change is to start the demo first, as its neighbours do,
+  and to test "start at that airport" some other way.
+- **Two page tests fail now and then.** `test_a_refused_radar_says_so_and_dims_its_lamp`
+  and `test_an_emergency_squawk_lights_the_lamp_and_turns_the_row_red`
+  put an aircraft frame into the page by hand and lose it if the demo's
+  15 s poll lands before the page has shown it. Tasks 7 and 11 each met
+  one, each passed alone, and neither was mended. A third,
+  `test_a_callsign_pressed_far_down_a_one_column_page_brings_its_row_back_into_view`,
+  failed once in Task 7 for the same poll re-rendering the table under it.
+- **`tests/test_window.py` compiles the real app** into the test's own
+  temporary folder on a Mac with `swiftc`. None of those copies was ever
+  listed by Launch Services.
+
+### What was seen, and how
+
+Nothing by a person. What stands in for it:
+
+- **Task 9's walk of Part 1**, by script, in headless Chromium, on the
+  demo: every line of the list at two sizes, two palettes and two
+  displays, 349 checks and 119 screenshots read afterwards. It is
+  written up under [Part 1 by hand](#part-1-by-hand-task-9-2026-11-12).
+- **Tasks 4 to 8 each looked at their own screenshots** of the demo, in
+  Chromium, mostly WOPR with display CRT.
+- **Task 10 looked at the page in Playwright's WebKit 26.0** beside
+  Chromium, at 1440 by 900, at 1x and 2x. That is not the system's
+  WKWebView (Safari here is 27.2), which is what KCGX.app uses.
+- **Task 11 ran an earlier build of the app once**, for 13 s, without
+  looking at it. See [KCGX.app](#kcgxapp-task-11-2026-11-12).
+
+### The 250 nm frame time
+
+The demo cannot fill 250 nm, so 600 aircraft, each with a full 12 point
+trail, were put into the page by hand. All of it is from headless
+browsers at 1440 by 900 (a 1024 by 588 radar), glow LOW, display CRT; the
+figure is the mean interval between frames. None of it is from a real
+display, and a real 250 nm picture has never been drawn.
+
+| Where | Before Task 10 | After |
+|---|---|---|
+| Chromium's headless shell (draws in software), 1x | 34.7 ms (Task 7) | 19.2 ms |
+| the same, 2x | 66.3 ms (Task 7) | 45.5 ms |
+| Playwright's WebKit, 1x | 1.1 s | 10.7 ms |
+| the same, 2x | not taken | 11.8 ms |
+| Chromium on the GPU, 1x and 2x | not taken at 600 (it crashed); 136 ms at 60 aircraft and 40 nm | 8.3 ms |
+| WebKit, 1x, with every tag boxed | | 11.6 ms |
+
+Headless WebKit ticks every 10.0 ms and Chromium on the GPU every 8.3 ms,
+so 8.3 ms means no frame was late, and 10.7 to 11.8 ms that some were.
+Task 7
+found the cost (a canvas shadow on each of 6600 trail strokes) and left
+it, as its step said; Task 10 met the same cost at any range in WebKit
+and on a GPU (25 ms a frame for the demo's eleven aircraft) and changed
+the glow to one shadow for each colour. The shell, which the tests run
+in, is the one place still over 16 ms at 250 nm, and at 2x it is slower
+than it was at ordinary ranges too: about 33 ms a frame with any traffic
+and the glow on, where it held 16.7 ms. A Mac with no GPU acceleration
+and a 2x display would see that.
+
+Not done: aircraft and trail points off the screen are still drawn; and
+the static layer still redraws with a shadow on every map line and symbol
+while the map is panned, zoomed or drawing on. Task 10 measured that at
+31 to 54 ms a frame in WebKit, and in Chromium on the GPU at 16 to 28 ms
+at 40 nm and 67 to 100 ms at 250 nm. Task 10's change costs one more
+full-size canvas, about 9.6 MB at 2x.
+
+### Owed by the owner
+
+Every hand check an earlier task reported as not done, gathered. None has
+been done.
+
+**With real feeds and traffic** (Task 9's third step; `kcgx` at KPDX).
+
+1. The range to 250 and back. A wider range fills in only at the next
+   scheduled poll (up to 15 s; that is decision 1), so the wide rings
+   show empty until then: is that acceptable against the real service?
+   Shrinking should drop aircraft at once.
+2. A real 250 nm picture: how many aircraft, the frame rate (the numbers
+   above are headless), and how badly the tags overlap.
+3. A 2.5 nm zoom on the runways.
+4. Boxes on with a busy picture.
+5. Audio. Nothing here opened an audio device: master volume, M and S
+   muting and soloing, the chatter percentage following real speech, and
+   the AUDIO lamp were seen only as demo values.
+6. With lamps and teletype off, as they now are by default: is it clear
+   enough when a launch has fallen back to one feed, or when an aircraft
+   squawks an emergency? Neither note reaches the banner (decision 4
+   sends only the page's own errors there). Noticed in Task 13, while
+   writing the README; no task looked at it.
+
+**On the real display.**
+
+7. The look of CRT, glow, scanlines and flicker; the scanline sliders
+   through their range.
+8. The wheel on a trackpad. The tests send exact pixel deltas, and the
+   small-airport test depends on them.
+9. The sliders. They are drawn by the stylesheet since Task 10 and have
+   no filled part, in Chrome too: a change the list did not ask for.
+10. The icons and M and S as targets: 30 px and 28 by 24 px. Small for a
+    finger at 390 px wide.
+
+**The window.** The thirteen steps under
+[KCGX.app](#kcgxapp-task-11-2026-11-12), "For the owner, with the window
+in front of you". Task 11 asked for at least 1, 2, 4, 8, 9 and 10 before
+Task 12 made `kcgx` depend on the window; Task 12 landed without them.
+What has never happened at all:
+
+11. A link delivered through `open -a <app> 'kcgx://show?port=...'`, to a
+    closed app and to an open one (the fragment set without a reload).
+12. A launch from the Dock or Spotlight starting the real cockpit.
+13. The red button hiding, the Dock icon bringing back, Cmd-Q stopping
+    the cockpit, the power icon ending the app.
+14. A refused link, or one to a port nothing answers on, **not** starting
+    the cockpit (step 10 there; the one that matters most).
+15. The title, the remembered frame, black before the page, paste in the
+    airport search, Reload, Full Screen, Inspect Element.
+16. Whether the page keeps up while the app is hidden. It keeps its
+    socket and is sent levels 25 times a second; WebKit may throttle a
+    hidden page, and the hub drops a page that stops reading (it then
+    reconnects). Not measured.
+
+`kcgx --browser`, or `KCGX_BROWSER=1`, is the way back if any of it goes
+wrong, and `rm -rf ~/Applications/KCGX.app` removes the window.
+
+**Setup.** `./setup.sh` has not been run for real since step 5 learned
+to build the app; the tests drive it with a fake `swiftc`.
+
+17. A real run on this Mac: the app built into `~/Applications`, step 7's
+    `window` row, and the cockpit then opening in the window.
+18. Not tried, and reasoned only: on a Mac without the command line
+    tools, `/usr/bin/swiftc` is Apple's placeholder, so `command -v
+    swiftc` finds it, the build runs it, and macOS may show its install
+    dialog unannounced before the build fails with setup's warning.
+
+**For the owner's decision**, each reported by a task and left alone.
+
+19. The config sheet is modal with no backdrop: the page behind looks
+    live and takes no clicks, and a click outside does not close the
+    sheet. It also covers the right 40 % of the radar at 1100 px wide.
+20. A range change from any tab resets every tab's pan and zoom.
+21. The wheel is not limited to the range: at range 10 it still goes out
+    to 160 nm, with map and no traffic beyond the bright ring.
+22. Quit stops whatever cockpit the window shows, one started from a
+    terminal included, and so does logging out.
+23. Setup builds the app without asking (about 15 s the first time, a new
+    app in `~/Applications` that claims the `kcgx:` scheme).
+24. The power icon turns white under the pointer, and is white at rest in
+    AMBER and MATRIX.
+25. A failed airport search raises its banner behind the airport sheet's
+    70 % black backdrop, where it is dim.
+26. Problems 1 to 3 under Part 1 below: overlapping tags, a long airport
+    name cut by the radar's edge, pressed buttons outside WOPR.
+27. The test that starts the real server (under "The suite" above).
+
+### Deferred
+
+Beside what "Not in this plan" already lists (an icon, a window on Linux,
+decluttering tags, the rest of the frame time work, per-item box styles,
+a sticky table header):
+
+- **STATES in LABEL BOXES does nothing visible.** `/api/geo` returns no
+  state names for any airport, so the button has nothing to box. The code
+  path is tested with a map that has one.
+- **Flight tags and the home name are not placed around one another.** At
+  2.5 nm the home name's box and the nearest aircraft's tag sit on each
+  other.
+- **The launcher does not check that what is at `$KCGX_APP` is the KCGX
+  app**, only that a program is at `Contents/MacOS/KCGX` inside it.
+- **`setup.sh --check` does not list `swiftc`,** and setup has no
+  uninstall.
+- **A slider still in hand is not moved by another tab's change** to the
+  same setting until it loses focus. As the volume slider always was.
+- **The RANGE slider moves in tens** but the schema allows any whole
+  number: a hand-edited 45 reads "45 NM" with the thumb at the nearest
+  step.
+- **`ctx.letterSpacing` missing** is handled in `radar.js` and tested in
+  no browser: both engines have it.
+- **`squelch.runtime` still writes "press f to retry"** and the station
+  rewrites it by replacing the words. If the wording there changes, the
+  page shows the terminal's hint.
+
+### Left on this Mac
+
+Things the build left, or found, outside the repo. None was touched by
+Task 13.
+
+- **A demo server is still running:** PID 10877,
+  `kcgx.server --demo --icao KPDX --port 56904`, started 12:09 on
+  2026-11-12 by an earlier task's script and orphaned. It is the demo (no
+  network, no audio). `kill 10877` ends it.
+- **`~/Desktop/KCGX.app`** (`com.mikelse.kcgx`) is not from this plan. It
+  does not claim `kcgx:`, but once setup has built the new app Spotlight
+  will offer two called KCGX.
+- **`uv run playwright install webkit`** (Task 10) garbage-collected two
+  browser builds that belong to another Playwright on this machine,
+  `chromium-1243` and `chromium_headless_shell-1243`, at about 14:39.
+  They were back by 16:07, reinstalled by something else.
+- **No app is registered.** `build/KCGX.app` was deleted after Task 11's
+  review, and `lsregister -dump` listed no `com.kcgx.cockpit` after Task
+  12. Building into the repo's `build/` again will register it again
+  within a minute; see below.
+- **Screenshots and measuring scripts** are in the workflow's scratch
+  folder, not in the repo, and will not outlast it.
 
 ### Part 1 by hand (Task 9, 2026-11-12)
 

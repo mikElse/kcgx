@@ -1,6 +1,9 @@
 # The cockpit in a browser
 
-*2026-10-18*
+*2026-10-18. Changed by phase F on 2026-11-12 (the owner's "KCGX Tweaks
+11/12" list, and a window of its own); each change is written into the
+section it belongs to and carries that date. The plan, with its fifteen
+decisions, is `docs/superpowers/plans/2026-11-12-cockpit-tweaks.md`.*
 
 ## The problem
 
@@ -50,6 +53,32 @@ black, framed screens on a wall, a row of indicator lamps between them. See
 `war_games_examples/`. A mockup of the main screen and a visual language
 board were approved on 2026-10-18 (the "KCGX Web Cockpit" design canvas);
 where this spec and the mockup disagree, the mockup is the intent.
+
+**The wall as it stands since 2026-11-12 (phase F).** The owner's list of
+that day rearranged it, and where the list and the mockup disagree the
+list is the later word. The lamp bar and the teletype are shown only when
+turned on, the status screen lost its title, and the frequencies run the
+full height of the right column:
+
+```
+ KCGX  LOCAL COCKPIT 127.0.0.1:8473                        ⚙  ⏻
+┌──────────────────────────────────────┐ ┌──────────────────┐
+│                                      │ │ KPDX   1955Z     │  the airport
+│   coastline, rivers, borders         │ │ PORTLAND       ⌕ │  (no title)
+│        ASA412 6172  ╲                │ ├──────────────────┤
+│                 ⟵────  trail         │ │ TOWER (BOTH)   ● │
+│               TRAFFIC                │ │ ╱╲__╱╲╱╲_____╱╲_ │
+└──────────────────────────────────────┘ │  M   S       34% │  frequencies
+ ▪ ▪ ▪ ▪  lamp bar, when turned on       │ GROUND    7%   ◐ │
+┌──────────────────────────────────────┐ │                  │
+│ traffic table                        │ ├──────────────────┤
+│               TRACKS                 │ │ teletype, when   │
+└──────────────────────────────────────┘ │ turned on        │
+                                         └──────────────────┘
+```
+
+And `kcgx` no longer has to open a browser tab: on a Mac the page is shown
+in a small app of its own (see [The launcher](#the-launcher)).
 
 **Audio stays on the server.** The Python mixer keeps playing through the
 machine's output device exactly as it does today. The browser is a control
@@ -105,6 +134,22 @@ the Mac against real feeds and traffic.
 | `kcgx stop`, `Ctrl-b q` (asks first), picker `^q` stops every cockpit | `kcgx stop`; a Shut down control in the page (asks first) |
 | `q` in squelch quits | SHUT DOWN button, which asks first |
 | Refuses below 100 columns | Responsive: below about 900 px the radar and stack stack vertically |
+
+**Rows changed since, by phase F (2026-11-12).** The table above is what
+was accepted when the terminal cockpit was retired, and is left as it was.
+The owner's list of 2026-11-12 then changed these:
+
+| Row | Since 2026-11-12 |
+|---|---|
+| `c` config overlay | CONFIG is a gear icon. Its sheet docks to the right edge with a clear backdrop and holds every setting of the look, the layout and the radar (decision 10; see Themes). LIMITS, its one row that could not be changed, is gone |
+| `f` feed picker | **Removed from the page** (decision 2). Every feed an airport publishes already opens at launch, so the picker only mattered when the listing could not be fetched, and choosing the airport again refetches it. The server keeps `/api/feeds/available` and `open_feed`, which `/debug` still drives |
+| Message log | Unchanged in what it holds; **hidden unless turned on** (TELETYPE in CONFIG). See "The log is a teletype" |
+| Status pane | No STATUS title; a search icon, bottom right opposite the airport's name, in place of the CHANGE AIRPORT button |
+| Traffic table, row selection | The focused aircraft is also the table's first row, a fifth larger (decision 7) |
+| `t` theme cycling | No PALETTE button: the four palettes are THEME, a dropdown in CONFIG (decision 11) |
+| Running `kcgx` again reattaches | Shows the running cockpit in its own window on a Mac, in a tab elsewhere (decision 14) |
+| Closing the terminal detaches | Closing the window, like closing the tab, leaves the audio playing; **quitting the app stops the cockpit** (decision 15) |
+| `q` quits; `Ctrl-b q` | The power icon in the header, which asks first; Quit in the window |
 
 ## Architecture
 
@@ -234,6 +279,23 @@ config file can lengthen the interval but never shorten it below adsb.lol's
 age, and backs off: 15 s, 30 s, 60 s, capped at 120 s, reset on the first
 success. The page names the refusal: `ERR 429`, `ERR 403`, `NO CONNECTION`.
 
+**The range is a setting, not a config key** (decided 2026-11-12, phase F,
+decision 1). The owner asked to "control the radar's range to the maximum
+possible value". adsb.lol's own OpenAPI document gives the point endpoint
+a maximum radius of 250 nm, so the range is a pref, `range_nm`, a whole
+number from 10 to 250 (default 40), set by a slider in CONFIG in steps of
+10 and remembered with the other prefs. `radar_range_nm` left
+`squelch.toml` on that date; a file that still sets it loads, because
+unknown keys are ignored. A change reaches the running radar
+(`Radar.set_range`) and **never causes a poll**: the new range is asked
+for at the next poll that was due anyway, so a dragged slider cannot
+become a burst against adsb.lol's 15 s ask. Shrinking the range drops the
+aircraft beyond it at once, and a reply that was asked for at a wider
+range is cut to the new one before it is merged. An aircraft dropped for
+being out of range takes its emergency squawk out of the announced set
+without a line in the log; a wider range that brings it back announces it
+afresh.
+
 The picture is the server's (`kcgx.radar`, built in phase D): it merges
 each poll into the aircraft it already has, drops any not heard from for
 `radar_stale_secs`, numbers aircraft with no callsign `UNK1`, `UNK2` in
@@ -260,7 +322,9 @@ speed, track, distance and squawk, sortable by column (nearest first by
 default), and scrolls within its screen. Selecting a row and selecting a
 blip are the same action. The "collapses to a single summary line" of
 earlier drafts was not built: the wall's fixed rows already give the table
-its own screen.
+its own screen. Since 2026-11-12 (decision 7) the focused aircraft is the
+table's first row however it was focused, and sorting orders the rest
+beneath it; see "Click an aircraft to focus it" under Visual language.
 
 ### Transport
 
@@ -271,11 +335,11 @@ its own screen.
 | `GET /` | the cockpit page, served `no-cache` so an edit shows on a plain reload |
 | `GET /static/…` | the page's stylesheet, ES modules and fonts, also `no-cache` (phase C) |
 | `GET /debug` | phase B's bare page, kept because it shows the raw protocol (phase C) |
-| `GET /api/geo?icao=` | the radar's map for that airport: every line, place and runway within 200 nm, `404` for an unknown airport (phase D) |
+| `GET /api/geo?icao=` | the radar's map for that airport: every line, place and runway within 320 nm (200 until 2026-11-12, when the range grew to 250), `404` for an unknown airport (phase D) |
 | `GET /api/health` | `200` with version, protocol, airport and `loading`; used by the launcher |
 | `GET /api/airports?q=` | `search()` results |
 | `POST /api/airport` | `{"icao": "KSEA"}`; answers `202` at once, `404` for an unknown airport, `400` for anything malformed. The change itself reaches pages over the socket |
-| `GET /api/feeds/available` | `picker_feeds()` for the feed picker, each marked `open` or not |
+| `GET /api/feeds/available` | `picker_feeds()` for the feed picker, each marked `open` or not. Kept when the page's picker went on 2026-11-12; `/debug` uses it |
 | `POST /api/shutdown` | stop the server; asks nothing (the page asks first) |
 
 **One WebSocket** at `/ws` for everything live. Every frame is a JSON
@@ -291,7 +355,7 @@ object with a `t`. Server to page:
 | `chatter` | `v`: ident to five-minute fraction | every resort tick; droppable |
 | `volume` | `value` | the volume changed |
 | `message` | `z` (Zulu, `1955Z`), `text` | a line added to the log |
-| `prefs` | `palette`, `glow`, `display` | any page changed one; every tab follows (phase C) |
+| `prefs` | every setting: `palette`, `glow`, `display` (phase C) and, since 2026-11-12, the eleven more listed under Themes | any page changed one; every tab follows |
 | `error` | `text` | this page sent something the protocol does not have |
 | `aircraft` | `ok`, `error`, `age` (seconds since the last good poll), `refresh`, `range`, and `ac`: per aircraft `hex`, `label`, `type`, `lat`, `lon`, `alt` (feet or `GND`), `gs`, `trk`, `sq`, `age`, `dist`, `brg` | each poll, success or refusal, and on an airport change (empty); the snapshot carries the latest as `radar` (phase D) |
 
@@ -299,7 +363,14 @@ Page to server: `mute`, `solo`, `ambient` and `open_feed`, each with an
 `ident`; `volume` with a `value`, clamped to 0..1; `input`, the "you
 have touched the stack" signal that keeps reordering away from the pointer;
 and `prefs` with one or more of `palette`, `glow` and `display`, each
-exactly one of its known names (phase C).
+exactly one of its known names (phase C). Since 2026-11-12 a `prefs`
+message may carry any of the fourteen settings in `kcgx.prefs.SCHEMA`,
+each checked as its kind allows (a choice by name, a flag as a JSON
+boolean, a number as a whole number in its range, a subset as a list of
+known names); a bad value is refused naming the setting, and so is a
+setting the schema does not have, even beside ones it does. The new keys
+are additive, so `protocol` is still 1. Since the same date the page sends
+no `open_feed`; the message stays for `/debug`.
 The parser is strict: a wrong type, an ident that is not lower case letters,
 digits and underscores, a non-finite volume, or an unknown `t` gets an
 `error` frame back, so a page bug shows up rather than a control that
@@ -372,6 +443,17 @@ aircraft and most of the text are strokes on pure black. No fills, no
 gradients, no imagery, no rounded cards. Where a panel needs a boundary it
 gets a thin frame, never a background.
 
+One exception, asked for on 2026-11-12 and off unless chosen (decision 9):
+**label boxes.** A label on the radar may be given a black box behind it,
+so it reads over the lines it sits on. The items are AIRCRAFT (flight
+tags), HOME (the airport's name), AIRPORTS, NAVAIDS, CITIES, PEAKS, STATES,
+RINGS (the ring numbers) and HUD (the readouts in the radar's corners).
+One fill opacity (default 70 %), one padding (4 px), one border opacity
+(50 %) and one border width (1 px, up to 5) serve every boxed item; the
+fill is black and the border takes the label's own colour. Turning a box
+on, or changing its size, never moves the label's text. How boxes are
+painted and placed is under [Rendering](#rendering).
+
 **Lines glow.** Each stroke is drawn twice with additive blending: a wide,
 faint, blurred pass and a thin bright core. That is the phosphor look, and
 it is cheap. On top of the glow sits a display effects layer, CRT by
@@ -399,6 +481,17 @@ altitude, `ASA412 6172`. An aircraft with no callsign is labelled `UNK1`,
 `UNK2` in order of first sighting, and an emergency squawk (`7500`, `7600`,
 `7700`) turns that aircraft red orange.
 
+**The flight tag is chosen** (decided 2026-11-12, decision 8). The owner
+asked to choose which flight information shows. The fields are CALLSIGN
+(the label above), TYPE, SQWK, ALT (feet, or `GND`), GS (`230KT`), TRK
+(`030°`) and DIST (`12.4NM`), set in CONFIG as the pref `tag_fields`. The
+default, CALLSIGN and ALT, is the one line drawn until then. With two or
+fewer fields chosen the tag is one line; with more it is two, identity
+(callsign, type, squawk) over numbers (altitude, speed, track, distance),
+the numbers where the one line has always been. What an aircraft does not
+report is left out. No fields chosen means no tag: the chevron alone, and
+it still takes the click.
+
 Decided 2026-10-19 from the mockup review:
 
 * **A trail is part of its aircraft:** the same colour and stroke width as
@@ -415,6 +508,14 @@ Decided 2026-10-19 from the mockup review:
   callsign in the TRACKS table is a button that does the same thing, and
   the table follows: the focused row is pink and outlined, the rest dim.
   Focus belongs to the page, not the server; each tab has its own.
+  *Since 2026-11-12 (decision 7):* the focused aircraft is pinned to the
+  top of the table, 20 % larger in every cell, however it was focused: by
+  a click on the radar or on its callsign. There is one focus, so there is
+  one place to look for it. Sorting orders the other rows beneath it, and
+  letting it go returns it to its sorted place. The table scrolls to its
+  top on focus; in the one column page, where the page scrolls and not the
+  table, a callsign pressed far down brings the first row into view, and a
+  click on the radar leaves the page where it is.
 
 **Text.** Two faces, both OFL, both vendored:
 
@@ -439,6 +540,28 @@ audio device (`AUDIO`), then an **emergency lamp** (`EMERG`), dark until an airc
 or `7700`, then lit red orange and labelled with the code. It is the whole field's health at a glance, the way
 `●◐○` was on each row, and it stays visible when the stack is scrolled.
 
+Changed 2026-11-12 (phase F), from the owner's list:
+
+* **The lamp bar is hidden unless asked for** (the pref `lamps`, STATUS
+  LAMPS in CONFIG; default off). When shown it sits under the radar, at
+  the radar's width (decision 5): it can no longer span the page, because
+  the frequencies screen now runs the full height of the right column.
+* **The teletype is hidden unless asked for** (the pref `teletype`;
+  default off), and the frequencies screen takes its room. When shown it
+  sits under the frequencies, level with the tracks.
+* **The status screen has no title.** STATUS is gone; the screen is the
+  ICAO and the clocks, and beneath them the airport's name and place on
+  the left and a search icon on the right, bottom right of the screen,
+  which opens the airport search. To a screen reader it is "Airport".
+* **Everything is tighter.** The padding round the page, between screens
+  and inside them came down by about a third (16/20/20 px round the page
+  to 10/12/12; 14 px between screens to 10), set by four custom
+  properties (`--gap`, `--page-pad`, `--pad-x`, `--pad-y`) so the density
+  is changed in one place. Buttons went from 40 px high to 30. Font sizes
+  did not change, but for the chatter figure below.
+* **The header is two icons** and no words: see
+  [Every action is a click](#every-action-is-a-click).
+
 **The feed stack in this language.** An expanded row's meter becomes a
 scrolling vector trace, an oscilloscope line of the last few seconds' level,
 rather than a bar strip. Its controls are two small framed buttons labelled
@@ -452,10 +575,29 @@ chatter figure is a two digit stroked number, the way the
 wall numbers its sectors (`27`). Compact rows are a name, a figure and a
 state glyph on one line.
 
+Changed 2026-11-12 (phase F): the chatter figure is smaller and says what
+it is, a percentage, in both shapes of row: `27%` at 18 px in an expanded
+row (it was 30) and 14 px in a compact one (it was 18), with no leading
+zero, four characters wide and right aligned so it does not shift as it
+changes. M and S are 28 px wide and 24 high (they were 44 and 34), and a
+compact row is 32 px high (it was 44).
+
 **The log is a teletype.** New messages type out a character at a time, in
 caps, with a block cursor, each prefixed with its Zulu time (`1955Z`).
 Fast enough never to delay a warning (the whole line inside 400 ms), and
 instant under reduced motion.
+
+**Hiding the teletype must not hide errors** (decided 2026-11-12,
+decision 4). It is off by default since that date, and it goes on
+collecting while hidden, so turning it on shows the history, opened on its
+newest line. While it is hidden, a line that comes from the page itself
+(an airport search that failed, a message the server refused, a shut down
+that did not go through) also shows in the banner under the header for
+8 s. The server's notes do not: they are history, not errors, and wait in
+the teletype. That includes the two the log exists for, a feed list that
+could not be fetched and an emergency squawk, which with the teletype and
+the lamps both off are seen only as a short stack and a red orange
+aircraft.
 
 The log carries one kind of message squelch never had: **an emergency
 squawk.** When an aircraft in range first shows `7500`, `7600` or `7700`,
@@ -492,6 +634,48 @@ server remembers in `prefs.json` beside the airport file (so
 and sends a `prefs` frame so every tab changes together. An unreadable
 file or an unknown name falls back to the default.
 
+**"Theme" is the palette, and a dropdown** (decided 2026-11-12, decision
+11). The owner asked for the theme as a dropdown and for PALETTE to leave
+the header. The row in CONFIG is labelled THEME and is a `<select>` of the
+four; glow and display stay as segments. Nothing cycles any more.
+
+**One schema for every setting** (2026-11-12, phase F). The three prefs
+became fourteen, all described once in `kcgx.prefs.SCHEMA` as one of four
+kinds: a choice, a flag, a whole number in a range, or a subset of named
+items. The file is read leniently through it (a bad value falls back to
+that setting's own default and disturbs no other), the protocol strictly
+(a bad value refuses the message). The page's controls are declared in
+`index.html` as `[data-pref]` elements and bound by kind, so `sheets.js`
+knows no setting by name; a test holds the markup to the schema.
+
+| key | kind | values | default | CONFIG row |
+|---|---|---|---|---|
+| `palette` | choice | WOPR, AMBER, MATRIX, MONO | WOPR | THEME (dropdown) |
+| `glow` | choice | OFF, LOW, FULL | LOW | GLOW |
+| `display` | choice | OFF, VECTOR, CRT | CRT | DISPLAY |
+| `scan_opacity` | number | 0 to 100 (%) | 34 | SCANLINE OPACITY |
+| `scan_size` | number | 2 to 8 (px) | 3 | SCANLINE SIZE |
+| `lamps` | flag | | false | STATUS LAMPS |
+| `teletype` | flag | | false | TELETYPE |
+| `range_nm` | number | 10 to 250 | 40 | RANGE (step 10) |
+| `tag_fields` | subset | CALLSIGN, TYPE, SQWK, ALT, GS, TRK, DIST | CALLSIGN, ALT | FLIGHT TAG |
+| `box_items` | subset | AIRCRAFT, HOME, AIRPORTS, NAVAIDS, CITIES, PEAKS, STATES, RINGS, HUD | none | LABEL BOXES |
+| `box_fill` | number | 0 to 100 (%) | 70 | BOX FILL |
+| `box_pad` | number | 0 to 12 (px) | 4 | BOX PADDING |
+| `box_border` | number | 0 to 100 (%) | 50 | BOX BORDER |
+| `box_width` | number | 1 to 5 (px) | 1 | BORDER WIDTH |
+
+**The config sheet docks to the right edge with a clear backdrop**
+(decision 10), so scanlines, boxes and the range are seen changing while
+they are set. Its sections are OUTPUT (master volume), LOOK, LAYOUT and
+RADAR; LIMITS, which showed the stream limit and changed nothing, is gone.
+**The page changes nothing itself:** every control sends a `prefs`
+message and the page redraws from the server's `prefs` frame. A slider
+shows its value at once, sends it 80 ms after it last moved, and is not
+moved by a `prefs` frame while it is in hand. The sheet is still a modal
+dialog: the page behind is not darkened, but it takes no clicks until the
+sheet is closed.
+
 ### Rendering
 
 One full window canvas per screen, Canvas 2D with `globalCompositeOperation
@@ -501,6 +685,24 @@ only aircraft, trails, the selection ring and the feed traces redraw at
 display rate. At 40 nm that is a few thousand static segments and a few
 hundred dynamic ones, well inside Canvas 2D. WebGL is the escape hatch if
 it is ever not, and nothing in the data model would need to change.
+
+**The glow on the aircraft is one shadow for each colour** (2026-11-12,
+found by running the page in WebKit for the window). The glow had been a
+canvas shadow on every trail segment and every chevron, and a shadow costs
+by the draw: in WebKit, and in Chromium drawing on a GPU, that was 25 ms a
+frame for eleven aircraft and over 60 ms for thirty. The aircraft's lines are
+now drawn bare on a canvas of their own, a colour at a time, and that
+canvas is drawn onto the moving layer once with the shadow. Measured
+after, in headless browsers and never on a real display: 600 aircraft
+with full trails at 250 nm take 10.7 ms a frame in WebKit and 8.3 ms in
+Chromium on a GPU, where those two tick every 10.0 and 8.3 ms when
+nothing is late. A browser that draws
+in software pays for the one large shadow by the pixel: Chromium's
+headless shell took 19.2 ms for the same picture at 1x and 45.5 ms at 2x.
+Two things are not done: aircraft and trail points that are off the
+screen are still drawn, and the static layer still redraws with a shadow
+on every map line and symbol while the map is panned, zoomed or drawing
+on.
 
 **The radar fills its screen** (decided 2026-10-19). The top row of the
 wall (radar, status, frequencies) has a set height: the window's, less the
@@ -519,17 +721,83 @@ window size; each screen clips its own content (`overflow: hidden` and
 over a neighbour. Decided 2026-10-19 after the panels overlapped in the
 mockup.
 
+**One grid for the whole page** (2026-11-12, phase F). The top row, the
+column and the bottom row became one CSS grid of eight named parts: the
+bar, the banner, the radar, the airport, the frequencies, the lamps, the
+tracks and the teletype. The right column is 320 to 380 px. The radar
+takes the left of the first two rows; the frequencies run from under the
+airport to the bottom of the page, or to the top of the teletype when it
+is shown; the lamps, when shown, are a row of their own under the radar.
+Which of the four layouts is drawn is two attributes on `<html>`,
+`data-lamps` and `data-teletype`, both OFF at first paint so the page
+opens in the default layout. The page fits any window from 640 px high,
+in all four; below 1100 px wide it is one column in the order radar,
+airport, frequencies, lamps, tracks, teletype. No two screens overlap in
+any of them, which the browser tests hold at five sizes by four layouts.
+
 The radar pans by dragging and zooms with the wheel about the pointer,
 from a quarter (160 nm across the shorter side) to six times; a RECENTRE
 button in its title strip snaps back to the airport. While the pointer is
 over the radar the title strip reads its bearing and distance from the
 field (`275° 12.4 NM`). Range rings label themselves in nautical miles.
 
+**The view is held in nautical miles** (decided 2026-11-12, decision 6),
+in place of the zoom factor and the RECENTRE button of the paragraph
+above. The view is "N nm from the centre to the
+nearer edge" (less an 18 px margin). It starts at the range, and returns
+to it, centred, on a new range, a new airport or a double click. The
+wheel runs from **2.5 nm**, the closer zoom the owner asked for, out to
+160 nm, or to the range if that is wider.
+
+* **Range rings are computed**, not the fixed 10, 20, 30 and 40. The step
+  is the first of 0.5, 1, 2, 5, 10, 20 and 50 nm that puts no more than
+  five rings between the centre and the nearer edge. Every multiple of it
+  short of the range that crosses the screen is drawn dim, then the range
+  itself, bright, whether or not it is a multiple. So two to five show
+  between the centre and the nearer edge (the plan said three to five),
+  and more towards the corners of a wide screen. A ring's number is
+  placed, not just drawn: the range's first, and a number that would run
+  into it or into the home ring is left off, its ring kept; with the
+  airport panned off the screen the numbers move to where each ring
+  passes nearest the middle.
+* **The home ring** is 2.5 nm in radius, held between 24 and 64 px on
+  screen, so that it neither vanishes at 250 nm nor fills the screen at
+  2.5. At the closest views the runways, drawn at their true size, run
+  outside it.
+* **A double click on the radar recentres it** (decision 3). The RECENTRE
+  button went with the owner's list, and without something in its place
+  there is no way back from a pan short of changing airport. A double
+  click whose two presses moved (two quick pans from one spot) is not
+  one.
+* **A new range resets the view on every open page**, since the range is
+  the server's and the view is drawn from it.
+
 **Labels never overlap.** Places are labelled in priority order (the home
 airport, then peaks, large airports, VORs, medium airports and cities by
 Natural Earth's rank, then state names) and a label that would overlap one
 already placed is left off, its symbol kept. Navaids on screen are the VOR
-family; small airports appear from 1.5 times zoom.
+family; small airports appear from 1.5 times zoom (since 2026-11-12: from
+a 27 nm view inwards, which is the same thing at the 40 nm range).
+
+**How a label box is painted and placed** (2026-11-12; the setting is
+under Visual language). Both radar layers are light added to light, so
+black drawn into them changes nothing. A box is therefore painted
+`source-over`, by one function: a still label's on the static layer,
+before its text; a flight tag's straight onto the screen, between the
+static layer and the moving one, at its aircraft's own alpha, so a dimmed
+or stale aircraft's box dims with it; the HUD's in CSS from the same four
+settings. The box is the capitals the label inks, then the padding, then
+the border outside the padding, on whole pixels; a place's box takes in
+its symbol. What a label reserves is its old text rectangle grown to hold
+its box, so a label's text never moves. **No box lies across another
+still label:** bare labels may cross as they always have, light on light,
+but once either of two is boxed they are kept apart and the one placed
+later gives way, so a boxed home name can cost the nearest ring its
+number. **Flight tags are not placed around one another**, boxed or not;
+that is left for later (see the plan's "Not in this plan"). A click tries
+every chevron before any tag, so an aircraft under another's tag or box
+is still the one focused. The map that ships names no states, so STATES
+has nothing to box until one does.
 
 ### Display effects
 
@@ -561,14 +829,23 @@ The values below are the mockup's, and are the starting point:
 * **Vignette.** Corners darken: to 27% at the edge in `vector`, 42% in
   `crt`. (These are the mockup's values after it was dialled back by 30%.)
 * **Scanlines** (`crt` only). One dark line every three pixels at 34%
-  opacity, over every screen.
+  opacity, over every screen. *Since 2026-11-12 (decision 12) both are
+  settings,* because the owner asked to set the scanlines' opacity and
+  size: `scan_opacity`, 0 to 100 %, default 34, and `scan_size`, the pitch
+  from one line to the next, 2 to 8 px, default 3. The dark line is a
+  third of the pitch, never under 1 px. They are three custom properties
+  the page writes from the prefs. Both apply only with display CRT, and
+  their sliders are disabled otherwise. At 100 % and 8 px a black 3 px
+  line every 8 px cuts through every row of text and the page is hard to
+  read; that is the far end of both sliders, as asked.
 * **Corners** (`crt` only). Screens get a 16 px radius.
 * **Colour fringe** (`crt` only). The radar gets a one pixel red and cyan
   offset, at 35%.
 
 **Where each effect is done.** Phase D does them without WebGL. Glow is
 Canvas 2D's own shadow blur with additive blending, the same on the radar
-as on the traces. Persistence is a separate layer for the moving things
+as on the traces. (Since 2026-11-12 the aircraft take theirs as one
+shadow for each colour, not one for each stroke; see Rendering.) Persistence is a separate layer for the moving things
 that fades by 45% a frame instead of being cleared, in `vector` and `crt`
 only. Line draw on traces the coastlines, lakes, rivers and borders over
 two seconds when an airport's map arrives. Flicker, jitter, vignette,
@@ -590,6 +867,17 @@ found it was not needed.
 
 **Settings, not states.** `display` and `glow` are remembered with the
 palette, in the same `prefs.json`, so every tab and every launch agrees.
+So, since 2026-11-12, are the two scanline settings and the rest of the
+schema under [Themes](#themes).
+
+**Sliders and the dropdown are drawn by the stylesheet** (2026-11-12).
+WebKit drew its own: a slider whose track does not show on black and
+which ignores `accent-color`, and a rounded dropdown 21 px high whatever
+the stylesheet said. Both are `appearance: none` now: a slider is a line
+in the dim colour with a block in cyan, the dropdown is square with an
+arrow in the text's colour, and they are the same in both engines. The
+sliders lost their filled part in Chromium by it, so a value reads by the
+thumb's place and the number beside it.
 
 ### Map data
 
@@ -614,7 +902,10 @@ the FAA's own servers were not reachable from everywhere. Lines are
 simplified to about 165 m, stored as integers in 1e-4 degree, and cut into
 pieces of at most 64 points, each with its bounding box, so the server
 clips the world to an airport with box tests alone (under 30 ms) and sends
-only the 200 nm around it (5 to 60 KB). The build is deterministic: the
+only the 200 nm around it (5 to 60 KB). Since 2026-11-12 it is the 320 nm
+around it, one radius for every airport, so that the 250 nm range has
+room to pan: 0.11 MB of JSON for KPDX, 0.22 MB for KJFK and 0.30 MB for
+EGLL, clipped in under 0.1 s. The build is deterministic: the
 same sources give the same bytes. Outside the US there is no airspace or
 airway layer; everything else is global.
 
@@ -635,6 +926,25 @@ anywhere else on a compact row to unmute it, and in the header FEEDS,
 CONFIG, PALETTE and SHUT DOWN, plus CHANGE AIRPORT on the status screen and
 RECENTRE on the radar. No label shows a key: no `[F]`-style prefixes, no
 footer of shortcuts.
+
+Changed 2026-11-12 (phase F), from the owner's list. The rule stands; the
+controls are fewer:
+
+* **The header is two icons, with no border and no words** (decision 13):
+  a gear for CONFIG and a power symbol, in the alarm colour, for SHUT
+  DOWN, which still asks first. The airport's CHANGE AIRPORT button is a
+  search icon. All three are our own inline SVG line drawings: no icon
+  font and no licence to carry, and they take the palette through
+  `currentColor`. Each button keeps its id, and has an `aria-label` and a
+  `title`, since a drawing says nothing to a screen reader.
+* **FEEDS is gone from the page** (decision 2), button and sheet. The
+  server keeps `/api/feeds/available` and `open_feed`. When a launch
+  falls back to one feed, the log's hint reads "choose the airport again
+  to retry".
+* **PALETTE is gone**: the palette is THEME in CONFIG (decision 11).
+* **RECENTRE is gone; a double click on the radar recentres it**
+  (decision 3). It is the one action on the page with no visible control,
+  which the list chose; the canvas's label for a screen reader says it.
 
 **There are no keyboard shortcuts**, which also removes the feed selection
 the terminal needed for them: every control acts on its own row, so there
@@ -657,8 +967,12 @@ kcgx go [query]       switch airport, or open the page's airport search
 kcgx stop             stop the server
 kcgx status           running at http://127.0.0.1:8473/  (KPDX), or not running (exit 3)
 kcgx --no-open        start without opening a browser
+kcgx --browser        open the page in the default browser, not its own window (2026-11-12)
 kcgx --demo           start the demo server
 ```
+
+Since 2026-11-12 "open the page" means in the cockpit's own window where
+there is one; see [Its own window](#its-own-window) below.
 
 The server runs detached (its own session, so it outlives the terminal),
 writes its port, pid and whether it is the demo to
@@ -693,6 +1007,68 @@ running is not an error.
 (`kcgx-web [--port 8473] [--icao KPDX] [--demo]`), and gained
 `--refresh-feeds [--icao]` for setup's step 6.
 
+### Its own window
+
+Decided and built 2026-11-12 (phase F), after the owner asked that the
+cockpit "launch in its own dedicated browser/wrapper that isn't Chrome".
+
+**The window is a native WKWebView app on macOS; Linux keeps the default
+browser** (decision 14). `KCGX.app` is one Swift file
+(`macos/KCGXWindow.swift`: one `NSWindow` holding one `WKWebView`),
+compiled by `swiftc` and signed ad hoc by `macos/build.sh`, on the machine
+that runs it, so it is never notarised and carries no quarantine flag.
+What was weighed: pywebview (adds pywebview and pyobjc, and shows as
+"Python" in the Dock unless bundled anyway); Chrome or Edge with `--app=`
+(the cheapest, and exactly what was ruled out); Electron (Chromium);
+Tauri (a Rust toolchain for one window); Safari's "Add to Dock" (cannot be
+scripted, so `kcgx go seattle` could not hand it a search). The
+launcher's seam, `pick_opener`, is where a GTK WebKit window for Linux
+would later plug in.
+
+**The launcher opens it when it is there.** `kcgx` and `kcgx go` show the
+page in the app when its program exists at `$KCGX_APP` (by default
+`~/Applications/KCGX.app`), by running
+`open -a <app> kcgx://show?port=<port>&fragment=<quoted fragment>`.
+Without the app, on Linux, with `--browser`, or with `KCGX_BROWSER` set to
+anything but nothing or `0`, the page opens in the default browser. It
+also does when `open` fails, is missing or does not return in 15 s, and
+for the two pages the app is known to refuse (a port outside 1024 to
+65535, a fragment over 512 bytes). `open` returning is all the launcher
+can see: an app that opens and then shows no cockpit is not noticed, and
+`kcgx --browser` is the way round it.
+
+**What the app does:**
+
+| Event | What it does |
+|---|---|
+| a `kcgx://show` link | checks that `http://127.0.0.1:<port>/api/health` says `"app": "kcgx"`, then loads `http://127.0.0.1:<port>/#<fragment>`; if that page is already loaded it only sets the fragment, so the socket is kept. Shows and activates the window |
+| launched with no link (Dock, Spotlight) | runs `<repo>/bin/kcgx --no-open` with the `PATH` it was built with, reads `server.json` for the port and loads it; shows the launcher's own words on failure |
+| the red close button | hides the app; the audio plays on; the Dock icon or Cmd-Tab shows it again |
+| Quit | posts `/api/shutdown`, then exits. While the launcher is still starting the cockpit it waits for it (30 s at most), so that it stops what was started |
+| the page's power icon | the page posts shutdown as in a browser, then tells the window (`ended`, to `window.webkit.messageHandlers.kcgx`), and the app exits without asking again |
+| a link to anywhere but this server | not loaded in the window; opened in the default browser if it was pressed and is http or https |
+
+**The red close button hides the window and the audio plays on; Quit, and
+the power icon, stop the cockpit** (decision 15). That is how a Mac audio
+app behaves, and it gives "keep listening" and "stop" one gesture each.
+The cost: quitting the window stops a cockpit that was started from a
+terminal too, where closing a browser never did.
+
+The window's title follows the page's (`KCGX KPDX`); only its frame is
+remembered, and the page is kept in no cache or store on disk, because
+every setting is the server's. It has a small menu (Hide and Quit; Cut,
+Copy, Paste and Select All, without which the airport search cannot be
+pasted into; Reload and Full Screen), and the web inspector is on. When
+there is no cockpit to show (the launcher failed, nothing answered, a
+link was refused) the window says so in words.
+
+**Not checked by hand when this was written.** The app is compiled and
+signed, and what it makes of some forty links is tested through its
+`--check` argument; an earlier build was run once for 13 s against a demo
+server and its page's socket connected. Nobody has looked at the window,
+and no link has been delivered to it through `open`. The checks owed are
+listed in the plan's "Built" section.
+
 ## Security
 
 A server on localhost is reachable by every web page the browser opens, so
@@ -704,6 +1080,19 @@ two checks apply to every request and the WebSocket handshake:
   page from muting your feeds or shutting the cockpit down.
 
 No authentication beyond that: it is one person's machine.
+
+**The `kcgx:` scheme** (2026-11-12). Any web page can open a `kcgx://`
+link once KCGX.app is installed, so a link can ask for very little. It is
+`kcgx://show` with a `port` and a `fragment`, once each, and nothing
+else: a path, a user, any other parameter, or a port outside 1024 to
+65535 refuses it. The host is always `127.0.0.1`. The port's health check
+must say kcgx before anything loads. The fragment is not refused for what
+it holds: every byte a URL's fragment may not hold is escaped, so it stays
+a fragment whatever was sent, up to 512 bytes. A link that is refused, or
+whose port does not answer as kcgx, never starts the cockpit, even when
+it is what launched the app: a launch whose Apple event is a GetURL does
+not run the launcher. The page's `ended` message is taken only from the
+main frame of the page on the port being shown.
 
 ## Install changes
 
@@ -727,6 +1116,24 @@ Platform support widens: with no adsb-tui binary to download, any processor
 will do, and ARM Linux is no longer a stopping point. The adsb.lol
 User-Agent setup's probe sends is a literal in `setup.sh` that a test
 compares with `kcgx.radar.DEFAULT_UA`, now that `bin/kcgx` has none.
+
+**Step 5 also builds the window, on macOS** (2026-11-12, phase F). Its
+title there is "The launcher on your PATH, and its window". After the
+link and the `PATH` question (the app keeps the `PATH` it was built with,
+and that is the step which settles it) setup runs `macos/build.sh "$APP"`,
+where `APP` is `KCGX_APP` or `~/Applications/KCGX.app`, as the launcher
+reads it. It does not ask before building, as it does not ask before
+linking; the banner and `--help` say that step 5 makes what is kcgx's own
+without a question. No `swiftc`, or a build that fails, is said and is
+never fatal: the cockpit opens in the browser. On Linux the step keeps
+its old title and says nothing of a window. Step 7 gains one advisory
+row, `window`: `ok` when the app is there and `codesign --verify` passes;
+`none`, which is not counted as a warning, when there is no app; a
+warning when one is there and does not verify. `build.sh` refuses a
+destination that is not named `something.app`, or that holds anything but
+a KCGX.app it built, before it makes or removes a file. `setup.sh` has no
+uninstall; `rm -rf ~/Applications/KCGX.app` removes the window. Still
+seven steps.
 
 ## Components
 
@@ -752,7 +1159,19 @@ src/kcgx/web/static/js/       radar.js, tracks.js, focus.js new in D
 src/kcgx/launcher.py          new in E: kcgx start/go/stop/status, server.json, health
 src/kcgx/selfcheck.py         new in E: setup.sh step 7's server check
 bin/kcgx                      rewritten in E: finds the repo, runs kcgx through uv
+src/kcgx/prefs.py             rewritten in F: one schema for all fourteen settings
+macos/KCGXWindow.swift        new in F: KCGX.app, one WKWebView window on the local server
+macos/Info.plist.in           new in F: bundle metadata, the kcgx: scheme
+macos/build.sh                new in F: swiftc, the bundle, an ad hoc signature
 ```
+
+Phase F (2026-11-12) otherwise changed files that were there: the page
+(`index.html`, `cockpit.css`, and `main.js`, `sheets.js`, `store.js`,
+`radar.js`, `tracks.js` and `stack.js`), `protocol.py`, `station.py`,
+`server.py`, `radar.py`, `geodata.py`, `demo.py`, `launcher.py`,
+`setup.sh` and `squelch/config.py`. It deleted no file: what went (the
+page's feeds sheet, the PALETTE and RECENTRE buttons, LIMITS,
+`radar_range_nm`) went from inside files that stayed.
 
 Removed in phase E, with their tests: `bin/kcgx`'s tmux logic,
 `bin/kcgx-no-radar`, `kcgx.tmux.conf`, the whole terminal app
@@ -828,6 +1247,26 @@ all of that code.
   the same), place names brighten under the pointer, the wheel zooms,
   dragging pans and RECENTRE resets, headers sort, and emergency and
   refused frames light the lamps.
+  Phase F (2026-11-12) rewrote these for the page as it now is and added
+  to them: the four layouts and their no-overlap check, the icons, every
+  control of the config sheet reaching a second tab, the banner's 8 s,
+  the chatter figure, the focused row, the wheel's limits and the double
+  click, the computed rings, flight tags, and label boxes down to the
+  pixels of the canvas. The feed picker's test went with the picker.
+  `tests/test_page_prefs.py` needs no browser: it parses `index.html` and
+  holds each `[data-pref]` control to `kcgx.prefs.SCHEMA`, which is what
+  stops the page and the server drifting apart.
+* **The window.** Built in phase F as `tests/test_window.py`. No test
+  reaches Swift through a window. One kind reaches the program: on a Mac
+  with `swiftc` the real app is built into the test's own folder, checked
+  with `codesign --verify`, and asked through its `--check` argument what
+  each of some forty links would show; the same file drives `build.sh`
+  with a fake `swiftc` and `codesign`, which runs anywhere. Nothing in it
+  opens a window or registers the app. `tests/test_launcher.py` holds the
+  command the launcher would run and never runs it, and
+  `tests/test_setup.py` builds with a fake `swiftc` into the test's own
+  `KCGX_APP`. What the window does once open is checked by hand or not at
+  all.
 * **Demo mode.** `kcgx-web --demo` (phase C) runs `kcgx.demo`: synthetic
   feeds for any airport that meter, chatter, reconnect and park like real
   ones, with no network, ffmpeg or audio device, and nothing remembered.
@@ -846,6 +1285,7 @@ all of that code.
 | **C** | Page: status header, feed stack, meters, config sheet, feed picker, messages | Playwright tests against `--demo` |
 | **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata, radar and browser tests; manual check at a busy airport |
 | **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | launcher, self check and setup tests; a fresh `./setup.sh` and `kcgx` on the Mac |
+| **F** | The 11/12 tweaks (density, icons, every setting in CONFIG, range to 250 nm, zoom to 2.5, flight tags, label boxes); the page in WebKit; KCGX.app (2026-11-12) | prefs, page and window tests in Chromium and WebKit; by hand on the Mac, against real feeds and with the window open, **still owed** |
 
 A comes first because it is the only phase that touches working code, and it
 leaves the terminal cockpit intact. B through D add new files alongside the
@@ -869,6 +1309,10 @@ the terminal cockpit is tagged `terminal-cockpit`.
 * **Feed listing refused.** Unchanged behaviour and messages, except that
   the station rewrites squelch's "press f to retry" as "open FEEDS to
   retry": the feed picker fetches the listing afresh every time it opens.
+  Since 2026-11-12, with no FEEDS button, it rewrites it as "choose the
+  airport again to retry": choosing the airport again reads the list
+  again, and fetches it when there is no cache. The line is in the
+  teletype, which is hidden unless turned on.
 * **adsb.lol refused.** Last good picture, backoff, as above. The radar's
   corner reads `ERR 429, PICTURE 45S OLD`, the RADAR lamp turns amber (red
   orange if there is no picture at all), and the tracks table says the
@@ -895,4 +1339,21 @@ the terminal cockpit is tagged `terminal-cockpit`.
 5. **Alarm colour in the monochrome palettes.** In `amber` and `matrix`
    the alarm colour is white rather than red orange, to keep them single
    hue. Worth checking on real hardware that an emergency still reads as
-   one at a glance.
+   one at a glance. Since 2026-11-12 the same holds for the header's
+   power icon, which is drawn in the alarm colour: in AMBER and MATRIX it
+   is white, told from the gear only by its shape, and in every palette
+   it turns white under the pointer.
+6. **Pressed and not pressed, outside WOPR** (raised 2026-11-12). A
+   pressed button is the palette's pink, which in AMBER, MATRIX and MONO
+   is within a shade of the text's colour, so only its border changes.
+   CONFIG now has 26 such buttons. Older than phase F; for the owner's
+   eye.
+7. **Tags that overlap** (raised 2026-11-12). Flight tags are not placed
+   around one another, and with many fields or a 250 nm picture they pile
+   up. Decluttering was left out of phase F until real traffic at 250 nm
+   has been looked at.
+8. **Should the config sheet be modal?** (raised 2026-11-12). It has no
+   backdrop, so the page behind looks live, but it takes no clicks and a
+   click outside does not close the sheet. A click outside closing it, or
+   a sheet that is not modal so the radar can be panned while settings
+   change, are both open.

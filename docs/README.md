@@ -4,7 +4,7 @@ Each piece of work gets a **spec** (what and why, agreed before any code) and a
 **plan** (task-by-task TDD steps, agreed before implementation). Specs live in
 `superpowers/specs/`, plans in `superpowers/plans/`.
 
-## Web cockpit: all five phases built
+## Web cockpit: all six phases built
 
 The cockpit as a local web app: audio stays on the server, the browser is
 the display and the controls, and our own vector radar in a WarGames style
@@ -19,6 +19,7 @@ Start with the [spec](superpowers/specs/2026-10-18-web-cockpit-design.md).
 | **C** | page: status, feed stack, meters, config, feed picker, log | [plan](superpowers/plans/2026-10-19-web-cockpit-c-page.md) | built; checked by hand on the Mac |
 | **D** | radar: geodata, vector renderer, poller, palettes, display effects | [plan](superpowers/plans/2026-10-19-web-cockpit-d-radar.md) | built; checked by hand on the Mac |
 | **E** | launcher, `setup.sh`, README; remove tmux, adsb-tui, Textual UI | [plan](superpowers/plans/2026-10-22-web-cockpit-e-launcher.md) | built; to check by hand on the Mac |
+| **F** | the 11/12 tweaks: a denser page, every setting in CONFIG, range to 250 nm, zoom to 2.5, flight tags, label boxes; and KCGX.app, a window of its own on macOS | [plan](superpowers/plans/2026-11-12-cockpit-tweaks.md) | built 2026-11-12; **nothing checked by hand yet**: real feeds, the real display and the window are listed under "Built" in the plan |
 
 ## Audio pane upgrades — planned, not started
 
