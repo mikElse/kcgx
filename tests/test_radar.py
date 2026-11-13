@@ -85,6 +85,96 @@ def test_an_aircraft_not_heard_from_for_the_stale_time_drops_out():
     assert {ac["hex"] for ac in radar.frame()["ac"]} == {"new"}
 
 
+def test_every_field_adsb_lol_gives_is_kept_under_a_short_key():
+    radar, *_ = make()
+    radar.merge({"ac": [plane(r="n412as ", desc="boeing 737 max 9", ownOp="Alaska Airlines Inc",
+                              baro_rate=-704.4, category="a3")]})
+    ac = radar.frame()["ac"][0]
+    assert (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]) == (
+        "N412AS", "BOEING 737 MAX 9", "ALASKA AIRLINES INC", -704, "A3")
+
+
+def test_a_field_not_given_is_none():
+    radar, *_ = make()
+    radar.merge({"ac": [plane("a"), plane("b", r="  ", desc="", ownOp=None, baro_rate="fast", category=7)]})
+    for ac in radar.frame()["ac"]:
+        assert (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]) == (None,) * 5, ac
+
+
+# -- parked traffic ------------------------------------------------------------
+
+
+def parked(hex_="p", **fields):
+    return plane(hex_, **{"alt_baro": "ground", "gs": 0.0, "seen_pos": 0.0, **fields})
+
+
+def test_a_track_on_the_ground_and_slow_counts_up_from_the_poll_it_first_qualified():
+    radar, _, _, clock = make(ground_gs=5)
+    radar.merge({"ac": [parked()]})
+    assert radar.frame()["ac"][0]["still"] == 0
+    clock.now += 15
+    radar.merge({"ac": [parked(gs=4.9)]})
+    clock.now += 7
+    assert radar.frame()["ac"][0]["still"] == 22, "counted on our clock, between polls too"
+    assert isinstance(radar.frame()["ac"][0]["still"], int)
+
+
+def test_one_poll_that_fails_the_test_resets_it():
+    radar, _, _, clock = make(ground_gs=5)
+    radar.merge({"ac": [parked()]})
+    clock.now += 30
+    radar.merge({"ac": [parked(gs=6)]})  # taxiing
+    assert radar.frame()["ac"][0]["still"] == 0
+    clock.now += 15
+    radar.merge({"ac": [parked()]})
+    clock.now += 15
+    assert radar.frame()["ac"][0]["still"] == 15, "from the poll it qualified again"
+
+
+def test_a_poll_that_misses_a_parked_track_does_not_reset_it():
+    radar, _, _, clock = make(ground_gs=5)
+    radar.merge({"ac": [parked()]})
+    clock.now += 15
+    radar.merge({"ac": []})  # not heard this time, not yet stale
+    clock.now += 15
+    radar.merge({"ac": [parked()]})
+    assert radar.frame()["ac"][0]["still"] == 30
+
+
+def test_airborne_or_of_unknown_speed_is_never_still():
+    radar, *_ = make(ground_gs=5)
+    radar.merge({"ac": [plane("air", gs=0.0), parked("nogs", gs=None), parked("noalt", alt_baro=None)]})
+    assert {ac["hex"]: ac["still"] for ac in radar.frame()["ac"]} == {"air": 0, "nogs": 0, "noalt": 0}
+
+
+def test_an_altitude_under_ground_alt_counts_as_on_the_ground():
+    radar, _, _, clock = make(ground_gs=5, ground_alt=100)
+    radar.merge({"ac": [parked("low", alt_baro=25), parked("high", alt_baro=100)]})
+    clock.now += 15
+    radar.merge({"ac": [parked("low", alt_baro=25), parked("high", alt_baro=100)]})
+    assert {ac["hex"]: ac["still"] for ac in radar.frame()["ac"]} == {"low": 15, "high": 0}
+
+
+def test_at_ground_alt_zero_only_gnd_counts():
+    radar, _, _, clock = make(ground_gs=5, ground_alt=0)
+    radar.merge({"ac": [parked("gnd"), parked("zero", alt_baro=0), parked("below", alt_baro=-50)]})
+    clock.now += 15
+    radar.merge({"ac": [parked("gnd"), parked("zero", alt_baro=0), parked("below", alt_baro=-50)]})
+    assert {ac["hex"]: ac["still"] for ac in radar.frame()["ac"]} == {"gnd": 15, "zero": 0, "below": 0}
+
+
+def test_new_ground_thresholds_apply_from_the_next_poll_and_send_nothing():
+    radar, frames, _, clock = make(ground_gs=5)
+    radar.merge({"ac": [parked(gs=8)]})
+    radar.set_ground(10, 0)
+    assert (radar.ground_gs, radar.ground_alt) == (10, 0) and frames == []
+    assert radar.frame()["ac"][0]["still"] == 0
+    clock.now += 15
+    radar.merge({"ac": [parked(gs=8)]})
+    clock.now += 15
+    assert radar.frame()["ac"][0]["still"] == 15
+
+
 def test_an_airport_change_forgets_everything_and_tells_pages():
     radar, frames, _, _ = make()
     radar.merge({"ac": [plane("a", flight=None)]})
@@ -184,6 +274,44 @@ def test_a_config_cannot_poll_faster_than_adsb_lol_asks():
     assert radar.delay() == 15
     radar.refresh_secs = 30
     assert radar.delay() == 30
+
+
+async def test_a_new_refresh_sets_the_base_delay_and_keeps_the_backoff():
+    answers = [RadarRefused("ERR 429")] * 3
+
+    def fetch(*args):
+        raise answers.pop(0)
+
+    radar, frames, *_ = make(fetch)
+    radar.set_refresh(30)
+    assert radar.refresh_secs == 30 and radar.delay() == 30
+    assert frames == []
+    delays = []
+    for _ in range(3):
+        await radar.poll()
+        delays.append(radar.delay())
+    assert delays == [60, 120, 120]
+    radar.set_refresh(5)
+    radar.failures = 0
+    assert radar.delay() == 15, "never faster than adsb.lol asks"
+
+
+async def test_a_new_refresh_never_triggers_a_poll():
+    asked = []
+    radar, *_ = make(lambda lat, lon, range_nm: asked.append(range_nm) or {"ac": []})
+    task = asyncio.create_task(radar.run())
+    for _ in range(100):
+        if asked:
+            break
+        await asyncio.sleep(0.01)
+    assert asked, "the first poll never ran"
+    for secs in (60, 15, 120, 20):
+        radar.set_refresh(secs)
+        await asyncio.sleep(0.05)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert asked == [40] and radar.refresh_secs == 20
 
 
 async def test_a_reply_for_the_previous_airport_is_thrown_away():

@@ -127,6 +127,44 @@ def test_demo_traffic_is_shaped_like_adsb_lol_and_stays_near_the_field():
     assert "UNK1" in labels  # the one with no callsign
 
 
+def test_every_demo_aircraft_carries_every_field_the_radar_keeps():
+    from kcgx.radar import Radar
+
+    for t in range(1_000_000, 1_003_600, 60):
+        reply = demo.traffic(45.5887, -122.5975, 250, clock=lambda: float(t))
+        for ac in reply["ac"]:
+            for key in ("r", "desc", "ownOp", "baro_rate", "category"):
+                assert ac.get(key) not in (None, ""), (key, ac)
+    radar = Radar(on_frame=lambda f: None, on_note=lambda n: None, clock=lambda: 1_000_000.0)
+    radar.retarget(45.5887, -122.5975)
+    radar.merge(demo.traffic(45.5887, -122.5975, 250, clock=lambda: 1_000_000.0))
+    for ac in radar.frame()["ac"]:
+        assert None not in (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]), ac
+    climbing = {ac["label"]: ac["vs"] for ac in radar.frame()["ac"]}
+    assert climbing.get("DAL1388", 1) > 0 and climbing.get("ASA412", -1) < 0
+
+
+def test_two_demo_aircraft_are_parked_at_the_field_from_the_first_poll():
+    from kcgx.radar import Radar, distance_bearing
+
+    field = (45.5887, -122.5975)
+    for t in (1_000_000.0, 1_000_015.0, 1_234_567.0):
+        reply = demo.traffic(*field, 10, clock=lambda: t)
+        parked = [ac for ac in reply["ac"] if ac["alt_baro"] == "ground" and ac["gs"] == 0]
+        assert len(parked) == 2
+        assert all(distance_bearing(*field, ac["lat"], ac["lon"])[0] < 1 for ac in parked)
+
+    now = [1_000_000.0]
+    radar = Radar(on_frame=lambda f: None, on_note=lambda n: None, clock=lambda: now[0],
+                  fetch=lambda lat, lon, nm: demo.traffic(lat, lon, nm, clock=lambda: now[0]))
+    radar.retarget(*field)
+    radar.merge(demo.traffic(*field, 40, clock=lambda: now[0]))
+    now[0] += 150
+    radar.merge(demo.traffic(*field, 40, clock=lambda: now[0]))
+    still = [ac for ac in radar.frame()["ac"] if ac["still"]]
+    assert len(still) == 2 and all(ac["still"] == 150 for ac in still)
+
+
 def test_a_shorter_range_thins_the_demo_traffic():
     """adsb.lol sends only what is inside the circle asked for, by where each
     aircraft is now. The demo does the same, so the range can be seen
@@ -141,6 +179,7 @@ def test_a_shorter_range_thins_the_demo_traffic():
         return {ac["hex"]: distance_bearing(*field, ac["lat"], ac["lon"])[0] for ac in reply["ac"]}
 
     starts = {f"de{index:04x}": leg[3] for index, leg in enumerate(demo.LEGS)}
+    starts.update({f"de{len(demo.LEGS) + i:04x}": p[3] for i, p in enumerate(demo.PARKED)})
     thinned = flown_out = flown_in = False
     for t in range(1_000_000, 1_001_200, 15):
         everything = distances(250, t)  # no leg in the demo reaches 80 nm
