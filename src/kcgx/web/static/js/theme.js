@@ -42,17 +42,23 @@ export function glowBlur(layer) {
   return (setting(`glow_${layer}`) * 12) / 100;
 }
 
-// The page's own glow, from the text layer's blur `b` (0 to 12 px), as the
-// custom properties the stylesheet reads. The text's shadow is a tight core
-// and a wide halo; at the default (33, b 3.96) the halo is phase F's LOW,
-// 7 px, and at 75 (b 9) the two are FULL's 4 and 16 px. The screens' frames
-// and the lit lamps glow while the text does.
+// The page's own glow, from the text layer's number (glow_text, 0 to 100),
+// as the custom properties the stylesheet reads. The text's shadow is a
+// wide halo and, above 33, a tight core under it, so the two phase F steps
+// are exact: 33 is LOW (one 7 px halo) and 75 is FULL (a 4 px core and a
+// 16 px halo). Below 33 the halo grows from nothing to LOW's; from 33 to
+// 75 it grows to FULL's as the core fades in; above 75 both grow on in
+// proportion. The screens' frames and the lit lamps glow while the text does.
 export function textGlow() {
-  const b = glowBlur("text");
-  if (b === 0) return { glow: "none", frame: "none", lamp: "0px" };
-  const px = (n) => `${Math.round(n * 100) / 100}px`;
+  const level = setting("glow_text");
+  if (level === 0) return { glow: "none", frame: "none", lamp: "0px" };
+  const between = (from, to) => from + ((to - from) * (level - 33)) / (75 - 33);
+  const [core, halo] = level <= 33 ? [0, (7 * level) / 33]
+    : level <= 75 ? [between(0, 4), between(7, 16)]
+      : [(4 * level) / 75, (16 * level) / 75];
+  const shadow = (blur) => `0 0 ${Math.round(blur * 100) / 100}px currentColor`;
   return {
-    glow: `0 0 ${px((b * 4) / 9)} currentColor, 0 0 ${px((b * 16) / 9)} currentColor`,
+    glow: core > 0 ? `${shadow(core)}, ${shadow(halo)}` : shadow(halo),
     frame: "0 0 14px color-mix(in srgb, var(--frame) 27%, transparent)",
     lamp: "10px",
   };

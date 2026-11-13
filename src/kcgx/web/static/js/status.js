@@ -7,33 +7,37 @@
 const pad = (n) => String(n).padStart(2, "0");
 const ZONE = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" });
 
-// Both clocks as the prefs have them, each in three parts: the hours and
-// minutes, the seconds (":SS", or empty) and what follows ("Z", " PM PST").
+// Both clocks as the prefs have them, each in four parts: the hours and
+// minutes, the seconds (":SS", or empty), AM or PM (" AM", or empty) and
+// the rest ("Z", " PST", or empty).
 export function clockParts(now, { clock_24h: h24, clock_seconds: seconds, clock_zone: named }) {
   const secs = (n) => (seconds ? `:${pad(n)}` : "");
-  const zulu = [`${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`, secs(now.getUTCSeconds()), "Z"];
+  const zulu = [`${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`, secs(now.getUTCSeconds()), "", "Z"];
   const hours = now.getHours();
   const time = h24 ? `${pad(hours)}:${pad(now.getMinutes())}` : `${hours % 12 || 12}:${pad(now.getMinutes())}`;
+  const half = h24 ? "" : hours < 12 ? " AM" : " PM";
   // The zone's name now, not at mount: it changes with daylight saving.
   const zone = named ? ZONE.formatToParts(now).find((p) => p.type === "timeZoneName") : null;
-  const after = [h24 ? "" : hours < 12 ? "AM" : "PM", zone ? zone.value : ""].filter(Boolean).join(" ");
-  return [zulu, [time, secs(now.getSeconds()), after ? ` ${after}` : ""]];
+  return [zulu, [time, secs(now.getSeconds()), half, zone ? ` ${zone.value}` : ""]];
 }
 
-// A clock's parts into its node: the seconds in a span of their own, set
-// smaller than the minutes (cockpit.css), so the longest clocks still fit
-// beside the ICAO.
-function show(node, [main, secs, after]) {
-  const text = main + secs + after;
+// A clock's parts into its node: the seconds and AM/PM in spans of their
+// own, set smaller than the minutes (cockpit.css), so the longest clocks
+// still fit beside the ICAO. The 24-hour clocks without seconds are plain
+// text, as they always were.
+function show(node, [main, secs, half, rest]) {
+  const text = main + secs + half + rest;
   if (node.textContent === text) return;
-  const parts = [main];
-  if (secs) {
+  const small = (className, content) => {
     const span = document.createElement("span");
-    span.className = "secs";
-    span.textContent = secs;
-    parts.push(span);
-  }
-  if (after) parts.push(after);
+    span.className = className;
+    span.textContent = content;
+    return span;
+  };
+  const parts = [main];
+  if (secs) parts.push(small("secs", secs));
+  if (half) parts.push(small("half", half));
+  if (rest) parts.push(rest);
   node.replaceChildren(...parts);
 }
 

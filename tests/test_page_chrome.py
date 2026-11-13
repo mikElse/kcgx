@@ -6,8 +6,11 @@ from page_fixtures import *  # noqa: F403  (fixtures and helpers)
 
 # Browser tests against the demo server, in Chromium and then WebKit.
 
+import contextlib
 import datetime
 import re
+import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -15,6 +18,7 @@ import pytest
 from kcgx.prefs import DEFAULTS
 
 from page_fixtures import (
+    SIZES,
     config_tab,
     radar_debug,
     rows,
@@ -188,16 +192,16 @@ def test_the_vendored_fonts_are_all_declared(page):
 # -- the clocks ------------------------------------------------------------------------
 
 
-@pytest.fixture
-def at_a_known_time(browser, server):
-    """A tab in Los Angeles at 23:07:42Z on 13 November 2026 (15:07:42 PST),
-    with the clock held there. Its own context, so it collects its own errors."""
-    context = browser.new_context(viewport={"width": 1440, "height": 900}, timezone_id="America/Los_Angeles")
+@contextlib.contextmanager
+def tab_at(browser, server, when, width=1440, height=900):
+    """A tab in Los Angeles with its clock held at `when`. Its own context,
+    so it collects its own errors."""
+    context = browser.new_context(viewport={"width": width, "height": height}, timezone_id="America/Los_Angeles")
     tab = context.new_page()
     errors = []
     tab.on("pageerror", lambda error: errors.append(str(error)))
     tab.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-    tab.clock.set_fixed_time(datetime.datetime(2026, 11, 13, 23, 7, 42, tzinfo=datetime.timezone.utc))
+    tab.clock.set_fixed_time(when)
     tab.goto(server + "/")
     tab.wait_for_selector(".feed.expanded")
     set_prefs(tab, **DEFAULTS)
@@ -205,6 +209,13 @@ def at_a_known_time(browser, server):
     set_prefs(tab, **DEFAULTS)
     context.close()
     assert errors == [], errors
+
+
+@pytest.fixture
+def at_a_known_time(browser, server):
+    """At 23:07:42Z on 13 November 2026 (15:07:42 PST)."""
+    with tab_at(browser, server, datetime.datetime(2026, 11, 13, 23, 7, 42, tzinfo=datetime.timezone.utc)) as tab:
+        yield tab
 
 
 def clocks(tab):
@@ -230,14 +241,28 @@ def test_the_clocks_read_as_set(at_a_known_time, prefs, zulu, local):
     assert clocks(tab) == (zulu, local)
 
 
-def test_the_longest_clocks_keep_clear_of_the_icao(at_a_known_time):
-    tab = at_a_known_time
-    set_prefs(tab, clock_24h=False, clock_seconds=True)
-    tab.wait_for_function("local.textContent.includes('PM')")
-    icao, zulu, local = (tab.locator(s).bounding_box() for s in ("#icao", "#zulu", "#local"))
-    assert zulu["x"] >= icao["x"] + icao["width"] and local["x"] >= icao["x"] + icao["width"]
-    pane = tab.locator(".screen-status").bounding_box()
-    assert zulu["x"] + zulu["width"] <= pane["x"] + pane["width"]
+# The widest clocks: two-digit hours, so 10, 11 or 12 o'clock, with AM/PM,
+# seconds and the zone. 19:07:42Z is 11:07:42 AM PST.
+LONGEST = datetime.datetime(2026, 11, 13, 19, 7, 42, tzinfo=datetime.timezone.utc)
+
+
+@pytest.mark.parametrize("width, height", SIZES)
+def test_the_longest_clocks_keep_beside_the_icao(browser, server, width, height):
+    """On the ICAO's row and inside the pane at every size, both columns and
+    the narrow layout, so the status pane keeps its height whatever the
+    hour: the clocks going under the ICAO at 10 o'clock would grow it."""
+    with tab_at(browser, server, LONGEST, width, height) as tab:
+        pane_before = tab.locator(".screen-status").bounding_box()
+        set_prefs(tab, clock_24h=False, clock_seconds=True)
+        tab.wait_for_function("local.textContent === '11:07:42 AM PST' && zulu.textContent === '1907:42Z'")
+        icao, clocks_, zulu, local, pane = (
+            tab.locator(s).bounding_box() for s in ("#icao", ".clocks", "#zulu", "#local", ".screen-status")
+        )
+        assert clocks_["y"] < icao["y"] + icao["height"], f"the clocks went under the ICAO: {clocks_} {icao}"
+        for clock in (zulu, local):
+            assert clock["x"] >= icao["x"] + icao["width"], (clock, icao)
+            assert clock["x"] + clock["width"] <= pane["x"] + pane["width"], (clock, pane)
+        assert pane["height"] == pytest.approx(pane_before["height"], abs=0.5)
 
 
 # -- the text glow ---------------------------------------------------------------------
@@ -261,6 +286,100 @@ def test_the_text_glow_is_glow_text_alone(page):
     assert full not in ("none", default)
     blurs = lambda text: [float(n) for n in re.findall(r"([\d.]+)px", text)]  # noqa: E731
     assert max(blurs(full)) > max(blurs(default))
+
+
+def as_shadow(page, selector, css):
+    """`css` as the engine computes it for the element's text-shadow."""
+    return page.eval_on_selector(
+        selector,
+        """(e, css) => { const before = e.style.textShadow; e.style.textShadow = css;
+                         const text = getComputedStyle(e).textShadow; e.style.textShadow = before; return text; }""",
+        css,
+    )
+
+
+# Phase F's steps, which glow_text's 33 and 75 are (phase G decision 15).
+LOW = "0 0 7px currentColor"
+FULL = "0 0 4px currentColor, 0 0 16px currentColor"
+
+
+@pytest.mark.parametrize("selector", [".title-text", "#icao", "#zulu"])
+def test_the_text_glow_at_33_and_75_is_phase_f_s_low_and_full(page, selector):
+    assert shadow(page, selector) == as_shadow(page, selector, LOW), "the default, 33, is not LOW"
+    set_prefs(page, glow_text=75)
+    assert shadow(page, selector) == as_shadow(page, selector, FULL)
+    set_prefs(page, glow_text=33)
+    assert shadow(page, selector) == as_shadow(page, selector, LOW)
+
+
+def test_the_text_glow_s_first_paint_is_low(page):
+    """The stylesheet's own --glow, before main.js writes one, is LOW too."""
+    first = page.eval_on_selector(
+        "#icao",
+        """e => { const root = document.documentElement.style, glow = root.getPropertyValue("--glow");
+                  root.removeProperty("--glow"); const text = getComputedStyle(e).textShadow;
+                  root.setProperty("--glow", glow); return text; }""",
+    )
+    assert first == as_shadow(page, "#icao", LOW)
+
+
+def light(page, size):
+    """How much light the page's glow paints around white text `size` px
+    high: the sum of every channel of every pixel of a probe, the text on
+    the wall with room for the widest glow around it, over everything else."""
+    page.evaluate(
+        """size => { const box = document.createElement("div"); box.id = "glow-probe";
+                     box.style.cssText = "position: fixed; left: 0; top: 0; z-index: 99999; padding: 64px;"
+                       + "background: var(--wall); color: var(--white); text-shadow: var(--glow);"
+                       + `font: ${size}px/1 var(--font-display); letter-spacing: 0.12em;`;
+                     box.textContent = "KPDX 1907Z"; document.body.append(box); }""",
+        size,
+    )
+    png = page.locator("#glow-probe").screenshot(animations="disabled")
+    page.evaluate("document.getElementById('glow-probe').remove()")
+    at, packed, head = 8, b"", None
+    while at < len(png):
+        length, kind = struct.unpack(">I4s", png[at:at + 8])
+        body = png[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            head = struct.unpack(">IIBB", body[:10])
+        elif kind == b"IDAT":
+            packed += body
+        at += 12 + length
+    width, height_, depth, colour = head
+    assert depth == 8 and colour in (2, 6), head
+    step = 3 if colour == 2 else 4
+    data, stride = zlib.decompress(packed), width * step
+    total, above = 0, bytearray(stride)
+    for row in range(height_):
+        kind, line = data[row * (stride + 1)], bytearray(data[row * (stride + 1) + 1:(row + 1) * (stride + 1)])
+        for i in range(stride):  # undo the row's PNG filter
+            left = line[i - step] if i >= step else 0
+            up, corner = above[i], (above[i - step] if i >= step else 0)
+            if kind == 1:
+                line[i] = (line[i] + left) & 255
+            elif kind == 2:
+                line[i] = (line[i] + up) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 255
+            elif kind == 4:
+                p = left + up - corner
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - corner)
+                line[i] = (line[i] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 255
+        total += sum(line[i] for i in range(stride) if i % step < 3)
+        above = line
+    return total
+
+
+@pytest.mark.parametrize("size", [64, 20])  # the ICAO's, a title's
+def test_the_text_glow_brightens_as_it_rises(page, size):
+    set_prefs(page, display="OFF")
+    levels = [0, 10, 20, 33, 40, 50, 60, 75, 90, 100]
+    seen = []
+    for level in levels:
+        set_prefs(page, glow_text=level)
+        seen.append(light(page, size))
+    assert all(a < b for a, b in zip(seen, seen[1:])), list(zip(levels, seen))
 
 
 def lamp_blur(page):
