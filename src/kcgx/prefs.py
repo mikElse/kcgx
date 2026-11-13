@@ -167,7 +167,7 @@ TRACK_COLS = (
 )
 LINES = ("SOLID", "DASH", "DOT")
 
-# The map's layers, each as radar.js draws it now. A row has only the
+# The map's layers, each as radar/still.js draws it now. A row has only the
 # columns that mean something for it.
 MAP = Table(
     columns={

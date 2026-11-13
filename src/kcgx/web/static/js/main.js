@@ -8,7 +8,7 @@ import { mountStack } from "./stack.js";
 import { mountStatus } from "./status.js";
 import { mountLamps } from "./lamps.js";
 import { mountLog } from "./log.js";
-import { mountRadar } from "./radar.js";
+import { mountRadar } from "./radar/index.js";
 import { mountTracks } from "./tracks.js";
 import { mountAirportSheet, mountConfigSheet, mountShutdownSheet, mountVolume } from "./sheets.js";
 

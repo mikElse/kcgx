@@ -237,10 +237,14 @@ def test_every_module_the_page_imports_is_served():
     js = WEB_DIR / "static" / "js"
     asgi, _ = app()
     with client(asgi) as http:
-        for module in js.glob("*.js"):
-            for name in re.findall(r'from "\./([\w.]+)"', module.read_text()):
-                assert (js / name).is_file(), f"{module.name} imports a missing {name}"
-                assert http.get(f"/static/js/{name}").status_code == 200
+        modules = sorted(js.rglob("*.js"))
+        assert js / "radar" / "index.js" in modules  # and the folders under js/ are looked in
+        for module in modules:
+            for name in re.findall(r'from "(\.\.?/[\w./]+)"', module.read_text()):
+                target = (module.parent / name).resolve()
+                assert target.is_file(), f"{module.relative_to(js)} imports a missing {name}"
+                path = target.relative_to(js.resolve()).as_posix()
+                assert http.get(f"/static/js/{path}").status_code == 200
 
 
 def test_prefs_from_one_page_reach_another():
