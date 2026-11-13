@@ -543,6 +543,23 @@ async def test_ground_thresholds_reach_the_radar_as_the_range_does():
     assert [f["t"] for f in frames(page)] == ["prefs"]
 
 
+async def test_a_prefs_change_reaches_the_radar_only_for_what_changed():
+    station, hub, *_ = make()
+    await station.open("KPDX")
+    calls = []
+    set_refresh, set_ground = station.radar.set_refresh, station.radar.set_ground
+    station.radar.set_refresh = lambda secs: calls.append(("refresh", secs)) or set_refresh(secs)
+    station.radar.set_ground = lambda gs, alt: calls.append(("ground", gs, alt)) or set_ground(gs, alt)
+    station.handle({"t": "prefs", "palette": "MONO"})
+    station.handle({"t": "prefs", "poll_secs": DEFAULTS["poll_secs"]})
+    station.handle({"t": "prefs", "ground_gs": DEFAULTS["ground_gs"]})
+    assert calls == []
+    station.handle({"t": "prefs", "poll_secs": 60})
+    assert calls == [("refresh", 60)]
+    station.handle({"t": "prefs", "ground_alt": 500})
+    assert calls == [("refresh", 60), ("ground", DEFAULTS["ground_gs"], 500)]
+
+
 async def test_without_prefs_the_radar_has_the_default_range():
     station, *_ = make()
     assert station.radar.range_nm == DEFAULTS["range_nm"] == 40

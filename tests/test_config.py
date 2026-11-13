@@ -166,16 +166,14 @@ def test_the_buffer_can_be_tuned(tmp_path):
     assert load_config(path).buffer_seconds == 8.0
 
 
-def test_the_radar_keys_default_to_adsb_lols_pace():
-    cfg = Config()
-    assert (cfg.radar_refresh_secs, cfg.radar_stale_secs) == (15, 60)
+def test_the_radar_stale_time_defaults_to_a_minute():
+    assert Config().radar_stale_secs == 60
 
 
-def test_the_radar_keys_can_be_configured(tmp_path):
+def test_the_radar_stale_time_can_be_configured(tmp_path):
     path = tmp_path / "squelch.toml"
-    path.write_text("radar_refresh_secs = 30\nradar_stale_secs = 90\n")
-    cfg = load_config(path)
-    assert (cfg.radar_refresh_secs, cfg.radar_stale_secs) == (30, 90)
+    path.write_text("radar_stale_secs = 90\n")
+    assert load_config(path).radar_stale_secs == 90
 
 
 def test_the_radar_range_is_gone_rather_than_ignored():
@@ -191,5 +189,19 @@ def test_a_file_that_still_sets_the_radar_range_loads(tmp_path, value):
     """Unknown keys are ignored, whatever they hold: a squelch.toml written
     before the range moved starts as it always did."""
     path = tmp_path / "squelch.toml"
-    path.write_text(f"radar_refresh_secs = 30\nradar_range_nm = {value}\nradar_stale_secs = 90\n")
-    assert load_config(path) == Config(radar_refresh_secs=30, radar_stale_secs=90)
+    path.write_text(f"radar_range_nm = {value}\nradar_stale_secs = 90\n")
+    assert load_config(path) == Config(radar_stale_secs=90)
+
+
+def test_the_radar_refresh_is_gone_rather_than_ignored():
+    """The poll interval became a setting of the page on 2026-11-13
+    (kcgx.prefs, `poll_secs`), CONFIG > GENERAL > RADAR POLL."""
+    assert "radar_refresh_secs" not in {field.name for field in fields(Config)}
+    assert not hasattr(Config(), "radar_refresh_secs")
+
+
+@pytest.mark.parametrize("value", ["30", "5", '"slow"'])
+def test_a_file_that_still_sets_the_radar_refresh_loads(tmp_path, value):
+    path = tmp_path / "squelch.toml"
+    path.write_text(f"radar_refresh_secs = {value}\nradar_stale_secs = 90\n")
+    assert load_config(path) == Config(radar_stale_secs=90)

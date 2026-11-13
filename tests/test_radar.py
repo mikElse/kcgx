@@ -269,6 +269,21 @@ async def test_the_backoff_is_capped_and_reset_by_a_success():
     assert radar.delay() == 15 and radar.error == ""
 
 
+@pytest.mark.parametrize(
+    ("refresh", "expected"),
+    [(15, [15, 30, 60, 120, 120]), (120, [120, 240, 480, 480])],
+)
+def test_the_backoff_cap_is_two_minutes_or_four_refreshes_whichever_is_longer(refresh, expected):
+    """At the slowest poll rate a refusal must still back off: the cap is
+    max(two minutes, four refreshes), so failures double at least twice."""
+    radar, *_ = make(refresh_secs=refresh)
+    delays = []
+    for failures in range(len(expected)):
+        radar.failures = failures
+        delays.append(radar.delay())
+    assert delays == expected
+
+
 def test_a_config_cannot_poll_faster_than_adsb_lol_asks():
     radar, *_ = make(refresh_secs=5)
     assert radar.delay() == 15

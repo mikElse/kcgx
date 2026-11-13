@@ -46,13 +46,13 @@ class Config:
     # past seven; feeds beyond this are parked instead of left knocking.
     # See slots.py for the measurement.
     max_streams: int = 7
-    # The web cockpit's radar (kcgx.radar). adsb.lol asks for no more than
-    # one request every 15 s per address; a refused poll backs off from
-    # there. An aircraft not heard from for radar_stale_secs drops off the
-    # screen. The range was `radar_range_nm` here until 2026-11-12; it is
-    # now a setting changed from the page (kcgx.prefs, `range_nm`). Unknown
-    # keys are ignored, so a file that still sets it loads.
-    radar_refresh_secs: int = 15
+    # The web cockpit's radar (kcgx.radar). An aircraft not heard from for
+    # radar_stale_secs drops off the screen. The range was `radar_range_nm`
+    # here until 2026-11-12, and the poll interval `radar_refresh_secs`
+    # until 2026-11-13; both are now settings changed from the page
+    # (kcgx.prefs, `range_nm` and `poll_secs`, the latter CONFIG > GENERAL
+    # > RADAR POLL). Unknown keys are ignored, so a file that still sets
+    # either loads.
     radar_stale_secs: int = 60
 
 

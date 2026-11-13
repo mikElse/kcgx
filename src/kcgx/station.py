@@ -224,8 +224,11 @@ class Station:
                 self.hub.broadcast(protocol.feed_frame(session, self._title))
         if self.prefs["range_nm"] != self.radar.range_nm:
             self.radar.set_range(self.prefs["range_nm"])
-        self.radar.set_refresh(self.prefs["poll_secs"])
-        self.radar.set_ground(self.prefs["ground_gs"], self.prefs["ground_alt"])
+        if self.prefs["poll_secs"] != self.radar.refresh_secs:
+            self.radar.set_refresh(self.prefs["poll_secs"])
+        ground = (self.prefs["ground_gs"], self.prefs["ground_alt"])
+        if ground != (self.radar.ground_gs, self.radar.ground_alt):
+            self.radar.set_ground(*ground)
 
     def open_feed(self, ident: str) -> None:
         if self.cockpit.session(ident) is not None:

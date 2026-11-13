@@ -8,8 +8,10 @@ when refused) is per address (spec, Radar).
 `Radar` owns the picture for the current airport: the aircraft seen, when
 each was last seen, the UNK numbers given to aircraft with no callsign, and
 which emergency squawks have been announced. A refused poll keeps the last
-good picture and backs off: 15, 30, 60, then 120 s, reset by the first
-success. Aircraft not seen for `stale_secs` drop out.
+good picture and backs off: the refresh doubled per failure in a row,
+capped at two minutes or four refreshes, whichever is longer (so it backs
+off at least twice at any rate: 15, 30, 60, 120 s; at 120, 240, 480 s),
+reset by the first success. Aircraft not seen for `stale_secs` drop out.
 
 The range is a setting (kcgx.prefs, `range_nm`), changed while running by
 `set_range`. A new airport is polled at once; a new range waits for the
@@ -202,7 +204,7 @@ class Radar:
     def set_refresh(self, secs: int) -> None:
         """A new poll interval. It sets the base of `delay` and nothing
         else: the back-off still doubles it per failure, the 15 s floor and
-        the two minute cap hold, and the wait already begun runs out first.
+        the cap (see `delay`) hold, and the wait already begun runs out first.
         It never triggers a poll, for the same reason a new range does not."""
         self.refresh_secs = secs
 
@@ -241,11 +243,12 @@ class Radar:
 
     def delay(self) -> float:
         """Seconds until the next poll: the refresh, doubled per failure in a
-        row, capped at two minutes."""
+        row, capped at two minutes or four refreshes, whichever is longer."""
         refresh = max(MIN_REFRESH_SECS, self.refresh_secs)
         if not self.failures:
             return float(refresh)
-        return float(min(BACKOFF_CAP_SECS, refresh * 2 ** self.failures))
+        cap = max(BACKOFF_CAP_SECS, 4 * refresh)
+        return float(min(cap, refresh * 2 ** self.failures))
 
     async def poll(self) -> None:
         if self.lat is None or self.lon is None:

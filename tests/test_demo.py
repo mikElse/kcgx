@@ -141,7 +141,8 @@ def test_every_demo_aircraft_carries_every_field_the_radar_keeps():
     for ac in radar.frame()["ac"]:
         assert None not in (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]), ac
     climbing = {ac["label"]: ac["vs"] for ac in radar.frame()["ac"]}
-    assert climbing.get("DAL1388", 1) > 0 and climbing.get("ASA412", -1) < 0
+    assert "DAL1388" in climbing and "ASA412" in climbing, sorted(climbing)
+    assert climbing["DAL1388"] > 0 and climbing["ASA412"] < 0
 
 
 def test_two_demo_aircraft_are_parked_at_the_field_from_the_first_poll():
