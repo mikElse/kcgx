@@ -17,6 +17,13 @@
 // on the airport, ends the following and forgets that view too. The focused aircraft's data box
 // (radar/info.js) is placed after each frame too.
 //
+// A drag, the wheel, a move under way and the following each say when the
+// view last moved (`radar.movedAt`, performance.now()), and while it moves
+// the static layer is the last drawing of it moved (radar/still.js). A view
+// that jumps (a recentre, a move with view_ease OFF), a move that has got
+// there and a drag let go say it has stopped, and the layer is drawn anew
+// at once.
+//
 // `radar` is the shared state `mountRadar` makes (see radar/index.js);
 // `init` adds this module's part of it.
 
@@ -52,6 +59,7 @@ export function init(radar) {
   radar.following = false; // the view keeps the focused aircraft at its centre
   radar.followAt = null; // where it was last drawn, in nm
   radar.unfocused = null; // the view from before the focus, { nm, x, y }, to go back to; a drag or a place click forgets it
+  radar.movedAt = -Infinity; // when the view last moved, by a gesture, a move or the following
   bindPointer(radar);
   focus.subscribe((hex) => focused(radar, hex));
   radar.store.subscribe((kind) => {
@@ -89,6 +97,18 @@ export function recentre(radar) {
   radar.following = false;
   radar.unfocused = null;
   if (pointer.down) pointer.down = { at: pointer.at, panX: 0, panY: 0 };
+  stopped(radar);
+}
+
+// The view is moving: the static layer is moved with it until it stops.
+function moving(radar) {
+  radar.movedAt = performance.now();
+  radar.staticDirty = true;
+}
+
+// The view has stopped, or jumped: the static layer is drawn anew at once.
+function stopped(radar) {
+  radar.movedAt = -Infinity;
   radar.staticDirty = true;
 }
 
@@ -100,13 +120,14 @@ function easeMs(radar) {
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
-function put(radar, { nm, x, y }) {
+// The view to { nm, x, y }, as part of a move (`moves`) or at once.
+function put(radar, { nm, x, y }, moves) {
   const { view } = radar;
   if (view.nm === nm && view.panX === x && view.panY === y) return;
   view.nm = nm;
   view.panX = x;
   view.panY = y;
-  radar.staticDirty = true;
+  if (moves) moving(radar); else stopped(radar);
 }
 
 // Send the view to { nm, x, y } (x and y the pan, in nm) over `ms`: at once
@@ -115,7 +136,7 @@ export function goTo(radar, to, ms = easeMs(radar)) {
   const { view } = radar;
   if (ms <= 0) {
     radar.ease = null;
-    put(radar, to);
+    put(radar, to, false);
     return;
   }
   radar.ease = { from: { nm: view.nm, x: view.panX, y: view.panY }, to: { ...to }, ms, start: null };
@@ -132,7 +153,7 @@ function step(radar, now) {
     const { from, to } = ease;
     if (t >= 1) {
       radar.ease = null;
-      put(radar, to);
+      put(radar, to, false); // there: the view has stopped
       return;
     }
     const k = easeInOutCubic(t);
@@ -140,9 +161,9 @@ function step(radar, now) {
       nm: from.nm === to.nm ? to.nm : Math.exp(Math.log(from.nm) + (Math.log(to.nm) - Math.log(from.nm)) * k),
       x: from.x + (to.x - from.x) * k,
       y: from.y + (to.y - from.y) * k,
-    });
+    }, true);
   } else if (radar.following && radar.followAt) {
-    put(radar, { nm: radar.view.nm, x: radar.followAt[0], y: radar.followAt[1] });
+    put(radar, { nm: radar.view.nm, x: radar.followAt[0], y: radar.followAt[1] }, true);
   }
 }
 
@@ -311,7 +332,7 @@ function bindPointer(radar) {
       if (pointer.moved) {
         view.panX = pointer.down.panX - dx / s;
         view.panY = pointer.down.panY - dy / s;
-        radar.staticDirty = true;
+        moving(radar);
       }
       return;
     }
@@ -336,6 +357,11 @@ function bindPointer(radar) {
         radar.unfocused = null;
         goTo(radar, { nm: view.nm, x: place.xy[0], y: place.xy[1] });
       }
+    } else if (pointer.down) {
+      // A drag let go: the map is drawn anew now, not on the next frame, so
+      // that what the pointer finds on it is already the new drawing's.
+      stopped(radar);
+      radar.drawStill();
     }
     pointer.down = null;
   });
@@ -355,7 +381,7 @@ function bindPointer(radar) {
       const { ease } = radar;
       if (ease) { ease.from.nm = zoomed(radar, ease.from.nm / factor); ease.to.nm = zoomed(radar, ease.to.nm / factor); }
       view.nm = zoomed(radar, view.nm / factor);
-      radar.staticDirty = true;
+      moving(radar);
       return;
     }
     radar.ease = null; // a wheel during a move ends it
@@ -368,7 +394,7 @@ function bindPointer(radar) {
     const ny = view.panY + (at[1] - height / 2) / before;
     view.panX = nx - (at[0] - width / 2) / after;
     view.panY = ny - (at[1] - height / 2) / after;
-    radar.staticDirty = true;
+    moving(radar);
   }, { passive: false });
 
   // With no button for it, a double click is the way back from a pan. The

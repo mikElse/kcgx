@@ -1332,6 +1332,14 @@ def test_the_wheel_zooms_in_to_a_quarter_mile_and_no_further(page):
     assert radar_debug(page)["view"]["nm"] == 0.25
 
 
+def settled(page):
+    """Until the static layer is drawn for the view it holds (phase G Task
+    5a): while the view moves it is the last drawing moved, and drawn anew
+    120 ms after the wheel stops."""
+    page.wait_for_function("() => !window.kcgx.radar.debug().still_moved")
+    return radar_drawn(page)
+
+
 def view_at_2_5_nm(page):
     """The view the wheel closed in to before it went on to a quarter mile
     (phase G Task 10): 2.5 nm about the airport."""
@@ -1587,13 +1595,13 @@ def test_the_home_ring_is_2_5_nm_held_between_24_and_64_px(page):
     assert radar_drawn(page)["home"]["r"] == 24 * ratio
     page.mouse.move(*centre_of_the_radar(page))
     turn_wheel(page, -600)
-    debug = radar_drawn(page)
+    debug = settled(page)
     true_size = 2.5 * fit(page) / debug["view"]["nm"]
     assert 24 * ratio < true_size < 64 * ratio, "the test wants a view where 2.5 nm is between the limits"
     assert debug["home"]["r"] == pytest.approx(true_size)
     zoom_right_in(page)
     # and the airport's name is still beside the ring, not out at 2.5 nm
-    debug = radar_drawn(page)
+    debug = settled(page)
     assert debug["home"]["r"] == 64 * ratio
     name = next(p for p in debug["placed"] if p["key"] == "home")
     assert 0 < name["x"] - debug["home"]["x"] <= 64 * ratio
@@ -1604,10 +1612,10 @@ def test_small_airports_show_from_a_27_nm_view(page):
     wait_for_traffic(page)
     page.mouse.move(*centre_of_the_radar(page))
     turn_wheel(page, -250)
-    wide = radar_drawn(page)
+    wide = settled(page)
     assert 27 < wide["view"]["nm"] < 28
     turn_wheel(page, -20)
-    close = radar_drawn(page)
+    close = settled(page)
     assert 26 < close["view"]["nm"] <= 27
     # A closer view shows less ground, so more airports on it are new ones.
     assert close["symbols"]["airport"] > wide["symbols"]["airport"]
@@ -2263,6 +2271,7 @@ def test_no_two_boxes_overlap_even_at_the_widest_padding(page, view):
     if view == "close":
         page.mouse.move(*centre_of_the_radar(page))
         turn_wheel(page, -900)  # small airports too
+        settled(page)
     plain = draw(page, box_items=[])["placed"]
     debug = draw(page, box_items=ITEMS, box_pad=12, box_width=5)
     placed = debug["placed"]

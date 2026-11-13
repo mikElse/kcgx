@@ -4,6 +4,20 @@
 // range, palette, setting or hover change, and copied each frame by
 // radar/index.js.
 //
+// The glow is a canvas shadow, which costs by the draw (phase G Task 5, as
+// the aircraft's in phase F Task 10): the lines, rings and symbols of a
+// colour are drawn bare on a canvas of their own (`radar.stillBare`) and
+// that is drawn onto the layer once, with the shadow. A label's box hides
+// what is under it, so what is waiting is drawn before each box.
+//
+// While the view moves (a drag, the wheel, an eased move, the following;
+// view.js says when, `radar.movedAt`), the layer is not drawn anew: the
+// last drawing (`radar.stillWas`) is drawn moved and scaled to the view,
+// and what it placed for the pointer is moved with it, so a click lands on
+// what is on the screen. It is drawn anew SETTLE_MS after the view stops,
+// at once when a drag is let go, at least every REDRAW_MS while it keeps
+// moving, and at once when anything else it is drawn from changes.
+//
 // How each part is drawn is a row of the `map` table (prefs.map, phase G
 // Task 10): whether it shows, its alpha, its line's pattern and width and
 // its label's size. The table's defaults draw what this layer drew before
@@ -41,6 +55,9 @@ const SYMBOL_PX = 6; // a place's symbol reaches this far from its point
 const MARK_PX = 10; // and a click this near its point is on it
 // The label box setting (prefs.box_items) that covers each kind of place.
 const BOXED_AS = { navaid: "NAVAIDS", airport: "AIRPORTS", city: "CITIES", peak: "PEAKS" };
+
+const SETTLE_MS = 120; // the layer is drawn anew this long after the view last moved,
+const REDRAW_MS = 1000; // and at least this often while it moves on
 
 const DRAWN_ON = new Set(["coast", "lake", "river", "country", "state"]);
 const RUNWAY_FT = 150; // a runway's width where the map has none
@@ -128,7 +145,15 @@ const part = (style, was) => Math.min(1, was * style.strength);
 // picture: the view goes back to the whole range about it.
 export function init(radar) {
   radar.still = document.createElement("canvas");
-  radar.canvases.push(radar.still);
+  radar.stillWas = document.createElement("canvas"); // the last drawing, kept while the view moves
+  radar.stillBare = document.createElement("canvas"); // a colour's lines bare, before their glow
+  radar.canvases.push(radar.still, radar.stillWas, radar.stillBare);
+  // The last drawing: what it was drawn from, its view and scale, when, and
+  // (once the view has moved from it) itself and what it placed, kept.
+  radar.was = null;
+  radar.moved = false; // the layer is the last drawing moved, not drawn anew
+  radar.drawings = 0; // how many times it has been drawn anew, for tests
+  radar.drawStill = () => drawStatic(radar, performance.now()); // now, between frames (view.js, a drag let go)
   radar.map = null; // decoded geo for the current airport
   radar.mapFor = "";
   radar.project = null;
@@ -161,6 +186,7 @@ export function init(radar) {
         placed: [...radar.placed], marks: [...radar.marks], hovered: radar.hovered, mapFor: radar.mapFor, loaded: Boolean(map),
         rings: [...radar.rings], home: { ...radar.home }, symbols: { ...radar.symbols },
         layers: { ...radar.layers }, styles: JSON.parse(JSON.stringify(radar.styles)), blur_map: radar.blurMap,
+        still_moved: radar.moved, still_drawings: radar.drawings,
       };
     },
   };
@@ -393,13 +419,145 @@ function strokeLines(radar, ctx, lines, s, width, height, progress, margin, peri
   ctx.stroke();
 }
 
-function glow(ctx, colour, ratio) {
-  ctx.shadowColor = colour;
-  ctx.shadowBlur = glowBlur("map") * ratio;
+// -- the glow, a colour at a time ----------------------------------------------
+
+// What glows is given to `glowing.add(colour, draw, rect)`: `draw(g)` draws
+// it bare on `g`, the layer or the bare canvas, setting what it draws with
+// (save and restore are about it), and `rect` is what it inks, or null for
+// anywhere. With no glow it is drawn on the layer at once. Otherwise each
+// colour's waits, and `flush()` draws it bare and then onto the layer with
+// the shadow, only the part of the bare canvas that it inked. Everything on
+// the layer but a label's box is added to what is there, so the order the
+// colours go down in changes nothing.
+function glower(radar, ctx, width, height) {
+  const blur = radar.blurMap;
+  const waiting = new Map(); // colour -> { draws: [draw], rect: [x0, y0, x1, y1] }
+  const drawOn = (g, draw) => { g.save(); draw(g); g.restore(); };
+  return {
+    add(colour, draw, rect) {
+      if (!blur) { drawOn(ctx, draw); return; }
+      let group = waiting.get(colour);
+      if (!group) { group = { draws: [], rect: [Infinity, Infinity, -Infinity, -Infinity] }; waiting.set(colour, group); }
+      group.draws.push(draw);
+      const [x0, y0, x1, y1] = rect || [0, 0, width, height];
+      const r = group.rect;
+      r[0] = Math.min(r[0], x0); r[1] = Math.min(r[1], y0); r[2] = Math.max(r[2], x1); r[3] = Math.max(r[3], y1);
+    },
+    flush() {
+      if (!waiting.size) return;
+      const bare = radar.stillBare.getContext("2d");
+      bare.setTransform(1, 0, 0, 1, 0, 0);
+      bare.globalCompositeOperation = "lighter";
+      bare.lineJoin = "round";
+      bare.lineCap = "round";
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = blur;
+      for (const [colour, { draws, rect }] of waiting) {
+        // The part of the screen it inked, on whole pixels and a pixel over.
+        const x = Math.max(0, Math.floor(rect[0]) - 1);
+        const y = Math.max(0, Math.floor(rect[1]) - 1);
+        const w = Math.min(width, Math.ceil(rect[2]) + 1) - x;
+        const h = Math.min(height, Math.ceil(rect[3]) + 1) - y;
+        if (w <= 0 || h <= 0) continue;
+        bare.clearRect(x, y, w, h);
+        for (const draw of draws) drawOn(bare, draw);
+        ctx.shadowColor = colour;
+        ctx.drawImage(radar.stillBare, x, y, w, h, x, y, w, h);
+      }
+      ctx.restore();
+      waiting.clear();
+    },
+  };
 }
 
+// A rectangle [x0, y0, x1, y1] about (x, y), `r` each way.
+const about = (x, y, r) => [x - r, y - r, x + r, y + r];
+
+// -- drawing the layer ------------------------------------------------------------
+
+// What a drawing is drawn from besides the view. A drawing moved to a new
+// view stands for one drawn anew only while all of this is the same.
+function drawnFrom(radar, width, height, ratio) {
+  const { state } = radar.store;
+  return {
+    width, height, ratio, hovered: radar.hovered, font: FONT,
+    prefs: state.prefs, airport: state.airport, map: radar.map, colours: colours(),
+  };
+}
+
+function sameSource(a, b) {
+  return Object.keys(a).every((key) => a[key] === b[key]);
+}
+
+// Draws the layer for the view and what is set: the last drawing moved to
+// it while the view moves, or else anew.
 export function drawStatic(radar, now) {
   const { ratio, width, height } = radar.size();
+  const from = drawnFrom(radar, width, height, ratio);
+  const was = radar.was;
+  if (
+    was && sameSource(was.from, from)
+    && performance.now() - radar.movedAt < SETTLE_MS && now - was.at < REDRAW_MS
+  ) {
+    moveDrawing(radar, was, width, height, ratio);
+    radar.staticDirty = true; // drawn anew once the view stops
+    return;
+  }
+  drawAnew(radar, now, ratio, width, height);
+  radar.drawings += 1;
+  radar.moved = false;
+  radar.was = radar.staticDirty ? null : { from, at: now, view: { ...radar.view }, s: scale(radar, width, height, ratio), kept: null };
+}
+
+// The last drawing, moved and scaled from its view to this one, and what it
+// placed with it. The first time, the drawing (still on the layer) and what
+// it placed are kept. A move with no scaling is by whole pixels, which keeps
+// the lines sharp.
+function moveDrawing(radar, was, width, height, ratio) {
+  const still = radar.still.getContext("2d");
+  if (!was.kept) {
+    const keep = radar.stillWas.getContext("2d");
+    keep.setTransform(1, 0, 0, 1, 0, 0);
+    keep.globalCompositeOperation = "copy";
+    keep.globalAlpha = 1;
+    keep.drawImage(radar.still, 0, 0);
+    was.kept = {
+      placed: radar.placed.map((p) => ({ ...p })),
+      marks: radar.marks.map((m) => ({ ...m })),
+      rings: radar.rings.map((r) => ({ ...r })),
+      home: { ...radar.home },
+    };
+  }
+  const s = scale(radar, width, height, ratio);
+  const k = s / was.s;
+  let dx = (width / 2) * (1 - k) + (was.view.panX - radar.view.panX) * s;
+  let dy = (height / 2) * (1 - k) + (was.view.panY - radar.view.panY) * s;
+  if (k === 1) { dx = Math.round(dx); dy = Math.round(dy); }
+  still.setTransform(1, 0, 0, 1, 0, 0);
+  still.globalCompositeOperation = "source-over";
+  still.globalAlpha = 1;
+  still.shadowBlur = 0;
+  still.clearRect(0, 0, width, height);
+  still.setTransform(k, 0, 0, k, dx, dy);
+  still.drawImage(radar.stillWas, 0, 0);
+  still.setTransform(1, 0, 0, 1, 0, 0);
+
+  const at = ([x, y]) => [k * x + dx, k * y + dy];
+  const rect = (r) => (r ? { ...r, x: k * r.x + dx, y: k * r.y + dy, w: k * r.w, h: k * r.h } : r);
+  const { kept } = was;
+  radar.placed.splice(0, radar.placed.length, ...kept.placed.map((p) => ({ ...rect(p), box: rect(p.box), point: at(p.point) })));
+  radar.marks.splice(0, radar.marks.length, ...kept.marks.map((m) => ({ ...m, point: at(m.point), reach: m.reach * k })));
+  radar.rings.splice(0, radar.rings.length, ...kept.rings.map((r) => ({
+    ...r, r: r.r * k, label: r.label && { ...rect(r.label), box: rect(r.label.box), at: at(r.label.at) },
+  })));
+  const [hx, hy] = at([kept.home.x, kept.home.y]);
+  Object.assign(radar.home, { x: hx, y: hy, r: kept.home.r * k });
+  radar.moved = true;
+}
+
+function drawAnew(radar, now, ratio, width, height) {
   const ctx = radar.still.getContext("2d");
   const c = colours();
   const { prefs } = radar.store.state;
@@ -417,6 +575,9 @@ export function drawStatic(radar, now) {
   for (const row of Object.keys(prefs.map)) styles[row] = look(radar, row, ratio);
   for (const layer of Object.keys(radar.layers)) delete radar.layers[layer];
   radar.blurMap = glowBlur("map") * ratio;
+  const glowing = glower(radar, ctx, width, height);
+  // A label's box hides what is under it, so what waits to glow goes first.
+  const box = (r, colour) => { glowing.flush(); paintBox(ctx, r, colour, ratio, prefs); };
 
   if (map) {
     for (const [layer, lines] of Object.entries(map.lines)) {
@@ -427,16 +588,15 @@ export function drawStatic(radar, now) {
       const lines = map.lines[layer];
       const style = styles[row];
       if (!style.show || !lines || !lines.length) continue;
-      ctx.save();
-      ctx.globalAlpha = style.alpha;
-      ctx.strokeStyle = c[colour];
-      ctx.lineWidth = style.width;
-      ctx.setLineDash(style.dash);
-      glow(ctx, c[colour], ratio);
       const margin = style.width + 3 * radar.blurMap; // past which neither a line nor its glow reaches the screen
       const period = style.dash.reduce((a, b) => a + b, 0) * (style.dash.length % 2 ? 2 : 1);
-      strokeLines(radar, ctx, lines, s, width, height, DRAWN_ON.has(layer) ? progress : 1, margin, period);
-      ctx.restore();
+      glowing.add(c[colour], (g) => {
+        g.globalAlpha = style.alpha;
+        g.strokeStyle = c[colour];
+        g.lineWidth = style.width;
+        g.setLineDash(style.dash);
+        strokeLines(radar, g, lines, s, width, height, DRAWN_ON.has(layer) ? progress : 1, margin, period);
+      }, null);
     }
   }
 
@@ -449,18 +609,17 @@ export function drawStatic(radar, now) {
   rings.splice(0, rings.length, ...(ringStyle.show ? ringsOn(radar, centre, s, width, height) : []));
   const name = styles.HOME.show ? homeName(radar, ctx, centre, s, ratio, prefs) : null;
   const keepOff = name ? name.label : null;
-  ctx.save();
-  ctx.strokeStyle = c.cyan;
-  ctx.lineWidth = ringStyle.width;
-  ctx.setLineDash(ringStyle.dash);
-  glow(ctx, c.cyan, ratio);
   for (const ring of rings) {
-    ctx.globalAlpha = part(ringStyle, ring.bright ? 0.8 : 0.35);
-    ctx.beginPath();
-    ctx.arc(centre[0], centre[1], ring.r, 0, Math.PI * 2);
-    ctx.stroke();
+    glowing.add(c.cyan, (g) => {
+      g.strokeStyle = c.cyan;
+      g.lineWidth = ringStyle.width;
+      g.setLineDash(ringStyle.dash);
+      g.globalAlpha = part(ringStyle, ring.bright ? 0.8 : 0.35);
+      g.beginPath();
+      g.arc(centre[0], centre[1], ring.r, 0, Math.PI * 2);
+      g.stroke();
+    }, about(centre[0], centre[1], ring.r + ringStyle.width));
   }
-  ctx.restore();
   ctx.save();
   ctx.fillStyle = c.dim;
   ctx.globalAlpha = part(ringStyle, 1);
@@ -471,7 +630,7 @@ export function drawStatic(radar, now) {
     ring.label = ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, numbered, keepOff, ringStyle.label);
     if (!ring.label) continue;
     numbered.push(ring.label);
-    if (ring.label.box) paintBox(ctx, ring.label.box, c.dim, ratio, prefs);
+    if (ring.label.box) box(ring.label.box, c.dim);
     ctx.fillText(ring.text, ring.label.at[0], ring.label.at[1]);
   }
   ctx.restore();
@@ -482,9 +641,10 @@ export function drawStatic(radar, now) {
   radar.marks.length = 0;
   for (const kind of Object.keys(radar.symbols)) delete radar.symbols[kind];
   Object.assign(radar.home, { x: centre[0], y: centre[1], r: homeRing(s, ratio) });
-  styles.RUNWAYS.drawn = map && styles.RUNWAYS.show ? drawRunways(radar, ctx, s, width, height, ratio, c, styles.RUNWAYS) : [];
-  if (name) drawHome(radar, ctx, centre, ratio, c, prefs, name, styles.HOME);
-  if (map) drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles);
+  styles.RUNWAYS.drawn = map && styles.RUNWAYS.show ? drawRunways(radar, glowing, s, width, height, c, styles.RUNWAYS) : [];
+  if (name) drawHome(radar, ctx, glowing, box, centre, ratio, c, name, styles.HOME);
+  if (map) drawPlaces(radar, ctx, glowing, box, s, width, height, ratio, c, prefs, styles);
+  glowing.flush();
   radar.staticDirty = progress < 1;
 }
 
@@ -492,43 +652,50 @@ export function drawStatic(radar, now) {
 // line the row's width; once a runway's true width is wider than that, a
 // filled quadrilateral that wide. Returns what was drawn, for tests:
 // [{ ends: [[x, y], [x, y]], ft, px, filled }].
-function drawRunways(radar, ctx, s, width, height, ratio, c, style) {
+function drawRunways(radar, glowing, s, width, height, c, style) {
   const drawn = [];
+  const lines = [];
   const quads = [];
-  ctx.save();
-  ctx.globalAlpha = style.alpha;
-  ctx.strokeStyle = c.white;
-  ctx.fillStyle = c.white;
-  ctx.lineWidth = style.width;
-  glow(ctx, c.white, ratio);
-  ctx.beginPath();
+  const ink = [Infinity, Infinity, -Infinity, -Infinity];
   for (const { ends: [a, b], ft } of radar.map.runways) {
     const p = toScreen(radar, a, s, width, height);
     const q = toScreen(radar, b, s, width, height);
     const wide = (ft / FT_PER_NM) * s;
     const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
     const filled = wide > style.width && length > 0;
-    drawn.push({ ends: [p, q], ft, px: Math.max(style.width, wide), filled });
+    const px = Math.max(style.width, wide);
+    drawn.push({ ends: [p, q], ft, px, filled });
     if (filled) {
       quads.push([p, q, (-(q[1] - p[1]) / length) * (wide / 2), ((q[0] - p[0]) / length) * (wide / 2)]);
     } else {
-      ctx.moveTo(p[0], p[1]);
-      ctx.lineTo(q[0], q[1]);
+      lines.push([p, q]);
     }
+    ink[0] = Math.min(ink[0], p[0] - px, q[0] - px); ink[1] = Math.min(ink[1], p[1] - px, q[1] - px);
+    ink[2] = Math.max(ink[2], p[0] + px, q[0] + px); ink[3] = Math.max(ink[3], p[1] + px, q[1] + px);
   }
-  ctx.stroke();
-  if (quads.length) {
-    ctx.beginPath();
-    for (const [p, q, nx, ny] of quads) {
-      ctx.moveTo(p[0] + nx, p[1] + ny);
-      ctx.lineTo(q[0] + nx, q[1] + ny);
-      ctx.lineTo(q[0] - nx, q[1] - ny);
-      ctx.lineTo(p[0] - nx, p[1] - ny);
-      ctx.closePath();
+  glowing.add(c.white, (g) => {
+    g.globalAlpha = style.alpha;
+    g.strokeStyle = c.white;
+    g.fillStyle = c.white;
+    g.lineWidth = style.width;
+    g.beginPath();
+    for (const [p, q] of lines) {
+      g.moveTo(p[0], p[1]);
+      g.lineTo(q[0], q[1]);
     }
-    ctx.fill();
-  }
-  ctx.restore();
+    g.stroke();
+    if (quads.length) {
+      g.beginPath();
+      for (const [p, q, nx, ny] of quads) {
+        g.moveTo(p[0] + nx, p[1] + ny);
+        g.lineTo(q[0] + nx, q[1] + ny);
+        g.lineTo(q[0] - nx, q[1] - ny);
+        g.lineTo(p[0] - nx, p[1] - ny);
+        g.closePath();
+      }
+      g.fill();
+    }
+  }, ink);
   return drawn;
 }
 
@@ -536,7 +703,7 @@ function drawRunways(radar, ctx, s, width, height, ratio, c, style) {
 // overlap; a label that does not fit is left off, its symbol stays. Every
 // label is given its place before anything is drawn, so that the boxes can
 // go down first: a box hides the map under it, never a symbol or a name.
-function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
+function drawPlaces(radar, ctx, glowing, box, s, width, height, ratio, c, prefs, styles) {
   const { map, placed, symbols, rings } = radar;
   const boxed = radar.boxed;
   const onScreen = ([x, y]) => x > -40 && y > -40 && x < width + 40 && y < height + 40;
@@ -633,19 +800,19 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
   }
 
   // A box keeps its strength while its label brightens under the pointer.
-  for (const { item, label } of places) if (label && label.box) paintBox(ctx, label.box, item.colour, ratio, prefs);
-  for (const { label } of states) if (label.box) paintBox(ctx, label.box, c.dim, ratio, prefs);
+  for (const { item, label } of places) if (label && label.box) box(label.box, item.colour);
+  for (const { label } of states) if (label.box) box(label.box, c.dim);
 
   placeSpacing();
   for (const { item, p, key, baseline, label } of places) {
     const style = styles[PLACE_ROW[item.kind]];
-    ctx.globalAlpha = part(style, 0.85);
-    ctx.strokeStyle = item.colour;
-    ctx.lineWidth = style.width;
-    glow(ctx, item.colour, ratio);
-    symbol(ctx, item.kind, p, ratio);
+    glowing.add(item.colour, (g) => {
+      g.globalAlpha = part(style, 0.85);
+      g.strokeStyle = item.colour;
+      g.lineWidth = style.width;
+      symbol(g, item.kind, p, ratio);
+    }, about(p[0], p[1], reach + style.width));
     if (!label) continue;
-    ctx.shadowBlur = 0;
     ctx.globalAlpha = part(style, radar.hovered === key ? 1 : LABEL_ALPHA);
     ctx.fillStyle = item.colour;
     placeFont(item.kind);
@@ -653,7 +820,6 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
   }
 
   stateFont();
-  ctx.shadowBlur = 0;
   ctx.fillStyle = c.dim;
   for (const { name, key, x, baseline } of states) {
     ctx.globalAlpha = part(styles.STATE_NAMES, radar.hovered === key ? 1 : LABEL_ALPHA);
@@ -709,30 +875,34 @@ function homeName(radar, ctx, centre, s, ratio, prefs) {
   return { lines, font, spacing, step, ring, foot, x, last, top, label };
 }
 
-function drawHome(radar, ctx, centre, ratio, c, prefs, name, style) {
+function drawHome(radar, ctx, glowing, box, centre, ratio, c, name, style) {
   const { lines, step, ring, foot, x, last, top, label } = name;
   ctx.save();
   radar.placed.push({ key: "home", ...label, point: [...centre], xy: [0, 0] });
   radar.marks.push({ key: "home", point: [...centre], xy: [0, 0], reach: ring });
   // Its box goes down before the ring and the leader, and hides neither;
   // a runway that runs out under the name, it does.
-  if (label.box) paintBox(ctx, label.box, c.pink, ratio, prefs);
-  ctx.globalAlpha = part(style, 1);
-  ctx.strokeStyle = c.pink;
-  ctx.lineWidth = style.width;
-  glow(ctx, c.pink, ratio);
-  ctx.beginPath();
-  ctx.arc(centre[0], centre[1], ring, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.lineWidth = (style.width * 1.2) / 1.8; // the leader, a little finer than the ring
-  ctx.moveTo(foot[0], foot[1]);
-  ctx.lineTo(x - 4 * ratio, last + 6 * ratio);
-  ctx.stroke();
+  if (label.box) box(label.box, c.pink);
+  const end = [x - 4 * ratio, last + 6 * ratio];
+  const ink = about(centre[0], centre[1], ring + style.width);
+  ink[2] = Math.max(ink[2], end[0] + style.width);
+  ink[1] = Math.min(ink[1], end[1] - style.width);
+  glowing.add(c.pink, (g) => {
+    g.globalAlpha = part(style, 1);
+    g.strokeStyle = c.pink;
+    g.lineWidth = style.width;
+    g.beginPath();
+    g.arc(centre[0], centre[1], ring, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.lineWidth = (style.width * 1.2) / 1.8; // the leader, a little finer than the ring
+    g.moveTo(foot[0], foot[1]);
+    g.lineTo(end[0], end[1]);
+    g.stroke();
+  }, ink);
   ctx.font = name.font;
   ctx.letterSpacing = `${name.spacing}px`;
   ctx.fillStyle = c.pink;
-  ctx.shadowBlur = 0;
   ctx.globalAlpha = part(style, radar.hovered === "home" ? 1 : LABEL_ALPHA);
   lines.forEach((line, i) => ctx.fillText(line, x, top + i * step));
   ctx.restore();

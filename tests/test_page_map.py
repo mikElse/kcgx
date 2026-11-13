@@ -22,25 +22,23 @@ pytestmark = pytest.mark.browser
 ROOT = Path(__file__).resolve().parent.parent
 FT_PER_NM = 6076.12
 
-# The static layer as it was before Task 10 (the last commit of phase G's
-# Phase 0), with its glow moved to the map's own number as 4d moves it and
-# its ring numbers kept off the airport's name, bare too, as the owner has
-# them since: the picture the default `map` table must reproduce. still.js is served with
-# the draw.js and view.js of the same commit, under names of their own
-# (`draw.before.js`, `view.before.js`) so that the rest of today's page
-# keeps today's: a later change to either (Task 12 edits view.js) moves
-# neither picture's reference. What is still shared is the rest of the
-# page: theme.js (the palette and glowBlur), focus.js, which view.js
-# imports, and radar/index.js, which calls the old still.js's init,
-# loadMap and drawStatic. The test must be re-pinned to a later commit, or
-# retired, when
-# - a task means the default table to draw other pixels than these (5a,
-#   the map's glow by colour, does: retire it there, or re-pin to 5a's
-#   commit and compare later work with that);
+# The static layer as it was drawn with a shadow on every line and symbol:
+# still.js at the last commit before Task 5a (glow by colour), which drew
+# what the default `map` table drew from Task 10 on (until then this was
+# pinned to 2bc8561, the last commit of Phase 0, and held Task 10's table to
+# Phase 0's picture). still.js is served with the draw.js and view.js of the
+# same commit, under names of their own (`draw.before.js`,
+# `view.before.js`) so that the rest of today's page keeps today's: a later
+# change to either moves neither picture's reference. What is still shared
+# is the rest of the page: theme.js (the palette and glowBlur), focus.js,
+# which view.js imports, and radar/index.js, which calls the old still.js's
+# init, loadMap and drawStatic. The test must be re-pinned to a later
+# commit, or retired, when
+# - a task means the default table to draw other pixels than these;
 # - index.js changes what it asks of still.js, so the old one no longer
 #   draws (the test fails on a page error or an empty map, not a picture);
 # - draw.js or view.js stop being what still.js imports.
-BEFORE = "2bc8561"
+BEFORE = "a17fbb8"
 RADAR_JS = "src/kcgx/web/static/js/radar"
 
 
@@ -61,13 +59,6 @@ def modules_before():
         line = f'from "./{name}.js";'
         assert still.count(line) == 1, name
         still = still.replace(line, f'from "./{name}.before.js";')
-    assert "glowBlur() * ratio" in still
-    still = still.replace("glowBlur() * ratio", 'glowBlur("map") * ratio')
-    # And a ring number gives way to the airport's name, bare too (the
-    # owner's decision in phase G's Task 10 review), as today's does.
-    keep_off = 'const keepOff = name && (radar.boxed("HOME") || radar.boxed("RINGS")) ? name.label : null;'
-    assert still.count(keep_off) == 1
-    still = still.replace(keep_off, "const keepOff = name ? name.label : null;")
     return {"still.js": still, "draw.before.js": before("draw"), "view.before.js": before("view")}
 
 
@@ -117,8 +108,10 @@ STILL_PICTURE = f"""async () => {{
 }}"""
 
 # The share of pixels of two pictures (data URLs of the same size) that
-# differ by more than `over` in any channel.
-DIFFER = """async ([a, b, over]) => {
+# differ by more than `over` in any channel; with `seen`, in the light each
+# adds over black, which is what the screen shows of the layer (a pixel
+# all but transparent may have any colour, and shows none of it).
+DIFFER = """async ([a, b, over, seen]) => {
     const load = (url) => new Promise((done) => { const i = new Image(); i.onload = () => done(i); i.src = url; });
     const [ia, ib] = await Promise.all([load(a), load(b)]);
     const read = (image) => {
@@ -133,7 +126,11 @@ DIFFER = """async ([a, b, over]) => {
     let differ = 0, lit = 0;
     for (let i = 0; i < pa.length; i += 4) {
         let d = 0;
-        for (let k = 0; k < 4; k += 1) d = Math.max(d, Math.abs(pa[i + k] - pb[i + k]));
+        for (let k = 0; k < 4; k += 1) {
+            if (seen && k === 3) break;
+            const [x, y] = seen ? [pa[i + k] * pa[i + 3] / 255, pb[i + k] * pb[i + 3] / 255] : [pa[i + k], pb[i + k]];
+            d = Math.max(d, Math.abs(x - y));
+        }
         if (d > over) differ += 1;
         if (pa[i + 3] || pb[i + 3]) lit += 1;
     }
@@ -154,8 +151,8 @@ def drawn_on(page):
     page.evaluate(DRAWN_ON)
 
 
-def differ(page, a, b, over=0):
-    return page.evaluate(DIFFER, [a, b, over])
+def differ(page, a, b, over=0, seen=False):
+    return page.evaluate(DIFFER, [a, b, over, seen])
 
 
 # What the static layer inks: how many pixels have any alpha.
@@ -203,13 +200,15 @@ def expected_label(base, range_nm, view_nm, low=9, high=26):
 
 
 def test_at_the_default_table_the_static_layer_is_as_it_was(page, browser, server):
-    """Pixel for pixel, within 0.1 %, the picture still.js drew before the
-    table. The reference is drawn with the map's own glow (3.96 px, where
-    phase F's LOW was 4, which alone moves 24 % of Chromium's pixels and 5 %
-    of WebKit's). A pixel differs when a channel is off by more than 2 of
-    255: Chromium anti-aliases a path a level or two differently once the
-    pieces off the screen are left out of it (0.18 % of pixels, 0.05 % by
-    more than 2); WebKit draws it the same."""
+    """Within 0.1 % of its pixels, the picture still.js drew with a shadow
+    on every line and symbol, as the screen shows it (over black). One
+    shadow for each colour (Task 5a) is not one for each line: the bare
+    canvas rounds each line to whole levels before its glow is drawn, and
+    each engine blurs an image a little otherwise than a path, so most of
+    the glow is a level or two off (Chromium at 1x: 9 % of pixels by more
+    than 2, 0.5 % by more than 8), and at a few crossings more. A pixel
+    differs here when it is off by more than 16 of 255: 0.02 to 0.04 % of
+    them, in either engine at 1x and 2x, and none visibly."""
     wait_for_traffic(page)
     now = still_picture(page)
     context = browser.new_context(viewport={"width": 1440, "height": 900})
@@ -233,7 +232,7 @@ def test_at_the_default_table_the_static_layer_is_as_it_was(page, browser, serve
         assert errors == [], errors
     finally:
         context.close()
-    result = differ(page, now, then, over=2)
+    result = differ(page, now, then, over=16, seen=True)
     assert result["lit"] > 0.05, "the test wants a picture with a map on it"
     assert result["differ"] < 0.001, result
 
@@ -1292,3 +1291,117 @@ def test_after_a_wheel_a_click_on_the_focused_aircraft_unfocuses_and_goes_back(p
     page.wait_for_selector("#tracks-body tr.focused", state="detached")
     frames(page, 1)
     assert view_of(page) == before
+
+
+# -- Task 5a: while the view moves, the map is moved, not drawn ----------------
+
+# `count` of the radar's frames from now, with `step(n)` (a function's body,
+# or none) run before each: for each frame whether the static layer was the
+# last drawing moved, how many times it had been drawn anew, and how far,
+# in canvas px, the farthest of its marks for the pointer was from where
+# the view that frame drew puts that mark's place.
+SAMPLE = """async ([count, step]) => {
+    const radar = window.kcgx.radar, c = document.getElementById("radar");
+    const frame = """ + RADAR_FRAME + """;
+    const before = step ? new Function("n", step) : null;
+    const out = [];
+    for (let n = 0; n < count; n += 1) {
+        if (before) before(n);
+        await frame();
+        const d = radar.debug(), v = d.shown;
+        const s = (Math.min(c.width, c.height) / 2 - 18 * devicePixelRatio) / v.nm;
+        const off = Math.max(0, ...d.marks.map((m) => Math.hypot(
+            m.point[0] - (c.width / 2 + (m.xy[0] - v.panX) * s), m.point[1] - (c.height / 2 + (m.xy[1] - v.panY) * s))));
+        out.push({ moved: d.still_moved, drawings: d.still_drawings, off });
+    }
+    return out;
+}"""
+
+# A drag's moves, one before each frame, from (x, y) in the page's px.
+DRAG_STEP = """const c = document.getElementById("radar");
+    c.dispatchEvent(new PointerEvent("pointermove", { clientX: %f + 6 * n, clientY: %f + 3 * n, bubbles: true,
+                                                      pointerId: 1, isPrimary: true, pointerType: "mouse", buttons: 1 }));"""
+
+
+def sample(page, count, step=None):
+    return page.evaluate(SAMPLE, [count, step])
+
+
+def test_during_a_drag_the_map_is_moved_and_drawn_anew_when_let_go(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    drawn_on(page)  # while the map draws itself on, it is drawn anew every frame
+    x, y = on_screen(page, 300, 300)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 20, y + 10, steps=2)
+    try:
+        during = sample(page, 12, DRAG_STEP % (x + 20, y + 10))
+    finally:
+        page.mouse.up()
+    assert all(f["moved"] for f in during[1:]), during
+    assert during[-1]["drawings"] == during[1]["drawings"], "not drawn anew while it is dragged"
+    assert max(f["off"] for f in during) <= 1, "what a click finds is where it is on the screen"
+    after = sample(page, 1)[0]
+    assert after["moved"] is False and after["drawings"] > during[-1]["drawings"], "drawn anew when let go"
+
+
+def test_after_the_wheel_the_map_is_drawn_anew_once_it_stops(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    drawn_on(page)
+    page.mouse.move(*on_screen(page, 300, 300))
+    turn_wheel(page, -200)
+    moved = sample(page, 1)[0]
+    assert moved["moved"] is True and moved["off"] <= 1, moved
+    page.wait_for_function("() => !window.kcgx.radar.debug().still_moved")
+    drawn = radar_drawn(page)
+    assert drawn["still_drawings"] == moved["drawings"] + 1
+    # and drawn for the view it stopped at: its range's ring is where the view puts it
+    s = fit(page) / drawn["view"]["nm"]
+    assert all(ring["r"] == pytest.approx(ring["nm"] * s) for ring in drawn["rings"])
+    assert max(f["off"] for f in sample(page, 1)) <= 1e-6
+
+
+def test_while_following_the_map_is_moved_and_drawn_anew_now_and_then(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    drawn_on(page)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    page.wait_for_timeout(300)
+    frames_ = sample(page, 60)
+    assert sum(f["moved"] for f in frames_) >= 50, "the following moves the view every frame"
+    # At most every REDRAW_MS (1 s): 60 frames are 0.5 s or more.
+    assert frames_[-1]["drawings"] - frames_[0]["drawings"] <= 2
+    assert max(f["off"] for f in frames_) <= 1
+
+
+def test_a_click_on_a_place_lands_while_the_map_is_moved(page):
+    """Following a moving aircraft, the layer is the last drawing moved, and
+    so is what a click on it finds."""
+    wait_for_traffic(page)
+    # Fast, so that the view has moved some way from the last drawing.
+    hold_traffic(page, plane("a9", -12, 8, gs=3000, trk=90))
+    set_prefs(page, view_ease="OFF", follow_nm=40)
+    click_row(page, "a9")
+    wait_followed(page, "a9", nm=40)
+    page.wait_for_function("() => window.kcgx.radar.debug().still_moved")
+    city = a_city(page)
+    assert radar_debug(page)["still_moved"] is True
+    page.mouse.click(*on_screen(page, *city["point"]))
+    frames(page, 1)
+    view = view_of(page)
+    assert radar_debug(page)["following"] is False
+    assert (view["panX"], view["panY"]) == tuple(city["xy"])
+
+
+def test_a_setting_changed_while_the_map_moves_is_drawn_at_once(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    page.wait_for_function("() => window.kcgx.radar.debug().still_moved")
+    set_prefs(page, glow_map=0)
+    frames(page, 1)
+    assert radar_debug(page)["blur_map"] == 0
