@@ -9,7 +9,7 @@
 
 import { focus } from "../focus.js";
 
-const VIEW_MIN_NM = 2.5; // the closest view: this far from the centre to the nearer edge
+const VIEW_MIN_NM = 0.25; // the closest view, this far from the centre to the nearer edge: the runways up close
 const VIEW_MAX_NM = 160; // the widest, or the range if that is wider
 const EDGE_PX = 18; // kept clear between the view's distance and the nearer edge
 

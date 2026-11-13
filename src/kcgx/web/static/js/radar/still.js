@@ -1,7 +1,15 @@
 // The static layer (spec, Radar; Rendering): the map, the range rings, the
 // home airport and its runways, places and state names. Drawn into an
 // offscreen canvas (`radar.still`) once per airport, resize, pan, zoom,
-// range, palette or hover change, and copied each frame by radar/index.js.
+// range, palette, setting or hover change, and copied each frame by
+// radar/index.js.
+//
+// How each part is drawn is a row of the `map` table (prefs.map, phase G
+// Task 10): whether it shows, its alpha, its line's pattern and width and
+// its label's size. The table's defaults draw what this layer drew before
+// the table; a row's alpha scales every part of it from there. Labels
+// follow the zoom (`labelPx`), and up close a runway is drawn as wide as it
+// is.
 //
 // The projection is azimuthal equidistant, centred on the airport, so range
 // rings are true circles and distance reads straight off the screen.
@@ -17,14 +25,14 @@ import { FONT, around, claim, inked, meets, paintBox, trailing } from "./draw.js
 import { recentre, scale, toScreen } from "./view.js";
 
 const NM_PER_RADIAN = 3440.065;
-const RING_STEPS_NM = [0.5, 1, 2, 5, 10, 20, 50];
+const FT_PER_NM = 6076.12;
+const RING_STEPS_NM = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50];
 const RINGS_IN_VIEW = 5; // at most this many between the centre and the nearer edge
 const SMALL_AIRPORTS_NM = 27; // small airports show from this view inwards
 const HOME_NM = 2.5; // the home ring's true size,
 const HOME_MIN_PX = 24; // and what it is held between on screen
 const HOME_MAX_PX = 64;
-const RING_TEXT_PX = 12; // a ring's number,
-const RING_GAP_PX = 4; // how far it stands off its ring and clear of the home ring,
+const RING_GAP_PX = 4; // how far a ring's number stands off its ring and clear of the home ring,
 const RING_APART_PX = 2; // and of another ring's number
 const DRAW_ON_MS = 2000;
 const LABEL_ALPHA = 0.4;
@@ -34,14 +42,83 @@ const SYMBOL_PX = 6; // a place's symbol reaches this far from its point
 const BOXED_AS = { navaid: "NAVAIDS", airport: "AIRPORTS", city: "CITIES", peak: "PEAKS" };
 
 const DRAWN_ON = new Set(["coast", "lake", "river", "country", "state"]);
+const RUNWAY_FT = 150; // a runway's width where the map has none
 
-// A label's text height for a base size in px. For now the base itself;
-// labels by zoom (Task 10) make it follow the view. That version needs the
-// view and the prefs: it will take the radar's shared state as a second
-// argument, `labelPx(base, radar)`.
-export function labelPx(base) {
-  return base;
+// The map's lines, in the order they are drawn: the table's row, the map's
+// layer and the palette colour.
+const LINES = [
+  ["AIRWAY", "airway", "blue"],
+  ["STATE", "state", "dim"],
+  ["COUNTRY", "country", "green"],
+  ["RIVER", "river", "cyan"],
+  ["LAKE", "lake", "cyan"],
+  ["COAST", "coast", "cyan"],
+  ["CLASS_D", "airspace_d", "alarm"],
+  ["CLASS_C", "airspace_c", "alarm"],
+  ["CLASS_B", "airspace_b", "alarm"],
+];
+const ROW_OF_LAYER = Object.fromEntries(LINES.map(([row, layer]) => [layer, row]));
+// The table's row for each kind of place.
+const PLACE_ROW = { navaid: "NAVAIDS", airport: "AIRPORTS", city: "CITIES", peak: "PEAKS" };
+
+// A line's pattern, in units of its width.
+const DASHES = { SOLID: [], DASH: [5, 5], DOT: [1, 3] };
+// Five layers were dashed before the table, each in a pattern of its own
+// that none of those match: an airway's 3 on 6 is no 5w on 5w, and Class
+// D's dots were 3 on 5. Each keeps its own as its default line's pattern,
+// in px at its default width (tenths) and scaled with the width from there,
+// so the default table draws what was drawn. Its other lines are as above.
+const OWN_DASH = {
+  AIRWAY: ["DASH", [3, 6], 12],
+  COUNTRY: ["DASH", [6, 4], 12],
+  CLASS_B: ["DASH", [5, 5], 14],
+  CLASS_C: ["DASH", [5, 5], 13],
+  CLASS_D: ["DOT", [3, 5], 10],
+};
+
+function dashOf(row, line, width, ratio) {
+  const own = OWN_DASH[row];
+  if (own && own[0] === line) return own[1].map((n) => (n * width * ratio) / own[2]);
+  return DASHES[line].map((n) => (n * width * ratio) / 10);
 }
+
+// The alpha a row's parts were drawn at before the table had them, which
+// its default is: the row's alpha scales each part from what it was then
+// (a ring at 0.35 and the range at 0.8; a place's symbol at 0.85 and its
+// label at LABEL_ALPHA). A row not here was drawn at 100.
+const ALPHA_WAS = { RINGS: 35, AIRPORTS: 85, NAVAIDS: 85, CITIES: 85, PEAKS: 85 };
+
+// How a label's size follows the zoom (phase G decision 13).
+const LABEL_GROWTH = 0.35;
+
+// A label's text height in CSS px for a row's size `base`, which is its
+// size at the view the range sets: zoomed in by k it is `base * k^0.35`,
+// zoomed out by k divided by that, held between prefs.label_min and
+// label_max. A base outside the two widens them to take it in, so the view
+// the range sets always shows a label at its own size (the home airport's
+// 30 px name is over the 26 px ceiling). The tags take theirs from
+// prefs.tag_px the same way.
+export function labelPx(base, radar) {
+  const { label_min: low, label_max: high } = radar.store.state.prefs;
+  const grown = base * (radar.range() / radar.view.nm) ** LABEL_GROWTH;
+  return Math.min(Math.max(grown, Math.min(low, base)), Math.max(high, base));
+}
+
+// A row of the table as it is drawn, in canvas px: { show, alpha, dash,
+// width, label }, with only the keys the row has. `strength` is what its
+// parts' old alphas are multiplied by.
+function look(radar, row, ratio) {
+  const cells = radar.store.state.prefs.map[row];
+  const out = { show: cells.show, alpha: cells.alpha / 100 };
+  if ("line" in cells) out.dash = dashOf(row, cells.line, cells.width, ratio);
+  if ("width" in cells) out.width = (cells.width * ratio) / 10;
+  if ("label" in cells) out.label = labelPx(cells.label, radar) * ratio;
+  Object.defineProperty(out, "strength", { value: cells.alpha / (ALPHA_WAS[row] || 100) });
+  return out;
+}
+
+// An alpha a part was drawn at, scaled by its row.
+const part = (style, was) => Math.min(1, was * style.strength);
 
 // -- this module's part of `radar` -------------------------------------------------
 
@@ -61,6 +138,9 @@ export function init(radar) {
   radar.rings = []; // [{ nm, r, bright, text, label: {...label, at: [x, baseline]} or null }], as last drawn
   radar.home = { x: 0, y: 0, r: 0 }; // the airport and its ring, as last drawn
   radar.symbols = {}; // kind -> how many are on screen, as last drawn
+  radar.styles = {}; // row -> its look() and, for RUNWAYS, what was drawn, as last drawn
+  radar.layers = {}; // the map's layer -> how many pieces it has, 0 while its row is hidden, as last drawn
+  radar.blurMap = 0; // the map's glow in canvas px, as last drawn
   radar.store.subscribe((kind) => {
     const { airport } = radar.store.state;
     if (kind === "all" && airport && airport.icao !== radar.mapFor) {
@@ -74,7 +154,7 @@ export function init(radar) {
       return {
         placed: [...radar.placed], hovered: radar.hovered, mapFor: radar.mapFor, loaded: Boolean(map),
         rings: [...radar.rings], home: { ...radar.home }, symbols: { ...radar.symbols },
-        layers: map ? Object.fromEntries(Object.entries(map.lines).map(([k, v]) => [k, v.length])) : {},
+        layers: { ...radar.layers }, styles: JSON.parse(JSON.stringify(radar.styles)), blur_map: radar.blurMap,
       };
     },
   };
@@ -103,12 +183,15 @@ export function projector(lat0, lon0) {
 
 // -- the map, decoded once per airport -------------------------------------------
 
+// A line piece is its points in nm, [x0, y0, x1, y1, ...], with `box`, the
+// least rectangle that holds them: [minx, miny, maxx, maxy].
 function decode(geo, project) {
   const q = geo.q;
   const lines = {};
   for (const [layer, pieces] of Object.entries(geo.lines)) {
     lines[layer] = pieces.map((piece) => {
       const out = new Float32Array(piece.length);
+      const box = [Infinity, Infinity, -Infinity, -Infinity];
       let x = piece[0];
       let y = piece[1];
       for (let i = 0; i < piece.length; i += 2) {
@@ -116,7 +199,10 @@ function decode(geo, project) {
         const [px, py] = project(y / q, x / q);
         out[i] = px;
         out[i + 1] = py;
+        box[0] = Math.min(box[0], px); box[1] = Math.min(box[1], py);
+        box[2] = Math.max(box[2], px); box[3] = Math.max(box[3], py);
       }
+      out.box = box;
       return out;
     });
   }
@@ -125,7 +211,11 @@ function decode(geo, project) {
   for (const [kind, rows] of Object.entries(geo.points)) points[kind] = rows.map((row) => ({ xy: at(row), row }));
   const labels = {};
   for (const [kind, rows] of Object.entries(geo.labels)) labels[kind] = rows.map((row) => ({ xy: at(row), row }));
-  const runways = geo.runways.map((r) => [project(r[1] / q, r[0] / q), project(r[3] / q, r[2] / q)]);
+  // [x1, y1, x2, y2] and, where the map has it, the width in feet.
+  const runways = geo.runways.map((r) => ({
+    ends: [project(r[1] / q, r[0] / q), project(r[3] / q, r[2] / q)],
+    ft: r[4] || RUNWAY_FT,
+  }));
   return { lines, points, labels, runways };
 }
 
@@ -189,9 +279,8 @@ function ringsOn(radar, centre, s, width, height) {
 // boxed: bare, the two cross as they always have. null when neither has
 // room, or when the number would touch one of `numbered`, those already
 // placed. A boxed number needs the room for its box.
-function ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, numbered, name) {
+function ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, numbered, name, h) {
   const w = ctx.measureText(ring.text).width;
-  const h = RING_TEXT_PX * ratio;
   const gap = RING_GAP_PX * ratio;
   const apart = RING_APART_PX * ratio;
   const ways = [[Math.SQRT1_2, -Math.SQRT1_2]];
@@ -222,11 +311,20 @@ function ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, number
 
 // -- the layer -------------------------------------------------------------------
 
-function strokeLines(radar, ctx, lines, s, width, height, progress) {
+// The pieces that come within `margin` px of the screen, and no others:
+// up close, the rest run many thousands of px off it, and a dashed path
+// that long is drawn solid (Skia gives up on dashing past a count) as well
+// as slowly. A piece's dashes start afresh with it, so leaving one out
+// moves no other's.
+function strokeLines(radar, ctx, lines, s, width, height, progress, margin) {
   ctx.beginPath();
   const ox = width / 2 - radar.view.panX * s;
   const oy = height / 2 - radar.view.panY * s;
+  const [left, top] = [(-margin - ox) / s, (-margin - oy) / s];
+  const [right, bottom] = [(width + margin - ox) / s, (height + margin - oy) / s];
   for (const line of lines) {
+    const [x0, y0, x1, y1] = line.box;
+    if (x1 < left || x0 > right || y1 < top || y0 > bottom) continue;
     const n = line.length / 2;
     const upto = progress >= 1 ? n : Math.max(2, Math.ceil(n * progress));
     ctx.moveTo(ox + line[0] * s, oy + line[1] * s);
@@ -237,7 +335,7 @@ function strokeLines(radar, ctx, lines, s, width, height, progress) {
 
 function glow(ctx, colour, ratio) {
   ctx.shadowColor = colour;
-  ctx.shadowBlur = glowBlur() * ratio;
+  ctx.shadowBlur = glowBlur("map") * ratio;
 }
 
 export function drawStatic(radar, now) {
@@ -254,29 +352,29 @@ export function drawStatic(radar, now) {
   ctx.lineCap = "round";
   ctx.globalCompositeOperation = "lighter";
   const progress = radar.drawOnFrom ? Math.min(1, (now - radar.drawOnFrom) / DRAW_ON_MS) : 1;
+  const styles = radar.styles;
+  for (const row of Object.keys(styles)) delete styles[row];
+  for (const row of Object.keys(prefs.map)) styles[row] = look(radar, row, ratio);
+  for (const layer of Object.keys(radar.layers)) delete radar.layers[layer];
+  radar.blurMap = glowBlur("map") * ratio;
 
   if (map) {
-    const layers = [
-      ["airway", c.blue, 1.2, [3 * ratio, 6 * ratio], 0.7],
-      ["state", c.dim, 1, [], 0.55],
-      ["country", c.green, 1.2, [6 * ratio, 4 * ratio], 0.9],
-      ["river", c.cyan, 1, [], 0.5],
-      ["lake", c.cyan, 1.2, [], 0.75],
-      ["coast", c.cyan, 1.8, [], 1],
-      ["airspace_d", c.alarm, 1, [3 * ratio, 5 * ratio], 0.45],
-      ["airspace_c", c.alarm, 1.3, [5 * ratio, 5 * ratio], 0.8],
-      ["airspace_b", c.alarm, 1.4, [5 * ratio, 5 * ratio], 0.9],
-    ];
-    for (const [layer, colour, w, dash, alpha] of layers) {
+    for (const [layer, lines] of Object.entries(map.lines)) {
+      const row = ROW_OF_LAYER[layer];
+      radar.layers[layer] = row && !styles[row].show ? 0 : lines.length;
+    }
+    for (const [row, layer, colour] of LINES) {
       const lines = map.lines[layer];
-      if (!lines || !lines.length) continue;
+      const style = styles[row];
+      if (!style.show || !lines || !lines.length) continue;
       ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = colour;
-      ctx.lineWidth = w * ratio;
-      ctx.setLineDash(dash);
-      glow(ctx, colour, ratio);
-      strokeLines(radar, ctx, lines, s, width, height, DRAWN_ON.has(layer) ? progress : 1);
+      ctx.globalAlpha = style.alpha;
+      ctx.strokeStyle = c[colour];
+      ctx.lineWidth = style.width;
+      ctx.setLineDash(style.dash);
+      glow(ctx, c[colour], ratio);
+      const margin = style.width + 3 * radar.blurMap; // past which neither a line nor its glow reaches the screen
+      strokeLines(radar, ctx, lines, s, width, height, DRAWN_ON.has(layer) ? progress : 1, margin);
       ctx.restore();
     }
   }
@@ -287,15 +385,16 @@ export function drawStatic(radar, now) {
   // place before any of them: a box under it, or under a number, is not to
   // be drawn across the other.
   const { rings } = radar;
-  rings.splice(0, rings.length, ...ringsOn(radar, centre, s, width, height));
-  const name = homeName(radar, ctx, centre, s, ratio, prefs);
+  const ringStyle = styles.RINGS;
+  rings.splice(0, rings.length, ...(ringStyle.show ? ringsOn(radar, centre, s, width, height) : []));
+  const name = styles.HOME.show ? homeName(radar, ctx, centre, s, ratio, prefs) : null;
   const keepOff = name && (radar.boxed("HOME") || radar.boxed("RINGS")) ? name.label : null;
   ctx.save();
   ctx.strokeStyle = c.cyan;
-  ctx.lineWidth = ratio;
+  ctx.lineWidth = ringStyle.width;
   glow(ctx, c.cyan, ratio);
   for (const ring of rings) {
-    ctx.globalAlpha = ring.bright ? 0.8 : 0.35;
+    ctx.globalAlpha = part(ringStyle, ring.bright ? 0.8 : 0.35);
     ctx.beginPath();
     ctx.arc(centre[0], centre[1], ring.r, 0, Math.PI * 2);
     ctx.stroke();
@@ -303,11 +402,12 @@ export function drawStatic(radar, now) {
   ctx.restore();
   ctx.save();
   ctx.fillStyle = c.dim;
-  ctx.font = `${RING_TEXT_PX * ratio}px ${FONT}`;
+  ctx.globalAlpha = part(ringStyle, 1);
+  ctx.font = `${ringStyle.label}px ${FONT}`;
   const clear = homeRing(s, ratio) + RING_GAP_PX * ratio;
   const numbered = [];
   for (const ring of [...rings.filter((r) => r.bright), ...rings.filter((r) => !r.bright)]) {
-    ring.label = ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, numbered, keepOff);
+    ring.label = ringLabel(radar, ctx, ring, centre, width, height, ratio, clear, numbered, keepOff, ringStyle.label);
     if (!ring.label) continue;
     numbered.push(ring.label);
     if (ring.label.box) paintBox(ctx, ring.label.box, c.dim, ratio, prefs);
@@ -315,37 +415,83 @@ export function drawStatic(radar, now) {
   }
   ctx.restore();
 
-  // The home airport first, so its name is reserved before any place
-  // looks for room.
+  // The runways, then the home airport, so its name is reserved before
+  // any place looks for room.
   radar.placed.length = 0;
   for (const kind of Object.keys(radar.symbols)) delete radar.symbols[kind];
   Object.assign(radar.home, { x: centre[0], y: centre[1], r: homeRing(s, ratio) });
-  if (name) drawHome(radar, ctx, centre, s, ratio, c, prefs, name);
-  if (map) drawPlaces(radar, ctx, s, width, height, ratio, c, prefs);
+  styles.RUNWAYS.drawn = map && styles.RUNWAYS.show ? drawRunways(radar, ctx, s, width, height, ratio, c, styles.RUNWAYS) : [];
+  if (name) drawHome(radar, ctx, centre, ratio, c, prefs, name, styles.HOME);
+  if (map) drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles);
   radar.staticDirty = progress < 1;
+}
+
+// Runways in white about the airport, each as long as it is. Far out, a
+// line the row's width; once a runway's true width is wider than that, a
+// filled quadrilateral that wide. Returns what was drawn, for tests:
+// [{ ends: [[x, y], [x, y]], ft, px, filled }].
+function drawRunways(radar, ctx, s, width, height, ratio, c, style) {
+  const drawn = [];
+  const quads = [];
+  ctx.save();
+  ctx.globalAlpha = style.alpha;
+  ctx.strokeStyle = c.white;
+  ctx.fillStyle = c.white;
+  ctx.lineWidth = style.width;
+  glow(ctx, c.white, ratio);
+  ctx.beginPath();
+  for (const { ends: [a, b], ft } of radar.map.runways) {
+    const p = toScreen(radar, a, s, width, height);
+    const q = toScreen(radar, b, s, width, height);
+    const wide = (ft / FT_PER_NM) * s;
+    const length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    const filled = wide > style.width && length > 0;
+    drawn.push({ ends: [p, q], ft, px: Math.max(style.width, wide), filled });
+    if (filled) {
+      quads.push([p, q, (-(q[1] - p[1]) / length) * (wide / 2), ((q[0] - p[0]) / length) * (wide / 2)]);
+    } else {
+      ctx.moveTo(p[0], p[1]);
+      ctx.lineTo(q[0], q[1]);
+    }
+  }
+  ctx.stroke();
+  if (quads.length) {
+    ctx.beginPath();
+    for (const [p, q, nx, ny] of quads) {
+      ctx.moveTo(p[0] + nx, p[1] + ny);
+      ctx.lineTo(q[0] + nx, q[1] + ny);
+      ctx.lineTo(q[0] - nx, q[1] - ny);
+      ctx.lineTo(p[0] - nx, p[1] - ny);
+      ctx.closePath();
+    }
+    ctx.fill();
+  }
+  ctx.restore();
+  return drawn;
 }
 
 // Symbols and labels, placed greedily by priority so no two labels
 // overlap; a label that does not fit is left off, its symbol stays. Every
 // label is given its place before anything is drawn, so that the boxes can
 // go down first: a box hides the map under it, never a symbol or a name.
-function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs) {
+function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
   const { map, placed, symbols, rings } = radar;
   const boxed = radar.boxed;
   const onScreen = ([x, y]) => x > -40 && y > -40 && x < width + 40 && y < height + 40;
+  const shows = (kind) => styles[PLACE_ROW[kind]].show;
   const items = [];
-  for (const { xy, row } of map.points.navaid || []) {
+  for (const { xy, row } of shows("navaid") ? map.points.navaid || [] : []) {
     if (!VOR.has(row[3])) continue;
     items.push({ kind: "navaid", xy, text: row[2], colour: c.cyan, priority: 30 });
   }
-  for (const { xy, row } of map.points.airport || []) {
+  for (const { xy, row } of shows("airport") ? map.points.airport || [] : []) {
     if (row[3] === "small" && radar.view.nm > SMALL_AIRPORTS_NM) continue;
     items.push({ kind: "airport", xy, text: row[2], colour: c.cyan, priority: row[3] === "large" ? 25 : row[3] === "medium" ? 35 : 60 });
   }
-  for (const { xy, row } of map.points.city || []) {
+  for (const { xy, row } of shows("city") ? map.points.city || [] : []) {
     items.push({ kind: "city", xy, text: row[2], colour: c.amber, priority: row[3] });
   }
-  for (const { xy, row } of map.points.peak || []) {
+  for (const { xy, row } of shows("peak") ? map.points.peak || [] : []) {
     items.push({ kind: "peak", xy, text: row[2], colour: c.amber, priority: 20 });
   }
   items.sort((a, b) => a.priority - b.priority);
@@ -371,11 +517,19 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs) {
   };
 
   ctx.save();
-  ctx.lineWidth = 1.3 * ratio;
-  const placeFont = () => { ctx.font = `${13 * ratio}px ${FONT}`; ctx.letterSpacing = `${1.5 * ratio}px`; };
-  const stateFont = () => { ctx.font = `${14 * ratio}px ${FONT}`; ctx.letterSpacing = `${6 * ratio}px`; };
+  // A kind of place's text height is its row's; the state names' spacing
+  // and their place about their point grow with theirs.
+  let font = "";
+  const placeFont = (kind) => {
+    const want = `${styles[PLACE_ROW[kind]].label}px ${FONT}`;
+    if (want !== font) { ctx.font = want; font = want; }
+  };
+  const statePx = styles.STATE_NAMES.label;
+  const stateEm = statePx / (14 * ratio);
+  const stateFont = () => { ctx.font = `${statePx}px ${FONT}`; font = ""; ctx.letterSpacing = `${6 * ratio * stateEm}px`; };
+  const placeSpacing = () => { ctx.letterSpacing = `${1.5 * ratio}px`; };
 
-  placeFont();
+  placeSpacing();
   const places = []; // [{ item, p, key, baseline, label or null }]
   const reach = SYMBOL_PX * ratio;
   for (const item of items) {
@@ -384,8 +538,9 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs) {
     // Airports within the home ring are the home airport itself.
     if (item.kind === "airport" && Math.hypot(p[0] - home[0], p[1] - home[1]) < 8 * ratio) continue;
     symbols[item.kind] = (symbols[item.kind] || 0) + 1;
+    placeFont(item.kind);
     const w = ctx.measureText(item.text).width;
-    const h = 13 * ratio;
+    const h = styles[PLACE_ROW[item.kind]].label;
     const text = { x: p[0] + 8 * ratio, y: p[1] - h / 2 - 2 * ratio, w, h: h + 4 * ratio };
     const baseline = p[1] + h / 2 - 2 * ratio;
     // A place's box takes in its symbol: the two are one thing.
@@ -401,13 +556,13 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs) {
   // State names: large, spaced, dim, and the first thing given up.
   stateFont();
   const states = []; // [{ name, key, x, baseline, label }]
-  for (const { xy, row } of map.labels.state || []) {
+  for (const { xy, row } of styles.STATE_NAMES.show ? map.labels.state || [] : []) {
     const p = toScreen(radar, xy, s, width, height);
     if (!onScreen(p)) continue;
     const w = ctx.measureText(row[2]).width;
-    const text = { x: p[0] - w / 2, y: p[1] - 10 * ratio, w, h: 18 * ratio };
-    const baseline = p[1] + 5 * ratio;
-    const ink = inked(text.x, baseline, w - trailing(6 * ratio), 14 * ratio);
+    const text = { x: p[0] - w / 2, y: p[1] - 10 * ratio * stateEm, w, h: 18 * ratio * stateEm };
+    const baseline = p[1] + 5 * ratio * stateEm;
+    const ink = inked(text.x, baseline, w - trailing(6 * ratio * stateEm), statePx);
     const key = `state:${row[2]}`;
     const label = place(key, claim(text, ink, boxed("STATES"), ratio, prefs));
     if (label) states.push({ name: row[2], key, x: text.x, baseline, label });
@@ -417,16 +572,19 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs) {
   for (const { item, label } of places) if (label && label.box) paintBox(ctx, label.box, item.colour, ratio, prefs);
   for (const { label } of states) if (label.box) paintBox(ctx, label.box, c.dim, ratio, prefs);
 
-  placeFont();
+  placeSpacing();
   for (const { item, p, key, baseline, label } of places) {
-    ctx.globalAlpha = 0.85;
+    const style = styles[PLACE_ROW[item.kind]];
+    ctx.globalAlpha = part(style, 0.85);
     ctx.strokeStyle = item.colour;
+    ctx.lineWidth = style.width;
     glow(ctx, item.colour, ratio);
     symbol(ctx, item.kind, p, ratio);
     if (!label) continue;
     ctx.shadowBlur = 0;
-    ctx.globalAlpha = radar.hovered === key ? 1 : LABEL_ALPHA;
+    ctx.globalAlpha = part(style, radar.hovered === key ? 1 : LABEL_ALPHA);
     ctx.fillStyle = item.colour;
+    placeFont(item.kind);
     ctx.fillText(item.text, p[0] + 8 * ratio, baseline);
   }
 
@@ -434,7 +592,7 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = c.dim;
   for (const { name, key, x, baseline } of states) {
-    ctx.globalAlpha = radar.hovered === key ? 1 : LABEL_ALPHA;
+    ctx.globalAlpha = part(styles.STATE_NAMES, radar.hovered === key ? 1 : LABEL_ALPHA);
     ctx.fillText(name, x, baseline);
   }
   ctx.restore();
@@ -467,14 +625,14 @@ function homeName(radar, ctx, centre, s, ratio, prefs) {
   if (!airport) return null;
   const ring = homeRing(s, ratio);
   const lines = nameLines(airport);
-  const size = 30 * ratio;
+  const size = radar.styles.HOME.label;
   const step = size + 2 * ratio;
   const foot = [centre[0] + ring * 0.7, centre[1] - ring * 0.7];
   const x = foot[0] + 12 * ratio;
   const last = foot[1] - 14 * ratio; // the bottom line's baseline
   const top = last - (lines.length - 1) * step;
   const font = `${size}px ${FONT}`;
-  const spacing = 3 * ratio;
+  const spacing = (3 * size) / 30;
   ctx.save();
   ctx.font = font;
   ctx.letterSpacing = `${spacing}px`;
@@ -487,36 +645,22 @@ function homeName(radar, ctx, centre, s, ratio, prefs) {
   return { lines, font, spacing, step, ring, foot, x, last, top, label };
 }
 
-function drawHome(radar, ctx, centre, s, ratio, c, prefs, name) {
-  const { map } = radar;
+function drawHome(radar, ctx, centre, ratio, c, prefs, name, style) {
   const { lines, step, ring, foot, x, last, top, label } = name;
   ctx.save();
-  // Runways in white inside the ring, at their true size.
-  if (map && map.runways.length) {
-    ctx.strokeStyle = c.white;
-    ctx.lineWidth = 1.6 * ratio;
-    glow(ctx, c.white, ratio);
-    ctx.beginPath();
-    for (const [a, b] of map.runways) {
-      const p = toScreen(radar, a, s, ctx.canvas.width, ctx.canvas.height);
-      const q = toScreen(radar, b, s, ctx.canvas.width, ctx.canvas.height);
-      ctx.moveTo(p[0], p[1]);
-      ctx.lineTo(q[0], q[1]);
-    }
-    ctx.stroke();
-  }
   radar.placed.push({ key: "home", ...label });
   // Its box goes down before the ring and the leader, and hides neither;
   // a runway that runs out under the name, it does.
   if (label.box) paintBox(ctx, label.box, c.pink, ratio, prefs);
+  ctx.globalAlpha = part(style, 1);
   ctx.strokeStyle = c.pink;
-  ctx.lineWidth = 1.8 * ratio;
+  ctx.lineWidth = style.width;
   glow(ctx, c.pink, ratio);
   ctx.beginPath();
   ctx.arc(centre[0], centre[1], ring, 0, Math.PI * 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.lineWidth = 1.2 * ratio;
+  ctx.lineWidth = (style.width * 1.2) / 1.8; // the leader, a little finer than the ring
   ctx.moveTo(foot[0], foot[1]);
   ctx.lineTo(x - 4 * ratio, last + 6 * ratio);
   ctx.stroke();
@@ -524,7 +668,7 @@ function drawHome(radar, ctx, centre, s, ratio, c, prefs, name) {
   ctx.letterSpacing = `${name.spacing}px`;
   ctx.fillStyle = c.pink;
   ctx.shadowBlur = 0;
-  ctx.globalAlpha = radar.hovered === "home" ? 1 : LABEL_ALPHA;
+  ctx.globalAlpha = part(style, radar.hovered === "home" ? 1 : LABEL_ALPHA);
   lines.forEach((line, i) => ctx.fillText(line, x, top + i * step));
   ctx.restore();
 }

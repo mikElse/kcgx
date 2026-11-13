@@ -32,7 +32,9 @@ Format (version 1), all coordinates integers in units of 1e-4 degree:
     points:  {"city": [[x, y, name, rank]], "peak": [[x, y, name]],
               "navaid": [[x, y, ident, type]], "airport": [[x, y, label, size]]}
     labels:  {"state": [[x, y, name]]}
-    runways: {icao: [[x1, y1, x2, y2], ...]}
+    runways: {icao: [[x1, y1, x2, y2], ...]}, each with width_ft as a fifth
+             element where OurAirports gives one (the page draws one
+             without at 150 ft)
 
 Long lines are cut into pieces of at most PIECE points, each with its own
 bounding box, so the server can clip the world to one airport by box tests
@@ -265,8 +267,18 @@ def runways(path: Path, keep: set[str]) -> dict[str, list[list[int]]]:
             ends = [row["le_longitude_deg"], row["le_latitude_deg"], row["he_longitude_deg"], row["he_latitude_deg"]]
             if not all(ends):
                 continue
-            out.setdefault(icao, []).append([q(v) for v in ends])
+            out.setdefault(icao, []).append([q(v) for v in ends] + width_ft(row.get("width_ft") or ""))
     return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def width_ft(value: str) -> list[int]:
+    """A runway's width as the fifth element of its row, or nothing when
+    OurAirports has none worth keeping."""
+    try:
+        width = round(float(value))
+    except (ValueError, OverflowError):  # blank, words, nan, inf
+        return []
+    return [width] if width > 0 else []
 
 
 def dataset_icaos() -> set[str]:

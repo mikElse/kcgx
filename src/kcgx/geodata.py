@@ -10,6 +10,10 @@ Coordinates stay in the file's integer units (1e-4 degree) all the way to
 the page, which knows `q`. Longitudes near the antimeridian are shifted by
 a whole turn so a field at 179.9 E sees the land at 179.9 W beside it
 rather than a world away.
+
+A runway goes to the page as the file has it: its two ends and, from a map
+built with widths, `width_ft` as a fifth element. The page draws one
+without a width at 150 ft.
 """
 
 from __future__ import annotations

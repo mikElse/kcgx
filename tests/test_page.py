@@ -1320,16 +1320,26 @@ def test_place_names_brighten_under_the_pointer(page):
     page.wait_for_function("window.kcgx.radar.debug().hovered === null")
 
 
-def test_the_wheel_zooms_in_to_2_5_nm_and_no_further(page):
+def test_the_wheel_zooms_in_to_a_quarter_mile_and_no_further(page):
     wait_for_traffic(page)
     page.mouse.move(*centre_of_the_radar(page))
     turn_wheel(page, -600)
-    assert 2.5 < radar_debug(page)["view"]["nm"] < 40
+    assert 0.25 < radar_debug(page)["view"]["nm"] < 40
     for _ in range(5):
         turn_wheel(page, -600)
-    assert radar_debug(page)["view"]["nm"] == 2.5
+    assert radar_debug(page)["view"]["nm"] == 0.25
     turn_wheel(page, -600)
-    assert radar_debug(page)["view"]["nm"] == 2.5
+    assert radar_debug(page)["view"]["nm"] == 0.25
+
+
+def view_at_2_5_nm(page):
+    """The view the wheel closed in to before it went on to a quarter mile
+    (phase G Task 10): 2.5 nm about the airport."""
+    page.evaluate(
+        """() => window.kcgx.radar.hook((radar) => {
+            Object.assign(radar.view, { nm: 2.5, panX: 0, panY: 0 }); radar.staticDirty = true; })()"""
+    )
+    frames(page)
 
 
 @pytest.mark.parametrize("range_nm, widest", [(40, 160), (250, 250)])
@@ -1362,7 +1372,7 @@ def test_the_range_ring_fits_the_shorter_side_less_18_px(page):
 
 def test_at_2_5_nm_the_rings_are_half_a_mile_apart_and_numbered_plainly(page):
     wait_for_traffic(page)
-    zoom_right_in(page)
+    view_at_2_5_nm(page)
     debug = radar_drawn(page)
     assert debug["view"]["nm"] == 2.5
     width, height = canvas_size(page)
@@ -1532,10 +1542,10 @@ def test_ring_numbers_follow_the_rings_when_the_airport_is_off_the_screen(page, 
 
 
 def test_a_ring_number_that_would_sit_on_the_home_ring_is_left_off(page):
-    """At the closest view the half mile ring is inside the home ring, and
-    its number would land on it."""
+    """At 2.5 nm the half mile ring is inside the home ring, and its number
+    would land on it."""
     wait_for_traffic(page)
-    zoom_right_in(page)
+    view_at_2_5_nm(page)
     debug = radar_drawn(page)
     ratio = page.evaluate("devicePixelRatio")
     home = debug["home"]
