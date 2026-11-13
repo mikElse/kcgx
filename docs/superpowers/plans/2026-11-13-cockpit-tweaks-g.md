@@ -909,14 +909,130 @@ names drop), `tests/test_radar.py`, `tests/test_demo.py`
 | Airport: picker fixed and centred | 2 |
 | Airport: picker 50 % wider | 2 |
 
-## Order, and what can run side by side
+## Execution: worktrees and agents
 
-1 first; 2 next (every later task puts its controls into a tab). Then four
-lanes that touch different files: **A** 3, 4, 5 (page chrome, `frames.js`,
-`theme.js`; 5 after 4); **B** 6 (audio, `stack.js`); **C** 7, 8, 9
-(`radar.py`, `tracks.js`); **D** 10, 11, 12, 13 (`radar.js`, in that order;
-12 needs 8's column text, 13 needs 7's `still` and 8's rank). 14 needs 4's
-`frames.js` and render scale and can run beside lane D. 15 last.
+Read as tasks, the plan is one long line through `radar.js`, `index.html`,
+`cockpit.css` and `test_page.py`, which nearly every task edits. Work is
+split across worktrees by **who owns which file**, not by task number. A
+serial Phase 0 first cuts the shared files into parts each lane can own.
+Tasks 4 and 5 are each split between lanes (4a to 4e, 5a and 5b below).
+
+### Phase 0: seams (serial, in `/Users/mikelse/kcgx_web`)
+
+One agent at a time, on `feat/web-cockpit`, each step reviewed and committed
+before the next. Nothing branches off until all four are in.
+
+| Step | What | Why the lanes need it |
+|---|---|---|
+| P0.1 | **Task 1**, whole: every new key, `Table`, the migration, store defaults | each lane then reads prefs and never edits `prefs.py` or `store.js` defaults |
+| P0.2 | **Task 2**, whole: tabs, the table binder, **a control for every key** (test_page_prefs requires it), the airport picker | each lane's settings already exist in the sheet; no lane edits the config markup or `sheets.js` |
+| P0.3 | **Split `radar.js`, no behaviour change**: `radar/index.js` (mount, `frame()`, `debug()`, the HUD), `radar/still.js` (`drawStatic`, places, rings, home), `radar/moving.js` (aircraft, trails, tags), `radar/view.js` (view, wheel, drag, double click, hit tests). `debug()` keeps its shape. The whole suite passes unchanged. | three lanes then work in radar files that are theirs alone |
+| P0.4 | **Shared modules and contracts**: `frames.js` (Task 4a: the capped clock, `fps_max`) adopted by radar and stack; `theme.js` `renderScale()` and `glowBlur(layer)` (default 33 → 3.96 px, as LOW's 4); `columns.js` holding every Tracks column (title, text, sort value, filter kind) for all seventeen names, tolerant of missing fields; `store.state.rank` (an empty `Map` until tracks fills it) and `ac.still` (absent until the server sends it) documented in `store.js`; page test fixtures (`server`, `browser`, `page`, `other`, `set_prefs`, `SIZES`, …) moved from `test_page.py` to `tests/page_fixtures.py` and imported back; one marked section per lane at the end of `cockpit.css` and one marked anchor per lane in `index.html` (`<!-- G:freq-head -->`, `<!-- G:tracks-grip -->`, `<!-- G:ac-info -->`, `<!-- G:boot -->`) | lanes code to these and never wait on one another |
+
+### The lanes
+
+Each lane is a worktree and a branch off `feat/web-cockpit` once P0.4 is
+in. "Owns" means only that lane edits the file; anything else needs a note
+to the integrator first.
+
+| Lane | Worktree, branch | Tasks | Owns |
+|---|---|---|---|
+| **AUDIO** | `../kcgx_g_audio`, `g/audio` | 6 | `squelch/cockpit.py`, `squelch/mixer.py`, `kcgx/names.py`, `stack.js`; in `protocol.py` and `station.py` only `select`, `master_mute` and `title` |
+| **TRACKS** | `../kcgx_g_tracks`, `g/tracks` | 7, 8, 9; **4b** (`poll_secs`: `Radar.set_refresh`, the station's half) | `kcgx/radar.py`, `kcgx/demo.py`, `tracks.js`, `columns.js` |
+| **CHROME** | `../kcgx_g_chrome`, `g/chrome` | 3; **4c** (`glow_text`, `--glow`, the `[data-glow]` rules, render scale on the stack's traces) | `main.js` (`applyPrefs` only), `status.js`, `theme.js`, fonts, the body and page rules in `cockpit.css` |
+| **MAP** | `../kcgx_g_map`, `g/map` | 10, 12; **4d** (`glow_map`, `zoom_speed`, `view_ease`); **5a** (glow by colour on the map; moving the bitmap during gestures) | `radar/still.js`, `radar/view.js`, `tools/build_geodata.py`, `geodata.py` |
+| **TRAFFIC** | `../kcgx_g_traffic`, `g/traffic` | 11, 13; **4e** (`glow_traffic`, `burn_in`, `motion`, render scale on the radar's canvases); **5b** (culling) | `radar/moving.js`, `radar/index.js` (the tags layer, the HUD), trails in `store.js` |
+| **BOOT** | `../kcgx_g_boot`, `g/boot` | 14 | `boot.js`, `boot-scene.js`, `hub.py`, `boot` in `protocol.py` |
+
+Cross-lane contracts, set in P0.4 so no lane waits:
+
+- TRAFFIC reads `store.state.rank` and `ac.still`. Its tests set both
+  through `window.kcgx.store`, so it does not need TRACKS merged.
+- MAP's data box (Task 12) takes its lines from `columns.js` and the
+  visible columns from `prefs.track_cols`. TRACKS may change how a column
+  reads, but not the module's interface.
+- MAP and TRAFFIC both call `labelPx()`. MAP writes it in `radar/still.js`
+  and exports it. Until MAP is merged, TRAFFIC uses the P0.3 stub, which
+  returns its argument.
+
+### Inside a lane
+
+Per task, as phase F did (its `fix: task N review findings` commits):
+
+1. **Implementer agent**, fresh, briefed with: this plan's path, the task
+   number(s), the lane's "owns" list, the Global Constraints, and "run your
+   lane's test files plus `uv run pytest -q tests/test_page_prefs.py` and
+   the non-browser suite; the full browser suite is the integrator's". It
+   commits once, in the repo's style.
+2. **Reviewer agent**, fresh. It gets the commit's diff and the task's text,
+   not the implementer's report.
+3. **Fix agent**, or the implementer resumed, for the findings. It commits
+   `fix: task N review findings`.
+
+New page tests go in a file of the lane's own:
+`tests/test_page_audio.py`, `_tracks`, `_chrome`, `_map`, `_traffic` and
+`tests/test_boot.py`. Each imports `page_fixtures`. A lane edits
+`test_page.py` only to mend a test its own change breaks, and lists each one
+in its last commit's message, so the integrator expects the conflict.
+
+Every worktree needs its own `uv sync --group browser`. The Playwright
+browsers in `~/Library/Caches/ms-playwright` are shared. Test servers pick
+free ports and set `KCGX_STATE_PATH`, so lanes cannot collide. **Do not run
+`uv run playwright install` in a lane.** Phase F's install garbage-collected
+another project's browsers.
+
+### Waves
+
+Each lane's browser tests run in both engines. More than three lanes running
+them at once makes timing tests flaky, and phase F already has two
+poll-race flakes. So:
+
+| Wave | Runs | Starts when |
+|---|---|---|
+| 0 | Phase 0 | now |
+| 1 | MAP, TRAFFIC, AUDIO | P0.4 is in. MAP is the critical path (10 then 12), so it starts first. |
+| 2 | TRACKS, CHROME | AUDIO is merged |
+| 3 | BOOT | CHROME is merged. Its fade depends on CHROME's `--font-display` and opacity rules, which it builds on rather than guesses. |
+| 4 | Task 15 | every lane is merged |
+
+If MAP runs long, wave 3 starts beside it. BOOT touches no radar file.
+
+### Integration (in `/Users/mikelse/kcgx_web`)
+
+The integrator is the main session, not a subagent. For each lane that
+reports done:
+
+1. In the lane's worktree: `git rebase feat/web-cockpit`, then its own tests
+   again.
+2. In the integration worktree: `git merge --no-ff g/<lane>` with message
+   `merge: phase G <lane>` and the attribution lines. Resolve conflicts:
+   `test_page.py`, the `cockpit.css` sections, `index.html` anchors.
+3. Run the full suite there (`uv run --group browser pytest -q`, about 10
+   minutes and growing). On a red run, the lane's fix agent mends it on the
+   lane branch, and step 1 repeats.
+4. Tell the other running lanes to rebase at their next task boundary, not
+   mid-task.
+5. `git worktree remove ../kcgx_g_<lane>`; delete the branch once merged.
+
+Merge order follows the waves: AUDIO, then MAP and TRAFFIC in whichever
+order they finish, then TRACKS, CHROME, BOOT. The one ordering that matters:
+**MAP before TRAFFIC if both are ready**, so `labelPx` replaces the stub
+before TRAFFIC's tag tests run against the real one.
+
+### What can go wrong
+
+- **P0.3's split breaks something the tests do not see.** It is a pure move.
+  The reviewer diffs behaviour, not text: screenshots of the demo before and
+  after at two sizes, under 0.1 % of pixels different.
+- **Two lanes need the same new protocol field.** Only AUDIO and BOOT touch
+  `protocol.py`, in different functions. Anything else goes to the
+  integrator, who adds it on `feat/web-cockpit` and has both lanes rebase.
+- **Task 10's map rebuild needs the network.** The MAP lane does not fetch;
+  it leaves the old map (runways at 150 ft) and lists the rebuild as owed,
+  as Task 10 says.
+- **Flaky tests at merge time.** A failure in a test the merged lane did not
+  touch is re-run alone once. If it passes, it is noted under Built, not
+  chased.
 
 ## Not in this plan
 
