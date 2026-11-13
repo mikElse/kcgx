@@ -1809,11 +1809,19 @@ def test_a_click_on_either_line_of_a_tag_focuses_its_aircraft(page):
     assert two["y"] == pytest.approx(one["y"] - 18 * ratio)
     assert (two["x"], two["y"] + two["h"]) == pytest.approx((one["x"], one["y"] + one["h"]))
     assert two["w"] > one["w"]
-    for y in (two["y"] + 3, two["y"] + two["h"] - 3):  # far right, well clear of the chevron
-        page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
-        page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
-        page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
-        page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
+    # Focusing follows the aircraft, which moves the view (Task 12): the
+    # tag is read again where each click finds it.
+    set_prefs(page, view_ease="OFF")
+    for top in (True, False):  # far right, well clear of the chevron
+        for focused in ("tr.focused[data-hex=\"a1\"]", None):
+            frames(page)
+            two = tags(page)["a1"]
+            y = two["y"] + 3 if top else two["y"] + two["h"] - 3
+            page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
+            if focused:
+                page.wait_for_selector(f"#tracks-body {focused}")
+            else:
+                page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
 
 
 @pytest.mark.parametrize("items", [[], ["AIRCRAFT"]])
@@ -1834,9 +1842,13 @@ def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(
     assert (first["hex"], second["hex"]) == ("a1", "a2")
     assert nearest(first["tag"], second["x"], second["y"]) == 0, "the test wants a chevron under the other's tag"
     assert nearest({"x": first["x"], "y": first["y"], "w": 0, "h": 0}, second["x"], second["y"]) > 30 * ratio
+    set_prefs(page, view_ease="OFF")
     page.mouse.click(*on_screen(page, second["x"], second["y"]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
-    # The rest of the tag is still its own aircraft's.
+    # The rest of the tag is still its own aircraft's, where following a2
+    # (Task 12) has moved it.
+    frames(page)
+    first = radar_debug(page)["hits"][0]
     page.mouse.click(*on_screen(page, first["tag"]["x"] + first["tag"]["w"] / 2, first["tag"]["y"] + first["tag"]["h"] / 2))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
 
@@ -1893,6 +1905,9 @@ def test_a_tags_box_is_the_padding_and_the_border_about_the_text(page):
 def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
     wait_for_traffic(page)
     set_prefs(page, **glow(0), display="OFF", box_items=["AIRCRAFT"], box_fill=100, box_border=100, box_pad=12)
+    # Focusing follows the aircraft (Task 12): wide enough to keep both on
+    # the screen, and at once.
+    set_prefs(page, follow_nm=50, view_ease="OFF")
     drawn = hold_traffic(page, plane("a1", -12, 12), plane("a2", 12, -12))
     edges = {hex_: edge_middles(tag["box"]) for hex_, tag in drawn.items()}
     cyan = (*css_colour(page, "--cyan"), 255)
@@ -1901,6 +1916,7 @@ def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
     page.mouse.click(*on_screen(page, *inside_corners(drawn["a1"]["box"])[1]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
     frames(page)
+    edges = {hex_: edge_middles(tag["box"]) for hex_, tag in tags(page).items()}
     pink = (*css_colour(page, "--pink"), 255)
     focused, dimmed = canvas_pixels(page, edges["a1"][0], edges["a2"][0])
     assert focused == pink

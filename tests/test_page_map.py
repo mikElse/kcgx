@@ -1,6 +1,8 @@
-"""The map lane's page tests (plan phase G, Task 10 and 4d's glow_map): every
+"""The map lane's page tests (plan phase G, Tasks 10 and 12, and 4d): every
 map layer styled by the `map` table, still labels that follow the zoom,
-runways at their true width up close, and the map's own glow."""
+runways at their true width up close, the map's own glow; a click on a place
+centres it, the focused aircraft is followed and has a data box beside it,
+view moves ease by `view_ease` and the wheel turns at `zoom_speed`."""
 
 from __future__ import annotations
 
@@ -648,3 +650,531 @@ def test_with_no_map_glow_the_static_layer_is_sharper(page):
     set_prefs(page, glow_map=0, glow_traffic=100, glow_text=100)
     assert still_picture(page) == sharp, "only the map's number reaches the static layer"
     assert differ(page, glowing, sharp)["differ"] > 0.01
+
+
+# -- Task 12: view moves, following, places, the data box ---------------------
+
+# Decision 21: how long a view move takes, by prefs.view_ease.
+EASE_MS = {"OFF": 0, "QUICK": 250, "SMOOTH": 600}
+REACH = 9  # px: the chevron reaches this far from its point, whichever way it points
+GAP = 12  # px between the data box and the chevron
+
+
+def view_of(page):
+    return radar_debug(page)["view"]
+
+
+def hit_of(page, hex_):
+    return next(h for h in radar_debug(page)["hits"] if h["hex"] == hex_)
+
+
+def from_centre(page, hex_):
+    """How far, in canvas px, the aircraft was drawn from the radar's centre."""
+    width, height = canvas_size(page)
+    hit = hit_of(page, hex_)
+    return math.hypot(hit["x"] - width / 2, hit["y"] - height / 2)
+
+
+# Until the view is at `nm` and the aircraft drawn within `px` canvas px of the centre.
+FOLLOWED = """([hex, nm, px]) => { const d = window.kcgx.radar.debug(), c = document.getElementById("radar");
+    const hit = d.hits.find(h => h.hex === hex);
+    return hit && d.view.nm === nm && Math.hypot(hit.x - c.width / 2, hit.y - c.height / 2) <= px; }"""
+
+
+def wait_followed(page, hex_, nm=10, px=2):
+    page.wait_for_function(FOLLOWED, arg=[hex_, nm, px * page.evaluate("devicePixelRatio")])
+
+
+def focus_set(page, hex_):
+    """Focus (or, with None, unfocus) as the page's own focus.js does."""
+    page.evaluate("hex => import('/static/js/focus.js').then(m => m.focus.set(hex))", hex_)
+
+
+def click_row(page, hex_):
+    page.click(f'#tracks-body tr[data-hex="{hex_}"] .callsign')
+
+
+def nothing_to_hit(page):
+    """No places on the map, so a click away from the aircraft is on nothing."""
+    set_map(page, **{row: {"show": False} for row in ("HOME", "AIRPORTS", "NAVAIDS", "CITIES", "PEAKS", "STATE_NAMES")})
+    frames(page)
+
+
+def a_city(page):
+    """A city on screen with its label placed, well away from the centre and
+    from the rest of the map's labels and symbols: its placed entry."""
+    width, height = canvas_size(page)
+    ratio = page.evaluate("devicePixelRatio")
+    debug = radar_drawn(page)
+    for city in debug["placed"]:
+        if not city["key"].startswith("city:"):
+            continue
+        x, y = city["point"]
+        if not (80 * ratio < x < width - 300 * ratio and 80 * ratio < y < height - 80 * ratio):
+            continue
+        if math.hypot(x - width / 2, y - height / 2) < 120 * ratio:
+            continue
+        others = [p for p in debug["placed"] if p is not city]
+        if any(p["x"] <= x <= p["x"] + p["w"] and p["y"] <= y <= p["y"] + p["h"] for p in others):
+            continue
+        if any(m["key"] != city["key"] and math.hypot(m["point"][0] - x, m["point"][1] - y) < 30 * ratio
+               for m in debug["marks"]):
+            continue
+        return city
+    raise AssertionError("the test wants a city clear of the rest of the map")
+
+
+# From here on, `window.views` is the view each frame drew.
+RECORD_VIEWS = """() => { window.views = [];
+    window.kcgx.radar.hook((radar) => ({ post() { window.views.push({ ...radar.shown }); } })); }"""
+
+
+def record_views(page):
+    page.evaluate(RECORD_VIEWS)
+
+
+def mark_of(page, key):
+    return next(m for m in radar_drawn(page)["marks"] if m["key"] == key)
+
+
+@pytest.mark.parametrize("on", ["symbol", "label"])
+def test_clicking_a_city_eases_it_to_the_centre_and_keeps_the_zoom(page, on):
+    wait_for_traffic(page)
+    hold_traffic(page)  # nothing in the way
+    set_prefs(page, view_ease="SMOOTH")
+    frames(page)
+    city = a_city(page)
+    start = view_of(page)
+    where = city["point"] if on == "symbol" else (city["x"] + city["w"] - 3, city["y"] + city["h"] / 2)
+    page.mouse.click(*on_screen(page, *where))
+    frames(page, 4)
+    midway = view_of(page)
+    assert midway["nm"] == start["nm"]
+    assert (midway["panX"], midway["panY"]) != (start["panX"], start["panY"]), "it has begun to move"
+    assert (midway["panX"], midway["panY"]) != tuple(city["xy"]), "and eases, rather than jumps"
+    page.wait_for_function(
+        "xy => { const v = window.kcgx.radar.debug().view; return v.panX === xy[0] && v.panY === xy[1]; }",
+        arg=city["xy"],
+    )
+    assert view_of(page)["nm"] == start["nm"]
+    frames(page)
+    width, height = canvas_size(page)
+    x, y = mark_of(page, city["key"])["point"]
+    ratio = page.evaluate("devicePixelRatio")
+    assert abs(x - width / 2) <= ratio and abs(y - height / 2) <= ratio
+
+
+def test_with_view_moves_off_a_click_centres_a_city_in_one_frame(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    set_prefs(page, view_ease="OFF")
+    frames(page)
+    city = a_city(page)
+    nm = view_of(page)["nm"]
+    page.mouse.click(*on_screen(page, *city["point"]))
+    frames(page, 1)
+    assert view_of(page) == {"nm": nm, "panX": city["xy"][0], "panY": city["xy"][1]}
+
+
+# The ms from a click on the radar to the frame that finished the view's
+# move to `xy`: the first frame whose view is there.
+MOVE_TIME = """async (xy) => {
+    const radar = window.kcgx.radar, frame = () => new Promise(requestAnimationFrame);
+    while (window.upAt === undefined) await frame();
+    for (let tries = 0; tries < 600; tries += 1) {
+        const v = radar.debug().shown;
+        if (v && v.panX === xy[0] && v.panY === xy[1]) return performance.now() - window.upAt;
+        await frame();
+    }
+    throw new Error("the view never got there");
+}"""
+
+
+@pytest.mark.parametrize("ease", ["QUICK", "SMOOTH"])
+def test_a_view_move_takes_its_settings_time(page, ease):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    set_prefs(page, view_ease=ease)
+    frames(page)
+    city = a_city(page)
+    page.evaluate(
+        """() => document.getElementById("radar").addEventListener(
+               "pointerup", () => { window.upAt = performance.now(); }, { once: true })"""
+    )
+    page.mouse.click(*on_screen(page, *city["point"]))
+    took = page.evaluate(MOVE_TIME, city["xy"])
+    assert EASE_MS[ease] - 20 <= took <= EASE_MS[ease] + 400
+
+
+def test_a_wheel_during_a_view_move_ends_it(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    set_prefs(page, view_ease="SMOOTH")
+    frames(page)
+    city = a_city(page)
+    page.mouse.click(*on_screen(page, *city["point"]))
+    frames(page, 3)
+    turn_wheel(page, -100)
+    stopped = view_of(page)
+    page.wait_for_timeout(800)
+    assert view_of(page) == stopped
+    assert (stopped["panX"], stopped["panY"]) != tuple(city["xy"])
+
+
+def test_the_home_ring_and_the_home_name_are_places_too(page):
+    """(State names are placed as the rest are; the test map has none.)"""
+    wait_for_traffic(page)
+    hold_traffic(page)
+    set_prefs(page, view_ease="OFF")
+    set_view(page, 40, 15, -10)
+    home = mark_of(page, "home")
+    assert home["xy"] == [0, 0]
+    page.mouse.click(*on_screen(page, *home["point"]))
+    frames(page, 1)
+    assert view_of(page) == {"nm": 40, "panX": 0, "panY": 0}
+    name = next(p for p in set_view(page, 40, 15, -10)["placed"] if p["key"] == "home")
+    page.mouse.click(*on_screen(page, name["x"] + name["w"] - 3, name["y"] + name["h"] / 2))
+    frames(page, 1)
+    assert view_of(page) == {"nm": 40, "panX": 0, "panY": 0}
+
+
+def test_a_click_on_nothing_leaves_the_view(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    nothing_to_hit(page)
+    set_prefs(page, view_ease="OFF")
+    before = view_of(page)
+    page.mouse.click(*on_screen(page, 200, 200))
+    frames(page)
+    assert view_of(page) == before
+
+
+# -- following -----------------------------------------------------------------
+
+MOVING = [plane("a1", -12, 8, gs=360, trk=90), plane("a2", 15, -10, gs=200, trk=180)]
+
+
+def test_focusing_on_the_radar_eases_to_the_follow_radius_on_it(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    assert radar_debug(page)["following"] is False
+    hit = hit_of(page, "a1")
+    record_views(page)
+    page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
+    wait_followed(page, "a1")
+    assert radar_debug(page)["following"] is True
+    assert any(10 < v["nm"] < 40 for v in page.evaluate("window.views")), "it eases there"
+
+
+def test_focusing_from_the_table_follows_at_the_set_radius(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    set_prefs(page, follow_nm=5)
+    click_row(page, "a2")
+    wait_followed(page, "a2", nm=5)
+
+
+def test_after_a_poll_and_two_seconds_it_is_still_at_the_centre(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    # The next poll has it half a mile on, and further than reckoning had it.
+    hold_traffic(page, plane("a1", -11, 8, gs=360, trk=90), MOVING[1])
+    page.wait_for_timeout(2000)
+    frames(page)
+    assert from_centre(page, "a1") <= 2 * page.evaluate("devicePixelRatio")
+    assert view_of(page)["nm"] == 10
+
+
+def test_a_drag_ends_following_and_keeps_the_focus(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    nothing_to_hit(page)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    pan(page, *on_screen(page, 200, 200))
+    assert radar_debug(page)["following"] is False
+    dragged = view_of(page)
+    page.wait_for_timeout(500)
+    frames(page)
+    assert view_of(page) == dragged, "the view stays where the drag left it"
+    assert page.locator('#tracks-body tr.focused[data-hex="a1"]').count() == 1
+
+
+def test_unfocusing_eases_back_to_the_view_before_the_focus(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    before = set_view(page, 25, 3, -4)["view"]
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    record_views(page)
+    click_row(page, "a1")
+    page.wait_for_selector("#tracks-body tr.focused", state="detached")
+    page.wait_for_function(
+        "v => JSON.stringify(window.kcgx.radar.debug().view) === JSON.stringify(v)", arg=before,
+    )
+    assert radar_debug(page)["following"] is False
+    assert any(10 < v["nm"] < 25 for v in page.evaluate("window.views")), "it eases back"
+
+
+def test_focusing_another_follows_it_and_unfocusing_still_goes_back_to_before_the_first(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    set_prefs(page, view_ease="OFF")
+    before = view_of(page)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    click_row(page, "a2")
+    wait_followed(page, "a2")
+    focus_set(page, None)
+    frames(page, 1)
+    assert view_of(page) == before
+
+
+def test_a_double_click_recentres_on_the_airport_and_ends_following(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    nothing_to_hit(page)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    page.mouse.dblclick(*on_screen(page, 200, 200))
+    assert view_of(page) == {"nm": 40, "panX": 0, "panY": 0}
+    assert radar_debug(page)["following"] is False
+    page.wait_for_timeout(500)
+    assert view_of(page) == {"nm": 40, "panX": 0, "panY": 0}
+    assert page.locator('#tracks-body tr.focused[data-hex="a1"]').count() == 1
+    # And, the view chosen since, unfocusing leaves it.
+    focus_set(page, None)
+    frames(page, 3)
+    assert view_of(page) == {"nm": 40, "panX": 0, "panY": 0}
+
+
+def test_the_wheel_while_following_zooms_about_the_aircraft(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    page.mouse.move(*on_screen(page, 200, 200))
+    turn_wheel(page, -200)
+    assert view_of(page)["nm"] < 10
+    assert radar_debug(page)["following"] is True
+    page.wait_for_timeout(300)
+    frames(page)
+    assert from_centre(page, "a1") <= 2 * page.evaluate("devicePixelRatio")
+
+
+# -- the wheel's rate (4d) -----------------------------------------------------
+
+
+def wheel_step(page, speed):
+    """How many times closer one wheel step at the centre takes the view."""
+    set_prefs(page, zoom_speed=speed)
+    set_view(page, 40)
+    page.mouse.move(*centre_of_the_radar(page))
+    turn_wheel(page, -100)
+    return 40 / view_of(page)["nm"]
+
+
+def test_zoom_speed_scales_the_wheels_rate(page):
+    wait_for_traffic(page)
+    hold_traffic(page)
+    nothing_to_hit(page)
+    at_100 = wheel_step(page, 100)
+    assert at_100 > 1.05
+    assert math.log(wheel_step(page, 200)) == pytest.approx(2 * math.log(at_100))
+    assert math.log(wheel_step(page, 25)) == pytest.approx(0.25 * math.log(at_100))
+
+
+# -- which aircraft a click is on, as the tags are drawn -------------------------
+
+# As the traffic's tags layer says it laid the tags (radar.tagOrder, the one
+# on top last), every frame from here on. On a branch without that layer the
+# radar has no tagOrder, and this gives it one.
+LAY_TAGS = """order => {
+    if (window.unlay) window.unlay();
+    window.unlay = window.kcgx.radar.hook((radar) => ({ post() {
+        if (!radar.tagOrder) radar.tagOrder = [];
+        radar.tagOrder.splice(0, radar.tagOrder.length, ...order);
+    } }));
+}"""
+
+
+def lay_tags(page, order):
+    page.evaluate(LAY_TAGS, order)
+    frames(page)
+
+
+def per_nm(page):
+    ring = radar_drawn(page)["rings"][0]
+    return ring["r"] / ring["nm"]
+
+
+def clicked(page, x, y):
+    """The aircraft a click at this canvas point focuses, focus then cleared."""
+    page.mouse.click(*on_screen(page, x, y))
+    frames(page, 1)
+    hex_ = page.evaluate("import('/static/js/focus.js').then(m => m.focus.hex)")
+    focus_set(page, None)
+    frames(page, 2)
+    return hex_
+
+
+def test_tags_are_tried_top_first_in_the_order_they_were_laid(page):
+    wait_for_traffic(page)
+    set_prefs(page, view_ease="OFF")
+    ratio = page.evaluate("devicePixelRatio")
+    k = per_nm(page)
+    # a2 12 px under a1: their tags overlap in a band 8 px high.
+    hold_traffic(page, plane("a1", -10, 5), plane("a2", -10, 5 - 12 * ratio / k))
+    one, two = hit_of(page, "a1"), hit_of(page, "a2")
+    x, y = one["x"] + 40 * ratio, one["y"] - 10 * ratio
+    for hit in (one, two):
+        tag = hit["tag"]
+        assert tag["x"] <= x <= tag["x"] + tag["w"] and tag["y"] <= y <= tag["y"] + tag["h"]
+        assert math.hypot(hit["x"] - x, hit["y"] - y) > 20 * ratio
+    lay_tags(page, ["a1", "a2"])
+    assert clicked(page, x, y) == "a2"
+    lay_tags(page, ["a2", "a1"])
+    assert clicked(page, x, y) == "a1"
+    lay_tags(page, [])  # none said: the frame's order
+    assert clicked(page, x, y) == "a1"
+
+
+@pytest.mark.parametrize(("fill", "expected"), [(100, "a1"), (0, "a2")])
+def test_a_filled_box_on_the_tags_layer_covers_the_chevron_under_it(page, fill, expected):
+    """Fully exercised once the traffic lays its tags over the aircraft
+    (Task 11): until then the test lays them, as that layer will say."""
+    wait_for_traffic(page)
+    set_prefs(page, view_ease="OFF", box_items=["AIRCRAFT"], box_pad=12, box_fill=fill)
+    ratio = page.evaluate("devicePixelRatio")
+    k = per_nm(page)
+    hold_traffic(page, plane("a1", -10, 5))
+    first = hit_of(page, "a1")
+    box = first["tag"]["box"]
+    x, y = box["x"] + box["w"] - 8 * ratio, box["y"] + box["h"] / 2
+    hold_traffic(page, plane("a1", -10, 5), plane("a2", -10 + (x - first["x"]) / k, 5 - (y - first["y"]) / k))
+    second = hit_of(page, "a2")
+    assert math.hypot(second["x"] - first["x"], second["y"] - first["y"]) > 30 * ratio
+    box = hit_of(page, "a1")["tag"]["box"]
+    assert box["x"] < second["x"] < box["x"] + box["w"] and box["y"] < second["y"] < box["y"] + box["h"]
+    lay_tags(page, ["a2", "a1"])
+    assert clicked(page, second["x"], second["y"]) == expected
+
+
+# -- the data box --------------------------------------------------------------
+
+# Each line of the data box, [name, value], and what the table's own column
+# functions say of the focused aircraft for the visible columns.
+INFO = """async () => {
+    const { COLUMN } = await import('/static/js/columns.js');
+    const { focus } = await import('/static/js/focus.js');
+    const { prefs, radar } = window.kcgx.store.state;
+    const ac = radar.ac.find(a => a.hex === focus.hex);
+    const box = document.getElementById("ac-info");
+    return {
+        shown: [...box.querySelectorAll("dt")].map(dt => [dt.textContent, dt.nextElementSibling.textContent]),
+        table: prefs.track_cols.map(name => [COLUMN[name].title, COLUMN[name].text(ac)]),
+    };
+}"""
+
+
+def info_box(page):
+    return page.locator("#ac-info")
+
+
+def info_place(page, hex_):
+    """The data box's page rectangle and the chevron's page point, read
+    together after a frame."""
+    frames(page, 1)
+    rect = box_of(page, "#ac-info")
+    hit = hit_of(page, hex_)
+    return rect, on_screen(page, hit["x"], hit["y"])
+
+
+def test_the_data_box_shows_the_tables_visible_columns_in_order(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    assert not info_box(page).is_visible()
+    click_row(page, "a1")
+    info_box(page).wait_for(state="visible")
+    lines = page.evaluate(INFO)
+    assert lines["shown"] == lines["table"]
+    assert [name for name, _ in lines["shown"]] == ["CALLSIGN", "TYPE", "ALT FT", "GS KT", "TRK", "DIST NM", "SQWK"]
+    assert ["CALLSIGN", "A1"] in lines["shown"]
+    # Each name and its value on one line.
+    tops = page.eval_on_selector_all("#ac-info > div", "ds => ds.map(d => [d.children[0].offsetTop, d.children[1].offsetTop])")
+    assert len(tops) == 7 and all(a == b for a, b in tops) and len({a for a, _ in tops}) == 7
+    set_prefs(page, track_cols=["ALT", "SQWK", "HEX"])  # a subset is kept in the schema's order
+    frames(page)
+    lines = page.evaluate(INFO)
+    assert lines["shown"] == lines["table"] == [["ALT FT", "12000"], ["SQWK", "4512"], ["HEX", "A1"]]
+
+
+def test_the_data_box_sits_left_of_the_chevron_and_follows_it(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    rect, (x, y) = info_place(page, "a1")
+    assert rect["x"] + rect["width"] == pytest.approx(x - REACH - GAP, abs=1)
+    assert rect["y"] + rect["height"] / 2 == pytest.approx(y, abs=1)
+    # Not followed, it still keeps beside the aircraft as it moves.
+    nothing_to_hit(page)
+    pan(page, *on_screen(page, 200, 200))
+    first, at = info_place(page, "a1")
+    page.wait_for_timeout(1000)
+    later, there = info_place(page, "a1")
+    assert there[0] - at[0] > 1, "the aircraft moved east"
+    for rect, (x, y) in ((first, at), (later, there)):
+        assert rect["x"] + rect["width"] == pytest.approx(x - REACH - GAP, abs=1)
+        assert rect["y"] + rect["height"] / 2 == pytest.approx(y, abs=1)
+
+
+def test_near_the_left_edge_the_data_box_is_right_of_the_chevron(page):
+    wait_for_traffic(page)
+    hold_traffic(page, plane("a1", -12, 8))
+    set_prefs(page, view_ease="OFF")
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    nothing_to_hit(page)
+    radar = box_of(page, "#radar")
+    rect, (x, y) = info_place(page, "a1")
+    # Drag the aircraft to 40 px from the radar's left edge.
+    page.mouse.move(x, y + 80)
+    page.mouse.down()
+    page.mouse.move(radar["x"] + 40, y + 80, steps=8)
+    page.mouse.up()
+    rect, (x, y) = info_place(page, "a1")
+    assert x == pytest.approx(radar["x"] + 40, abs=2)
+    assert rect["x"] == pytest.approx(x + REACH + GAP, abs=1)
+    assert rect["y"] > y, "under the aircraft's tag"
+
+
+def test_the_data_box_hides_with_its_setting_and_with_no_focus(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    click_row(page, "a1")
+    info_box(page).wait_for(state="visible")
+    set_prefs(page, info_box=False)
+    info_box(page).wait_for(state="hidden")
+    set_prefs(page, info_box=True)
+    info_box(page).wait_for(state="visible")
+    focus_set(page, None)
+    info_box(page).wait_for(state="hidden")
+
+
+def test_the_data_box_is_boxed_as_the_tags_are(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    click_row(page, "a1")
+    info_box(page).wait_for(state="visible")
+    style = "e => { const s = getComputedStyle(e); return [s.borderTopWidth, s.backgroundColor, s.paddingTop]; }"
+    assert page.eval_on_selector("#ac-info", style)[0] == "0px"
+    set_prefs(page, box_items=["AIRCRAFT"], box_fill=100, box_pad=6, box_width=2)
+    frames(page)
+    width, background, padding = page.eval_on_selector("#ac-info", style)
+    assert (width, padding) == ("2px", "6px")
+    assert background in ("rgb(0, 0, 0)", "rgba(0, 0, 0, 1)")
+    assert page.eval_on_selector("#ac-info", "e => getComputedStyle(e).pointerEvents") == "none"

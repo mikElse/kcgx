@@ -38,6 +38,7 @@ const DRAW_ON_MS = 2000;
 const LABEL_ALPHA = 0.4;
 const VOR = new Set(["VOR", "VOR-DME", "VORTAC", "TACAN"]);
 const SYMBOL_PX = 6; // a place's symbol reaches this far from its point
+const MARK_PX = 10; // and a click this near its point is on it
 // The label box setting (prefs.box_items) that covers each kind of place.
 const BOXED_AS = { navaid: "NAVAIDS", airport: "AIRPORTS", city: "CITIES", peak: "PEAKS" };
 
@@ -134,7 +135,12 @@ export function init(radar) {
   radar.drawOnFrom = 0;
   radar.hovered = null; // a placed label's key
   // A label is what `claim` gives: { x, y, w, h, boxed, box: {x, y, w, h} or null }.
-  radar.placed = []; // [{ key, ...label }]
+  // `point` is its place's own point on the screen, `xy` the same in nm:
+  // what a click on the label centres (phase G Task 12).
+  radar.placed = []; // [{ key, ...label, point: [x, y], xy: [x, y] }]
+  // Every symbol drawn, labelled or not, and the home ring: what a click
+  // within `reach` px of its point centres.
+  radar.marks = []; // [{ key, point: [x, y], xy: [x, y] in nm, reach }], as last drawn
   radar.rings = []; // [{ nm, r, bright, text, label: {...label, at: [x, baseline]} or null }], as last drawn
   radar.home = { x: 0, y: 0, r: 0 }; // the airport and its ring, as last drawn
   radar.symbols = {}; // kind -> how many are on screen, as last drawn
@@ -152,7 +158,7 @@ export function init(radar) {
     debug() {
       const { map } = radar;
       return {
-        placed: [...radar.placed], hovered: radar.hovered, mapFor: radar.mapFor, loaded: Boolean(map),
+        placed: [...radar.placed], marks: [...radar.marks], hovered: radar.hovered, mapFor: radar.mapFor, loaded: Boolean(map),
         rings: [...radar.rings], home: { ...radar.home }, symbols: { ...radar.symbols },
         layers: { ...radar.layers }, styles: JSON.parse(JSON.stringify(radar.styles)), blur_map: radar.blurMap,
       };
@@ -473,6 +479,7 @@ export function drawStatic(radar, now) {
   // The runways, then the home airport, so its name is reserved before
   // any place looks for room.
   radar.placed.length = 0;
+  radar.marks.length = 0;
   for (const kind of Object.keys(radar.symbols)) delete radar.symbols[kind];
   Object.assign(radar.home, { x: centre[0], y: centre[1], r: homeRing(s, ratio) });
   styles.RUNWAYS.drawn = map && styles.RUNWAYS.show ? drawRunways(radar, ctx, s, width, height, ratio, c, styles.RUNWAYS) : [];
@@ -563,11 +570,12 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
   const free = (r) => (
     !taken.some((t) => meets(r, t)) && !((r.boxed || numbersBoxed) && numbers.some((n) => meets(r, n)))
   );
-  // The label's place if there is room for it, which is then taken.
-  const place = (key, label) => {
+  // The label's place if there is room for it, which is then taken. `p`
+  // is its place's point on the screen and `xy` in nm.
+  const place = (key, label, p, xy) => {
     if (!free(label)) return null;
     taken.push(label);
-    placed.push({ key, ...label });
+    placed.push({ key, ...label, point: p, xy });
     return label;
   };
 
@@ -604,7 +612,8 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
       { x: p[0] - reach, y: p[1] - reach, w: 2 * reach, h: 2 * reach },
     );
     const key = `${item.kind}:${item.text}`;
-    const label = place(key, claim(text, ink, boxed(BOXED_AS[item.kind]), ratio, prefs));
+    radar.marks.push({ key, point: p, xy: item.xy, reach: MARK_PX * ratio });
+    const label = place(key, claim(text, ink, boxed(BOXED_AS[item.kind]), ratio, prefs), p, item.xy);
     places.push({ item, p, key, baseline, label });
   }
 
@@ -619,7 +628,7 @@ function drawPlaces(radar, ctx, s, width, height, ratio, c, prefs, styles) {
     const baseline = p[1] + 5 * ratio * stateEm;
     const ink = inked(text.x, baseline, w - trailing(6 * ratio * stateEm), statePx);
     const key = `state:${row[2]}`;
-    const label = place(key, claim(text, ink, boxed("STATES"), ratio, prefs));
+    const label = place(key, claim(text, ink, boxed("STATES"), ratio, prefs), p, xy);
     if (label) states.push({ name: row[2], key, x: text.x, baseline, label });
   }
 
@@ -703,7 +712,8 @@ function homeName(radar, ctx, centre, s, ratio, prefs) {
 function drawHome(radar, ctx, centre, ratio, c, prefs, name, style) {
   const { lines, step, ring, foot, x, last, top, label } = name;
   ctx.save();
-  radar.placed.push({ key: "home", ...label });
+  radar.placed.push({ key: "home", ...label, point: [...centre], xy: [0, 0] });
+  radar.marks.push({ key: "home", point: [...centre], xy: [0, 0], reach: ring });
   // Its box goes down before the ring and the leader, and hides neither;
   // a runway that runs out under the name, it does.
   if (label.box) paintBox(ctx, label.box, c.pink, ratio, prefs);
