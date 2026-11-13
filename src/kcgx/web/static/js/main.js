@@ -3,7 +3,8 @@
 
 import { createStore } from "./store.js";
 import { connect } from "./connection.js";
-import { bindTheme, forget } from "./theme.js";
+import { bindTheme, fontFamilies, forget, textGlow } from "./theme.js";
+import { setFont } from "./radar/draw.js";
 import { bindFrames } from "./frames.js";
 import { mountStack, mountVolume } from "./stack.js";
 import { mountStatus } from "./status.js";
@@ -24,9 +25,21 @@ function applyPrefs() {
   const { prefs } = store.state;
   const root = document.documentElement;
   root.dataset.palette = prefs.palette;
-  // Until phase G Task 4 reads the three glow numbers by layer: the phase F
-  // OFF, LOW and FULL, from the map's number, for theme.js and the stylesheet.
-  root.dataset.glow = prefs.glow_map === 0 ? "OFF" : prefs.glow_map <= 50 ? "LOW" : "FULL";
+  // The page's glow is the text layer's (glow_text); the canvases read
+  // their own layers from theme.js.
+  const glow = textGlow();
+  root.style.setProperty("--glow", glow.glow);
+  root.style.setProperty("--frame-glow", glow.frame);
+  root.style.setProperty("--lamp-glow", glow.lamp);
+  // The page's size and face: zoom scales it all, sheets too; the font size
+  // is the text's, not the titles' or the big figures'; the display font is
+  // the radar's as well, whose static layer the prefs redraw.
+  root.style.setProperty("--ui-zoom", String(prefs.ui_zoom));
+  root.style.setProperty("--font-px", `${prefs.font_px}px`);
+  const fonts = fontFamilies(prefs.font);
+  root.style.setProperty("--font-text", fonts.text);
+  root.style.setProperty("--font-display", fonts.display);
+  setFont(fonts.display);
   root.dataset.display = prefs.display;
   // The scanlines: the pitch is the setting, the dark line a third of it.
   root.style.setProperty("--scan-alpha", String(prefs.scan_opacity / 100));
@@ -141,6 +154,8 @@ function banner() {
   node.className = `banner ${kind}`.trim();
 }
 
+// A face that arrives after the static layer was drawn in the one before it.
+document.fonts.addEventListener("loadingdone", () => radar.redraw());
 store.subscribe((kind, detail) => {
   if (kind === "all" || kind === "prefs") { applyPrefs(); radar.redraw(); }
   if (kind === "all" || kind === "connection") banner();

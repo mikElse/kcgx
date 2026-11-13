@@ -6,7 +6,10 @@
 // under it: a still label's on the static layer before its text, a flight
 // tag's on the screen between the two layers.
 
-export const FONT = '"Share Tech Mono", monospace';
+// The display font, --font-display (prefs.font). main.js sets it with the
+// prefs, which mark the static layer to be drawn again.
+export let FONT = '"Share Tech Mono", monospace';
+export function setFont(family) { FONT = family; }
 export const CAP = 0.7; // the font's capitals and digits stand this much of its size above the baseline
 const SPACED = "letterSpacing" in CanvasRenderingContext2D.prototype;
 
