@@ -62,16 +62,18 @@ export function recentre(radar) {
 
 // -- pointing, panning, zooming, focusing --
 
-function local(canvas, event) {
-  const ratio = window.devicePixelRatio || 1;
-  const box = canvas.getBoundingClientRect();
+// The pointer in canvas pixels. The ratio is size()'s, which carries any
+// render scale, as every pointer and hit reckoning here does.
+function local(radar, event) {
+  const { ratio } = radar.size();
+  const box = radar.canvas.getBoundingClientRect();
   return [(event.clientX - box.left) * ratio, (event.clientY - box.top) * ratio];
 }
 
 // An aircraft is its chevron before it is anything else: one that lies
 // under another's tag or trail is still the one pointed at.
 function hitAircraft(radar, [x, y]) {
-  const ratio = window.devicePixelRatio || 1;
+  const { ratio } = radar.size();
   for (const hit of radar.hits) {
     if (Math.hypot(hit.x - x, hit.y - y) < 14 * ratio) return hit.hex;
   }
@@ -101,7 +103,7 @@ function bindPointer(radar) {
   const { canvas, view, pointer, hud } = radar;
 
   canvas.addEventListener("pointerdown", (event) => {
-    pointer.at = local(canvas, event);
+    pointer.at = local(radar, event);
     pointer.down = { at: pointer.at, panX: view.panX, panY: view.panY };
     pointer.before = pointer.moved;
     pointer.moved = false;
@@ -109,7 +111,7 @@ function bindPointer(radar) {
   });
 
   canvas.addEventListener("pointermove", (event) => {
-    const at = local(canvas, event);
+    const at = local(radar, event);
     pointer.at = at;
     if (pointer.down) {
       const { ratio, width, height } = radar.size();
@@ -132,7 +134,7 @@ function bindPointer(radar) {
   });
 
   canvas.addEventListener("pointerup", (event) => {
-    const at = local(canvas, event);
+    const at = local(radar, event);
     if (pointer.down && !pointer.moved) {
       const hex = hitAircraft(radar, at);
       if (hex) focus.toggle(hex);
@@ -148,7 +150,7 @@ function bindPointer(radar) {
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
     const { ratio, width, height } = radar.size();
-    const at = local(canvas, event);
+    const at = local(radar, event);
     const before = scale(radar, width, height, ratio);
     const factor = Math.exp(-event.deltaY * 0.0015);
     view.nm = Math.min(Math.max(VIEW_MAX_NM, radar.range()), Math.max(VIEW_MIN_NM, view.nm / factor));
@@ -168,7 +170,7 @@ function bindPointer(radar) {
     if (pointer.moved || pointer.before) return;
     recentre(radar);
     // The readout is for the view on screen, and the pointer has not moved.
-    if (hud.position) hud.position.textContent = positionText(radar, local(canvas, event));
+    if (hud.position) hud.position.textContent = positionText(radar, local(radar, event));
   });
 }
 

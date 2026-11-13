@@ -19,10 +19,15 @@
 // static layer is to be drawn again, the canvases `size()` keeps at the
 // screen's size, and what the last frame drew. Each of view.js, still.js
 // and moving.js then adds its own part in its `init(radar)`, which also
-// binds that module's listeners and may return `{ tick(now), debug() }`.
-// The inits run in that order, before the first frame; every frame starts
-// with each tick in the same order, and `debug()` is the core's and every
+// binds that module's listeners and may return `{ tick(now), post(now),
+// debug() }`, each optional. The inits run in that order, before the first
+// frame. Every frame is counted, then runs each tick in the same order, is
+// drawn, and ends with each post in that order (one that reads this frame's
+// `radar.now` or `shown` goes there). `debug()` is the core's and every
 // module's put together, a key from two of them being an error.
+//
+// Pointer and hit maths take their ratio of canvas pixels to CSS pixels
+// from `size()`, never from devicePixelRatio, so a render scale reaches them.
 //
 // The objects on `radar` (the view, the pointer, the lists of what was
 // drawn) are changed in place and never replaced, so a part may keep hold
@@ -75,7 +80,6 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   // -- the parts --
 
   const hooks = [initView(radar), initStill(radar), initMoving(radar)].filter(Boolean);
-  const ticks = hooks.filter((h) => h.tick);
 
   // -- the frame loop --
 
@@ -86,8 +90,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
 
   let lastHud = 0;
   function frame(now) {
-    for (const h of ticks) h.tick(now);
-    frames += 1;
+    frames += 1; // first: a tick that throws is still a frame, and a test waiting on one sees it
+    for (const h of hooks) if (h.tick) h.tick(now);
     const { ratio, width, height } = size();
     if (radar.staticDirty) drawStatic(radar, now);
     const c = colours();
@@ -121,6 +125,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     radar.shown = { ...radar.view, range: range() };
 
     if (now - lastHud > 500) { lastHud = now; drawHud(list); }
+    for (const h of hooks) if (h.post) h.post(now);
   }
   onFrame(frame);
 
@@ -146,6 +151,14 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   return {
     recentre() { recentre(radar); },
     redraw() { radar.staticDirty = true; },
+    // For tests: a part of the test's own, as if it were one of the modules.
+    // `init(radar)` runs now; its hooks run after the others'. Returns a
+    // function that takes them off again.
+    hook(init) {
+      const h = init(radar) || {};
+      hooks.push(h);
+      return () => { const at = hooks.indexOf(h); if (at >= 0) hooks.splice(at, 1); };
+    },
     // For tests: what is on screen, in screen pixels. `view` and the range
     // change with the event that changes them and `shown` with the next
     // frame, so the rest describes them once `shown` agrees with both.

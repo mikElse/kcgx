@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import weakref
 import zlib
 
 import pytest
@@ -38,6 +39,7 @@ __all__ = [
     "server",
     "browser",
     "page",
+    "page_errors",
     "other",
     "RADAR_DRAWN",
     "radar_drawn",
@@ -139,7 +141,7 @@ def browser(request):
 def page(browser, server):
     context = browser.new_context(viewport={"width": 1440, "height": 900})
     page = context.new_page()
-    errors = []
+    errors = _errors[page] = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.goto(server + "/")
@@ -152,6 +154,21 @@ def page(browser, server):
     yield page
     context.close()
     assert errors == [], errors
+
+
+_errors = weakref.WeakKeyDictionary()  # page -> what `page_errors` gives
+
+
+def page_errors(page, wait_for=None, timeout=3.0):
+    """The errors the page has reported so far, as the `page` fixture collects
+    them (one thrown and not caught, or one written to the console) and fails
+    the test on. A test that means to cause one checks it here and clears the
+    list. With `wait_for`, first waits until one of them contains it."""
+    errors = _errors[page]
+    deadline = time.monotonic() + timeout
+    while wait_for and not any(wait_for in e for e in errors) and time.monotonic() < deadline:
+        page.wait_for_timeout(50)
+    return errors
 
 
 @pytest.fixture
@@ -417,10 +434,14 @@ def plane(hex_, east=0.0, north=0.0, **over):
 # One frame of the radar's from now, not of the browser's: the frame rate cap
 # passes over browser frames that come too soon (headless WebKit's come 10 ms
 # apart). The radar's clock asks for each frame before a test does, so it has
-# drawn by the time the test looks.
+# drawn by the time the test looks. A radar that draws none for 2 s is broken,
+# and the wait says so rather than hang (page.evaluate has no timeout).
 RADAR_FRAME = """async () => {
-    const drawn = window.kcgx.radar.debug().frames;
-    while (window.kcgx.radar.debug().frames === drawn) await new Promise(requestAnimationFrame);
+    const drawn = window.kcgx.radar.debug().frames, since = performance.now();
+    while (window.kcgx.radar.debug().frames === drawn) {
+        if (performance.now() - since > 2000) throw new Error(`the radar drew no frame in 2 s (frames ${drawn})`);
+        await new Promise(requestAnimationFrame);
+    }
 }"""
 
 

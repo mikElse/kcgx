@@ -5,6 +5,7 @@ radar's debug() put together from its parts, and the tracks columns."""
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -90,11 +91,98 @@ MERGE = """(parts) => import('/static/js/radar/index.js').then((radar) => {
 def test_the_radar_s_debug_is_its_parts_and_two_may_not_give_one_key(page):
     assert page.evaluate(MERGE, [{"a": 1}, {"b": 2}]) == {"a": 1, "b": 2}
     assert page.evaluate(MERGE, [{"a": 1}, {"b": 2, "a": 3}]) == "threw: radar debug(): a is given twice"
+    # The core's keys and its parts': a lane adds keys of its own (the plan's
+    # cross-lane contracts), and these stay.
     keys = set(page.evaluate("Object.keys(window.kcgx.radar.debug())"))
-    assert keys == {
+    assert keys >= {
         "frames", "shown", "view", "placed", "hovered", "mapFor", "loaded", "rings", "home", "symbols",
         "layers", "hits",
     }
+
+
+def test_a_tick_that_throws_still_counts_as_a_frame_and_is_reported_once(page):
+    page.evaluate(
+        """() => { window.unhook = window.kcgx.radar.hook(() => ({
+                       tick() { throw new Error("a test tick threw"); } })); }"""
+    )
+    before = radar_debug(page)["frames"]
+    try:
+        frames(page, 5)  # gave up after 2 s, before the frame was counted first
+    finally:
+        page.evaluate("window.unhook()")
+    assert radar_debug(page)["frames"] >= before + 5
+    errors = page_errors(page, wait_for="a test tick threw")
+    assert sum("a test tick threw" in e for e in errors) == 1, errors
+    errors.clear()
+
+
+def test_waiting_for_a_radar_frame_gives_up_on_a_radar_that_draws_none(page):
+    page.evaluate(
+        """() => { const radar = window.kcgx.radar, debug = radar.debug, stuck = debug().frames;
+                   window.undo = () => { radar.debug = debug; };
+                   radar.debug = () => ({ ...debug(), frames: stuck }); }"""
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(Exception, match="the radar drew no frame in 2 s"):
+            frames(page)
+    finally:
+        page.evaluate("window.undo()")
+    assert time.monotonic() - started < 4
+
+
+# Two hooks of a test's own, a then b, for six frames: when a's tick and post
+# each ran, and the aircraft's positions as `radar.now` had them then.
+POST = """async () => {
+    const frame = RADAR_FRAME;
+    const order = [], seen = [];
+    const at = (radar) => JSON.stringify(radar.now.map((ac) => ac.now));
+    const off = ["a", "b"].map((name) => window.kcgx.radar.hook((radar) => ({
+        tick(now) { if (name === "a") seen.push({ when: "tick", now, at: at(radar) }); },
+        post(now) { order.push(name); if (name === "a") seen.push({ when: "post", now, at: at(radar) }); },
+    })));
+    try { for (let n = 0; n < 6; n += 1) await frame(); } finally { off.forEach((f) => f()); }
+    return { order, seen };
+}"""
+
+
+def test_a_post_hook_runs_after_the_frame_is_drawn_in_init_order(page):
+    hold_traffic(page, plane("abc001", east=5, gs=400, trk=90))
+    found = page.evaluate(POST.replace("RADAR_FRAME", RADAR_FRAME))
+    seen = found["seen"]
+    assert [s["when"] for s in seen] == ["tick", "post"] * (len(seen) // 2) and len(seen) >= 12, seen
+    assert found["order"] == ["a", "b"] * (len(seen) // 2)
+    for tick, post in zip(seen[::2], seen[1::2]):
+        assert post["now"] == tick["now"]
+        assert post["at"] != tick["at"] and post["at"] != "[]"  # the aircraft were moved and drawn between
+    for post, tick in zip(seen[1::2], seen[2::2]):
+        assert tick["at"] == post["at"]  # and not again until the next frame
+
+
+# Three callbacks on the page's frame clock for six radar frames: the second
+# throws every time, the third every other time after it has counted.
+CLOCK = """async () => {
+    const { onFrame } = await import("/static/js/frames.js");
+    const frame = RADAR_FRAME;
+    const ran = { first: 0, last: 0 };
+    const off = [
+        onFrame(() => { ran.first += 1; }),
+        onFrame(() => { throw new Error("one frame callback threw"); }),
+        onFrame(() => { ran.last += 1; if (ran.last % 2) throw new Error("another frame callback threw"); }),
+    ];
+    try { for (let n = 0; n < 6; n += 1) await frame(); } finally { off.forEach((f) => f()); }
+    return ran;
+}"""
+
+
+def test_a_frame_callback_that_throws_stops_no_other_and_is_reported_once(page):
+    ran = page.evaluate(CLOCK.replace("RADAR_FRAME", RADAR_FRAME))
+    assert ran["first"] == ran["last"] >= 6, ran
+    page_errors(page, wait_for="one frame callback threw")
+    errors = page_errors(page, wait_for="another frame callback threw")
+    assert sum("one frame callback threw" in e for e in errors) == 1, errors
+    assert sum("another frame callback threw" in e for e in errors) == 1, errors
+    errors.clear()
 
 
 COLUMNS = """() => import('/static/js/columns.js').then(({ COLUMNS, COLUMN }) => ({

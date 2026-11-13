@@ -49,13 +49,24 @@ function tick(now) {
   } else {
     last = now;
   }
-  // One view that throws does not stop the others, nor the clock; the error
-  // still reaches the page's error handlers.
+  // One view that throws does not stop the others, nor the clock. Its error
+  // is written to the console the first time, not every frame after.
   for (const fn of [...callbacks]) {
     try {
       fn(now);
     } catch (error) {
-      setTimeout(() => { throw error; });
+      report(error);
     }
   }
+}
+
+// Each error once: the same throw from the same place, frame after frame, is
+// one. The console is where the page tests look for errors (and fail on
+// them), so each is seen there.
+const reported = new Set();
+function report(error) {
+  const key = error instanceof Error ? `${error}\n${error.stack}` : String(error);
+  if (reported.has(key)) return;
+  reported.add(key);
+  console.error(error);
 }
