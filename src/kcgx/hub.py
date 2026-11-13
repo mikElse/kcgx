@@ -80,6 +80,18 @@ class Hub:
         self.clients: set[Client] = set()
         self.log: deque[dict] = deque(maxlen=LOG_SIZE)
         self._clock = clock
+        self._welcomed = False  # whether a page has been, since the server started
+
+    def welcome(self, client: Client, snapshot: dict) -> None:
+        """A page has connected: queue its snapshot, then let it join.
+
+        Nothing awaits in between, so the snapshot is always its first frame
+        and nothing broadcast is missed. Only the first page since the server
+        started is told `boot: true`, to play the boot animation (phase G
+        decision 1); a reload, another tab or a reconnect is told false."""
+        boot, self._welcomed = not self._welcomed, True
+        client.offer(encode({**snapshot, "boot": boot}))
+        self.add(client)
 
     def add(self, client: Client) -> None:
         self.clients.add(client)

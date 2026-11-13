@@ -88,9 +88,14 @@ def snapshot(
     prefs: dict | None = None,
     radar: dict | None = None,
     title_of: TitleOf | None = None,
+    boot: bool = False,
 ) -> dict:
     """Everything a page needs to draw from nothing: sent on connect and
-    after every airport change."""
+    after every airport change.
+
+    `boot` says the page may play the boot animation (phase G decision 1):
+    true only in the snapshot the hub sends the first page since the server
+    started (`Hub.welcome`), false in every other."""
     return {
         "t": "snapshot",
         "protocol": PROTOCOL,
@@ -104,6 +109,7 @@ def snapshot(
         "log": list(log),
         "prefs": dict(prefs) if prefs else defaults(),
         "radar": radar,
+        "boot": bool(boot),
     }
 
 

@@ -153,6 +153,16 @@ def test_the_first_frame_is_a_snapshot():
         assert [f["ident"] for f in frame["feeds"]] == ["kpdx3_twr", "kpdx3_gnd", "kpdx3_atis"]
 
 
+def test_only_the_first_page_since_the_server_started_is_told_to_boot():
+    """Phase G decision 1: the boot animation plays once per launch."""
+    asgi, _ = app()
+    with client(asgi) as http:
+        with http.websocket_connect(WS) as ws:
+            assert ready(ws)["boot"] is True
+        with http.websocket_connect(WS) as ws:
+            assert ready(ws)["boot"] is False
+
+
 def test_a_mute_from_one_page_reaches_another():
     asgi, _ = app()
     with client(asgi) as http, http.websocket_connect(WS) as a, http.websocket_connect(WS) as b:

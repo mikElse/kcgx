@@ -95,6 +95,14 @@ def test_a_snapshot_is_not_muted_unless_told():
     assert [f["title"] for f in frame["feeds"]] == [f["name"] for f in frame["feeds"]]
 
 
+def test_a_snapshot_says_boot_only_when_told():
+    """The hub tells the first page since the server started (kcgx.hub);
+    every other snapshot, after an airport change too, says no."""
+    kwargs = dict(airport=None, icao="KPDX", loading=False, sessions=two(), volume=1, max_streams=7, audio_ok=True, log=[])
+    assert snapshot(**kwargs)["boot"] is False
+    assert snapshot(**kwargs, boot=True)["boot"] is True
+
+
 def test_an_airport_view_from_the_dataset():
     view = airport_view(find("KPDX", load_airports()), "KPDX")
     assert view["icao"] == "KPDX"

@@ -13,6 +13,7 @@ import { mountLog } from "./log.js";
 import { mountRadar } from "./radar/index.js";
 import { mountTracks } from "./tracks.js";
 import { mountAirportSheet, mountConfigSheet, mountShutdownSheet } from "./sheets.js";
+import { mountBoot } from "./boot.js";
 
 const $ = (id) => document.getElementById(id);
 const store = createStore();
@@ -141,7 +142,7 @@ function fromLink() {
 }
 window.addEventListener("hashchange", fromLink);
 fromLink();
-window.kcgx = { radar, store, send }; // for the browser tests
+window.kcgx = { radar, store, send }; // for the browser tests (and boot, below)
 
 function banner() {
   const { state } = store;
@@ -165,4 +166,7 @@ store.subscribe((kind, detail) => {
   if (kind === "message" && detail.page) raised.show(detail.text);
 });
 banner();
+// The boot animation, last: its subscriber hears the first snapshot after
+// applyPrefs has set the palette and the fonts it draws with.
+window.kcgx.boot = mountBoot($("boot"), store);
 $("where-served").textContent = `LOCAL COCKPIT  ${location.host}`;

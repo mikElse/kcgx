@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-palette="WOPR" data-display="CRT" data-lamps="OFF" data-teletype="OFF">
+<html lang="en" data-palette="WOPR" data-display="CRT" data-lamps="OFF" data-teletype="OFF" data-booting>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,6 +9,9 @@
 </head>
 <body>
 <!-- G:boot -->
+<!-- The boot animation's cover (boot.js): over the whole window, outside the
+     UI zoom, with the page's scanlines and vignette over the scene. -->
+<div class="boot" id="boot" hidden aria-hidden="true"><canvas></canvas><div class="ovl"></div></div>
 <!-- The icons are our own line drawings: no icon font, no licence to carry.
      They are stroked in currentColor, so they take the palette. Each button
      says what it is in aria-label and title. -->
