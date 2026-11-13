@@ -720,3 +720,35 @@ def test_render_reads_the_channel_list_once_per_block():
     render(mixer)
     assert Probe.reads == 1
 
+
+
+# -- master mute -----------------------------------------------------------
+
+
+def test_the_master_mute_is_off_at_first():
+    assert Mixer().master_muted is False
+
+
+def test_the_master_mute_renders_silence_and_keeps_the_volume():
+    mixer = Mixer(volume=0.6)
+    channel = loud_channel(mixer)
+    mixer.master_muted = True
+    assert not render(mixer).any()
+    assert mixer.volume == 0.6
+    assert channel.level_dbfs > -96.0, "a muted mix still meters every feed"
+    mixer.master_muted = False
+    channel.buffer.write(frame())
+    assert render(mixer).any()
+
+
+def test_the_master_mute_does_not_allocate_in_the_callback():
+    mixer = Mixer()
+    mixer.master_muted = True
+    for _ in range(3):
+        channel = loud_channel(mixer)
+        channel._raw = channel._raw.view(_NoTemporaries)
+    out = out_buffer()
+    for _ in range(3):
+        for channel in mixer._channels:
+            channel.buffer.write(frame())
+        mixer.render(out)

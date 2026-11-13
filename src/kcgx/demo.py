@@ -16,7 +16,9 @@ import random
 import threading
 import time
 from collections.abc import Callable
+from functools import lru_cache
 
+from kcgx.airports import find, load_airports
 from kcgx.radar import distance_bearing
 from squelch.config import Config
 from squelch.feeds import Feed
@@ -30,7 +32,7 @@ POSITIONS = [
     ("del", "Clearance Delivery", 0.08),
     ("dep", "Departure", 0.18),
     ("twr_n", "Tower (North)", 0.12),
-    ("ctr", "Center", 0.10),
+    ("ctr", "{city} Center", 0.10),  # as LiveATC names some: "Seattle Center"
     ("gnd_ramp", "Ground (Ramp)", 0.04),
 ]
 
@@ -44,8 +46,17 @@ SLOT_SECONDS = 1.5
 SILENT_DBFS = -96.0
 
 
+@lru_cache(maxsize=None)
+def _city(icao: str) -> str:
+    airport = find(icao, load_airports())
+    return airport.city if airport else ""
+
+
 def _feeds(icao: str, positions) -> list[Feed]:
-    return [Feed(f"{icao.lower()}_{suffix}", f"{icao.upper()} {label}") for suffix, label, _ in positions]
+    return [
+        Feed(f"{icao.lower()}_{suffix}", " ".join(f"{icao.upper()} {label.format(city=_city(icao))}".split()))
+        for suffix, label, _ in positions
+    ]
 
 
 def listing(config: Config, *, warn: Callable[[str], None]) -> list[Feed]:

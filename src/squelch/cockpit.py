@@ -202,6 +202,33 @@ class Cockpit:
         self._reorder_now()
         return True
 
+    def select(self, ident: str) -> bool:
+        """Make `ident` the one audible feed, as a radio button does.
+
+        Any solo is cancelled: choosing what to hear is a new intent, as a
+        mute by hand is. Never over the stream limit, since one feed is
+        audible after. Returns False, and changes and says nothing, when
+        the feed is unknown or already the only one audible.
+        """
+        session = self.session(ident)
+        if session is None:
+            return False
+        audible = [s for s in self._sessions if not s.muted]
+        if audible == [session] and not self.solo.active:
+            return False
+        before = {id(s): (s.muted, s.soloed) for s in self._sessions}
+        self.solo.cancel()
+        for s in self._sessions:
+            s.muted = s is not session
+        self._mark_solo()
+        # Parks before it starts, so a parked feed takes the slot of another.
+        self.reconcile_streams()
+        for s in self._sessions:
+            if before[id(s)] != (s.muted, s.soloed):
+                self._emit(FEED, s)
+        self._reorder_now()
+        return True
+
     def toggle_ambient(self, ident: str) -> bool:
         session = self.session(ident)
         if session is None:

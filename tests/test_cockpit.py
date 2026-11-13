@@ -337,6 +337,63 @@ def test_soloing_a_parked_feed_connects_it():
     assert sum(s.connected for s in cockpit.sessions) == 3
 
 
+# -- select: one feed at a time (phase G decision 3) ------------------------
+
+
+def test_select_leaves_only_that_feed_audible():
+    cockpit, _, _ = make(4, audible=(0, 2))
+    assert cockpit.select("kpdx3_gnd") is True
+    assert {s.feed.ident: s.muted for s in cockpit.sessions} == {
+        "kpdx3_twr": True, "kpdx3_gnd": False, "kpdx_app_124350": True, "kpdx3_atis": True,
+    }
+
+
+def test_select_cancels_a_solo():
+    cockpit, _, _ = make(3, audible=(0,))
+    cockpit.toggle_solo("kpdx3_gnd")
+    cockpit.select("kpdx_app_124350")
+    assert cockpit.solo.active is False
+    assert not any(s.soloed for s in cockpit.sessions)
+    assert [s.feed.ident for s in cockpit.sessions if not s.muted] == ["kpdx_app_124350"]
+
+
+def test_selecting_a_parked_feed_starts_it_and_parks_another():
+    cockpit, _, _ = make(5, limit=3, connected=False)
+    cockpit.start()
+    target = next(s for s in cockpit.sessions if not s.connected)
+    cockpit.select(target.feed.ident)
+    assert target.connected and target.state == "live"
+    assert sum(s.connected for s in cockpit.sessions) == 3
+
+
+def test_select_announces_every_changed_feed_and_reorders_at_once():
+    cockpit, rec, _ = make(4, audible=(0, 1))
+    untouched = cockpit.session("kpdx3_atis")
+    rec.events.clear()
+    cockpit.select("kpdx_app_124350")
+    announced = {s.feed.ident for s in rec.of(FEED)}
+    assert announced == {"kpdx3_twr", "kpdx3_gnd", "kpdx_app_124350"}
+    assert untouched not in rec.of(FEED)
+    assert rec.of(ORDER), "a select must reorder without waiting to settle"
+    assert ident(cockpit, 0) == "kpdx_app_124350"
+    kinds = [k for k, _ in rec.events]
+    assert kinds.index(FEED) < kinds.index(ORDER)
+
+
+def test_selecting_the_audible_feed_changes_nothing_and_says_nothing():
+    cockpit, rec, _ = make(3, audible=(1,))
+    before = mutes(cockpit)
+    assert cockpit.select("kpdx3_gnd") is False
+    assert mutes(cockpit) == before
+    assert rec.events == []
+
+
+def test_selecting_an_unknown_feed_changes_nothing_and_says_nothing():
+    cockpit, rec, _ = make(3)
+    assert cockpit.select("nope") is False
+    assert rec.events == []
+
+
 def test_ambient_toggles_only_its_feed_and_leaves_mute_alone():
     cockpit, rec, _ = make(3, audible=(0,))
     before = mutes(cockpit)

@@ -403,6 +403,20 @@ label.field-row { flex-wrap: nowrap; }
 
 /* == G:AUDIO == */
 /* The frequencies pane's header: one feed at a time, master mute, volume (Task 6). */
+/* [mute] [volume slider] [NN%], where the counts were. */
+.field-row.freq-head { margin: 0; padding: var(--pad-y) var(--pad-x) 4px; flex-wrap: nowrap; gap: 10px; }
+.freq-mute { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 26px; min-width: 34px; padding: 0 6px; }
+.freq-mute svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* The speaker with its waves, or crossed out when muted. */
+.freq-mute .cross, .freq-mute[aria-pressed="true"] .waves { display: none; }
+.freq-mute[aria-pressed="true"] .cross { display: inline; }
+/* The expanded row's head reads as a compact row: name, chatter, state. */
+.feed.expanded .feed-head { justify-content: flex-start; }
+.feed.expanded .feed-name { flex: 1 1 auto; }
+.feed-name { letter-spacing: 0.04em; }
+.trace { height: 60px; }
 
 /* == G:TRACKS == */
 /* The table's columns, filters and sticky header; the pane's grip and collapse (Tasks 8, 9). */

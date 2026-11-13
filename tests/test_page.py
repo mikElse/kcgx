@@ -322,23 +322,6 @@ def test_the_airport_pane_has_no_title_and_its_search_icon_sits_bottom_right(pag
 # -- the feed stack ------------------------------------------------------------
 
 
-def test_clicking_a_compact_row_unmutes_it_and_m_mutes_it_again(page):
-    assert "ATIS" not in feed_names(page, "expanded")
-    page.click(".feed.compact:has-text('ATIS')")
-    page.wait_for_selector(".feed.expanded:has-text('ATIS')")
-    page.click(".feed.expanded:has-text('ATIS') button:text-is('M')")
-    page.wait_for_selector(".feed.compact:has-text('ATIS')")
-    assert "ATIS" not in feed_names(page, "expanded")
-
-
-def test_s_solos_and_lights(page):
-    solo = ".feed.expanded:has-text('Tower') button:text-is('S')"
-    page.click(solo)
-    page.wait_for_selector(f"{solo}[aria-pressed=true]")
-    page.click(solo)
-    page.wait_for_selector(f"{solo}[aria-pressed=false]")
-
-
 def test_the_trace_draws(page):
     page.wait_for_timeout(1500)
     lit = page.eval_on_selector(
@@ -381,17 +364,6 @@ def test_the_chatter_figures_are_small_and_do_not_shift_as_they_change(page):
     assert sizes["chatter-small"] < sizes["chatter-big"]
 
 
-def test_m_and_s_are_small_buttons(page):
-    boxes = page.eval_on_selector_all(
-        ".feed.expanded .feed-controls .btn",
-        "els => els.map(e => { const r = e.getBoundingClientRect(); return [e.textContent, r.width, r.height]; })",
-    )
-    assert {name for name, _, _ in boxes} == {"M", "S"}
-    for name, width, height in boxes:
-        assert height <= 26, f"{name} is {height} px high"
-        assert 20 <= width <= 32, f"{name} is {width} px wide"
-
-
 def around(top, sides, bottom=None):
     bottom = top if bottom is None else bottom
     return {"paddingTop": top, "paddingRight": sides, "paddingBottom": bottom, "paddingLeft": sides}
@@ -406,7 +378,7 @@ DENSITY = {
     ".page > .lamps": {"marginTop": 10, **around(6, 10)},
     ".screen-title": around(4, 10),
     ".status-body": {**around(10, 12, 8), "rowGap": 6},
-    ".freq-counts": around(6, 10, 4),
+    ".freq-head": around(6, 10, 4),
     ".stack": {**around(4, 8, 8), "rowGap": 4},
     ".feed.expanded": {**around(6, 8), "rowGap": 4},
     ".feed.compact": {**around(0, 8), "minHeight": 32, "height": 32},
@@ -526,10 +498,10 @@ def test_the_volume_slider_is_in_the_frequencies_pane_and_reaches_the_server(pag
     page.fill("#volume", "40")
     assert page.text_content("#volume-value") == "40%"
     page.dispatch_event("#volume", "input")
-    page.wait_for_function("document.getElementById('freq-counts').textContent.includes('VOL 40%')")
+    page.wait_for_function("window.kcgx.store.state.volume === 0.4")
     page.fill("#volume", "100")
     page.dispatch_event("#volume", "input")
-    page.wait_for_function("document.getElementById('freq-counts').textContent.includes('VOL 100%')")
+    page.wait_for_function("window.kcgx.store.state.volume === 1")
 
 
 # -- the config sheet ------------------------------------------------------------
@@ -2355,10 +2327,12 @@ def test_a_link_with_a_query_that_cannot_be_decoded_still_opens_the_search(brows
     page.close()
 
 
-def test_the_volume_label_takes_only_its_own_width(page):
-    """The frequencies pane's VOLUME row is not a config row: its label is
-    as wide as its text, so the slider has the rest of the pane."""
+def test_the_volume_slider_takes_the_header_but_the_mute_and_readout(page):
+    """The frequencies pane's header is [mute] [volume] [NN%] (phase G Task
+    6), with no label: the slider has the width the other two leave."""
     page.set_viewport_size({"width": 1440, "height": 900})
-    label = box_of(page, ".freq-volume > span:first-child")
-    natural = page.eval_on_selector(".freq-volume > span:first-child", "e => { const r = document.createRange(); r.selectNodeContents(e); return r.getBoundingClientRect().width; }")
-    assert label["width"] <= natural + 1, (label, natural)
+    head, mute, slider, value = (box_of(page, s) for s in ("#freq-head", "#master-mute", "#volume", "#volume-value"))
+    assert mute["right"] <= slider["left"] and slider["right"] <= value["left"]
+    pad = page.eval_on_selector("#freq-head", "e => parseFloat(getComputedStyle(e).paddingLeft) * 2")
+    rest = head["width"] - pad - mute["width"] - value["width"]
+    assert slider["width"] >= rest - 2 * 12, (head, mute, slider, value)
