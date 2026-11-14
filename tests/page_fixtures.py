@@ -34,6 +34,7 @@ from test_page_prefs import TAB_OF
 playwright_api = pytest.importorskip("playwright.sync_api")
 
 __all__ = [
+    "PAGE_PREFS",
     "SIZES",
     "_free_port",
     "server",
@@ -84,6 +85,14 @@ __all__ = [
 
 
 # -- the server, the browsers, the tabs ---------------------------------------
+
+
+# The settings each page test starts from: the defaults, less the sort's
+# shading (sort_floor 100) and the parked fade (ground_mode SHOW), which
+# would dim aircraft in every test that reads the radar's pixels once
+# tracks.js ranks each frame and the server says how long each aircraft has
+# stood still. A test of either sets it itself (phase G Task 13).
+PAGE_PREFS = {**DEFAULTS, "sort_floor": 100, "ground_mode": "SHOW"}
 
 
 SIZES = [(1440, 900), (1280, 720), (1100, 760), (820, 1000), (390, 844)]
@@ -146,8 +155,9 @@ def page(browser, server):
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.goto(server + "/")
     page.wait_for_selector(".feed.expanded")
-    # The server outlives each test, and so do its prefs: start from the defaults.
-    set_prefs(page, **DEFAULTS)
+    # The server outlives each test, and so do its prefs: start from the
+    # defaults, unshaded (PAGE_PREFS).
+    set_prefs(page, **PAGE_PREFS)
     # A range left by the test before is a view left by it: the radar is
     # drawn at this test's on its next frame, and until then says the old.
     radar_drawn(page)
@@ -476,8 +486,9 @@ def hold_traffic(page, *aircraft):
         list(aircraft),
     )
     page.wait_for_function(
-        "hexes => window.kcgx.radar.debug().hits.map(h => h.hex).join() === hexes.join()",
-        arg=[a["hex"] for a in aircraft],
+        # The hits are topmost first, not in the frame's order.
+        "hexes => window.kcgx.radar.debug().hits.map(h => h.hex).sort().join() === hexes.join()",
+        arg=sorted(a["hex"] for a in aircraft),
     )
     return tags(page)
 

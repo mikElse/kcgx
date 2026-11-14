@@ -537,25 +537,26 @@ def test_limits_and_the_stream_count_are_gone(page):
 
 
 def test_the_sheet_opens_showing_the_defaults(page):
+    # The defaults as the page fixture leaves them: PAGE_PREFS, unshaded.
     page.click("#open-config")
     page.wait_for_selector("#config-sheet[open]")
     for key in DROPDOWNS:
-        assert page.input_value(f"#config-sheet select[data-pref={key}]") == DEFAULTS[key], key
+        assert page.input_value(f"#config-sheet select[data-pref={key}]") == PAGE_PREFS[key], key
     for key in SEGMENTED:
-        assert pressed(page, key) == [DEFAULTS[key]], key
+        assert pressed(page, key) == [PAGE_PREFS[key]], key
     for key in FLAGS:
         assert page.eval_on_selector_all(
             f"#config-sheet [data-pref={key}] button", "bs => bs.map(b => b.textContent)"
         ) == ["OFF", "ON"], key
-        assert pressed(page, key) == ["ON" if DEFAULTS[key] else "OFF"], key
+        assert pressed(page, key) == ["ON" if PAGE_PREFS[key] else "OFF"], key
     for key, spec in SUBSETS.items():
         assert page.eval_on_selector_all(
             f"#config-sheet [data-pref={key}] button", "bs => bs.map(b => b.textContent)"
         ) == list(spec.names), key
-        assert pressed(page, key) == DEFAULTS[key], key
+        assert pressed(page, key) == PAGE_PREFS[key], key
     for key in NUMBERS:
-        assert page.input_value(f"#config-sheet input[data-pref={key}]") == str(DEFAULTS[key]), key
-        assert readout(page, key) == READOUTS[key].format(DEFAULTS[key]), key
+        assert page.input_value(f"#config-sheet input[data-pref={key}]") == str(PAGE_PREFS[key]), key
+        assert readout(page, key) == READOUTS[key].format(PAGE_PREFS[key]), key
     # every control is one a person can reach and work, on its own tab
     for tab, keys in TABS.items():
         config_tab(page, tab=tab)
@@ -623,7 +624,7 @@ def test_a_slider_is_drawn_by_the_page_and_its_track_shows_on_black(page, palett
 def test_each_number_slider_reaches_a_second_tab(page, other):
     for key, spec in NUMBERS.items():
         config_tab(page, key)
-        value = spec.low if spec.default == spec.high else spec.high
+        value = spec.low if PAGE_PREFS[key] == spec.high else spec.high
         slider = f"#config-sheet input[data-pref={key}]"
         page.fill(slider, str(value))  # sets it and fires `input`, as a drag does
         assert readout(page, key) == READOUTS[key].format(value), f"{key}: the readout waited for the server"
@@ -769,7 +770,7 @@ def test_a_choice_segment_group_has_one_pressed_button(page, other):
             assert pressed(page, key) == [name] and pressed(other, key) == [name]
             if key in ON_HTML:
                 assert other.get_attribute("html", f"data-{key}") == name
-        set_prefs(page, **{key: DEFAULTS[key]})
+        set_prefs(page, **{key: PAGE_PREFS[key]})
 
 
 @pytest.mark.parametrize("key", sorted(DROPDOWNS))
@@ -1766,8 +1767,9 @@ def test_the_demos_own_traffic_is_tagged_with_callsign_and_altitude(page):
     page.wait_for_function(
         """() => { const ac = window.kcgx.store.state.radar.ac;
                    const hits = window.kcgx.radar.debug().hits;
-                   return ac.length >= 5 && hits.length === ac.length && hits.every((hit, i) =>
-                       hit.tag && hit.tag.lines.join("|") === `${ac[i].label} ${ac[i].alt ?? ""}`.trim()); }"""
+                   const by = new Map(ac.map((a) => [a.hex, a]));  // the hits are topmost first
+                   return ac.length >= 5 && hits.length === ac.length && hits.every((hit) => by.has(hit.hex) &&
+                       hit.tag && hit.tag.lines.join("|") === `${by.get(hit.hex).label} ${by.get(hit.hex).alt ?? ""}`.trim()); }"""
     )
 
 
@@ -1812,7 +1814,7 @@ def test_with_no_fields_there_is_no_tag_and_the_chevron_still_focuses(page):
     page.mouse.click(*where)  # where its tag was
     frames(page)
     assert page.locator("#tracks-body tr.focused").count() == 0
-    hit = radar_debug(page)["hits"][0]
+    hit = next(h for h in radar_debug(page)["hits"] if h["hex"] == "a1")
     page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
 
@@ -1862,8 +1864,8 @@ def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(
     x, y = tag["x"] + tag["w"] - 6 * ratio, tag["y"] + 6 * ratio
     east, north = -10 + (x - first["x"]) / per_nm, 5 - (y - first["y"]) / per_nm
     hold_traffic(page, plane("a1", -10, 5), plane("a2", east, north))
-    first, second = radar_debug(page)["hits"]
-    assert (first["hex"], second["hex"]) == ("a1", "a2")
+    hits = {h["hex"]: h for h in radar_debug(page)["hits"]}
+    first, second = hits["a1"], hits["a2"]
     assert nearest(first["tag"], second["x"], second["y"]) == 0, "the test wants a chevron under the other's tag"
     assert nearest({"x": first["x"], "y": first["y"], "w": 0, "h": 0}, second["x"], second["y"]) > 30 * ratio
     set_prefs(page, view_ease="OFF")
@@ -1989,14 +1991,15 @@ def test_the_traffics_glow_is_a_shadow_for_each_colour_not_one_for_each_stroke(p
         hold_traffic(page, *fleet(count, step, a1={"sq": "7700"}))
     picture(page)  # the map has drawn itself on; from here only the traffic is drawn each frame
     shadowed = page.evaluate(SHADOWED)
-    assert shadowed == {"drawImage": 2}, f"cyan and the alarm colour, a shadow each: {shadowed}"
-    hit = radar_debug(page)["hits"][2]
+    # And as many again for the tags' letters, which glow the same way.
+    assert shadowed == {"drawImage": 4}, f"cyan and the alarm colour, a shadow each, twice: {shadowed}"
+    hit = next(h for h in radar_debug(page)["hits"] if h["hex"] == "a2")
     page.mouse.click(*on_screen(page, hit["x"], hit["y"]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
     page.mouse.move(2, 2)  # off the radar: a label brightening under the pointer redraws the map
     picture(page)
     shadowed = page.evaluate(SHADOWED)
-    assert shadowed == {"drawImage": 3}, f"cyan, the alarm colour and pink, a shadow each: {shadowed}"
+    assert shadowed == {"drawImage": 6}, f"cyan, the alarm colour and pink, a shadow each, twice: {shadowed}"
     set_prefs(page, **glow(0))
     picture(page)
     assert page.evaluate(SHADOWED) == {}
@@ -2321,7 +2324,7 @@ def bounds(page, selector):
 
 
 def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
-    spans = ["#radar-range", "#radar-poll", "#radar-tracks"]
+    spans = ["#radar-poll", "#radar-range", "#radar-tracks"]
     assert page.eval_on_selector_all(".hud span", "els => els.map(e => '#' + e.id)") == spans
     set_prefs(page, **glow(0), display="OFF")  # nothing over the readouts but themselves
     for span in spans:
@@ -2342,7 +2345,7 @@ def test_hud_among_the_boxes_puts_the_radars_readouts_in_boxes(page):
     # and those read at the edge the box is held by, which stays where it is
     # when the words change (the track count is held by its right).
     page.wait_for_function(
-        """() => document.getElementById("radar-poll").textContent.startsWith("POLLED")
+        """() => document.getElementById("radar-poll").textContent.endsWith(" AGO")
                  && document.getElementById("radar-tracks").textContent !== "0 TRACKS" """
     )
     boxes = []

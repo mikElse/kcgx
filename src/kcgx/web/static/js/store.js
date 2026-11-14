@@ -4,7 +4,7 @@
 
 export const HISTORY = 160; // level samples kept per feed: 6.4 s at 25 Hz
 export const SILENT = -96;
-export const TRAIL = 12; // positions kept per aircraft: three minutes of polls
+export const TRAIL_SECS = 600; // how long an aircraft's positions are kept: tail_secs's most
 
 export function createStore() {
   const state = {
@@ -104,7 +104,11 @@ export function createStore() {
     // it; a view reads a missing `still` as moving.
     radar: null,
     radarAt: 0, // performance.now() when it arrived
-    trails: new Map(), // hex -> [{ lat, lon }], oldest first
+    // hex -> [[lat, lon, t]], oldest first: each reported position and when
+    // it was reported, t in seconds of performance.now(), for TRAIL_SECS
+    // whatever prefs.tail_secs says (the radar draws those within it), so a
+    // longer tail shows its history at once.
+    trails: new Map(),
     // Where each aircraft stands in the tracks table's sort, filters not
     // applied: hex -> 0 for the first to 1 for the last (phase G, Task 8).
     // tracks.js fills it and emits "rank"; the radar shades by it (Task 13).
@@ -126,19 +130,22 @@ export function createStore() {
     return h;
   }
 
-  // Each poll adds the aircraft's reported position to its trail; the page
-  // dead reckons from there between polls. An aircraft that drops out of
-  // the frame loses its trail.
+  // Each poll adds the aircraft's reported position to its trail, timed
+  // `age` seconds before the poll arrived (when it was reported, not when it
+  // was heard); the page dead reckons from there between polls. A position
+  // older than TRAIL_SECS goes; an aircraft that drops out of the frame
+  // loses its trail.
   function takeRadar(frame) {
     state.radar = frame;
     state.radarAt = performance.now();
+    const now = state.radarAt / 1000;
     const seen = new Set();
     for (const ac of frame.ac) {
       seen.add(ac.hex);
       const trail = state.trails.get(ac.hex) || [];
       const last = trail[trail.length - 1];
-      if (!last || last.lat !== ac.lat || last.lon !== ac.lon) trail.push({ lat: ac.lat, lon: ac.lon });
-      if (trail.length > TRAIL) trail.shift();
+      if (!last || last[0] !== ac.lat || last[1] !== ac.lon) trail.push([ac.lat, ac.lon, now - (ac.age || 0)]);
+      while (trail.length && trail[0][2] < now - TRAIL_SECS) trail.shift();
       state.trails.set(ac.hex, trail);
     }
     for (const hex of [...state.trails.keys()]) if (!seen.has(hex)) state.trails.delete(hex);
