@@ -448,29 +448,44 @@ def test_at_half_a_mile_the_rings_are_a_tenth_apart(page):
     assert shown[:2] == ["0.1", "0.2"]
 
 
-# Along the airway that runs longest across the screen, sampled a pixel
-# apart: how many samples the static layer has lit, and how many there are.
+# Along the airway segment that runs longest across the screen, sampled a
+# pixel apart: how many samples the static layer has lit, and how many there
+# are. A segment another airway runs along is left out: two airways on one
+# route dash out of step and fill each other's gaps, and where their dashes
+# fall depends on the canvas's size to the half pixel.
 ALONG_AN_AIRWAY = """() => {
     const r = window.still, c = r.still, { width, height } = c;
     const ratio = r.size().ratio;
     const s = (Math.min(width, height) / 2 - 18 * ratio) / r.view.nm;
     const at = ([x, y]) => [width / 2 + (x - r.view.panX) * s, height / 2 + (y - r.view.panY) * s];
     const alpha = c.getContext("2d").getImageData(0, 0, width, height).data;
-    let best = [0, 0];
+    const segments = [];
     for (const line of r.map.lines.airway) {
-        for (let i = 2; i < line.length; i += 2) {
-            const a = at([line[i - 2], line[i - 1]]), b = at([line[i], line[i + 1]]);
-            const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
-            let lit = 0, total = 0;
-            for (let d = 0; d < length; d += 1) {
-                const x = Math.round(a[0] + ((b[0] - a[0]) * d) / length);
-                const y = Math.round(a[1] + ((b[1] - a[1]) * d) / length);
-                if (x < 10 || y < 10 || x > width - 10 || y > height - 10) continue;
-                total += 1;
-                if (alpha[(y * width + x) * 4 + 3]) lit += 1;
-            }
-            if (total > best[1]) best = [lit, total];
+        for (let i = 2; i < line.length; i += 2) segments.push([at([line[i - 2], line[i - 1]]), at([line[i], line[i + 1]])]);
+    }
+    // Whether segment q runs along p: near parallel, and p's middle is
+    // within 2 px of q.
+    const along = ([a, b], [p, q]) => {
+        const ux = b[0] - a[0], uy = b[1] - a[1], vx = q[0] - p[0], vy = q[1] - p[1];
+        const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+        if (!lu || !lv || Math.abs(ux * vy - uy * vx) / (lu * lv) > 0.05) return false;
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        const t = Math.min(1, Math.max(0, ((mx - p[0]) * vx + (my - p[1]) * vy) / (lv * lv)));
+        return Math.hypot(mx - (p[0] + t * vx), my - (p[1] + t * vy)) < 2;
+    };
+    let best = [0, 0];
+    for (const segment of segments) {
+        const [a, b] = segment;
+        const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        let lit = 0, total = 0;
+        for (let d = 0; d < length; d += 1) {
+            const x = Math.round(a[0] + ((b[0] - a[0]) * d) / length);
+            const y = Math.round(a[1] + ((b[1] - a[1]) * d) / length);
+            if (x < 10 || y < 10 || x > width - 10 || y > height - 10) continue;
+            total += 1;
+            if (alpha[(y * width + x) * 4 + 3]) lit += 1;
         }
+        if (total > best[1] && !segments.some((other) => other !== segment && along(segment, other))) best = [lit, total];
     }
     return best;
 }"""
