@@ -214,10 +214,9 @@ function zoomed(radar, nm) {
 // where it leaves the rectangle unzoomed (WebKit). The zoom is the product
 // of each ancestor's own, read from the stylesheet rather than from
 // currentCSSZoom, which not every engine has.
-export function cssZoomFix(canvas) {
+export function cssZoomFix(canvas, box = canvas.getBoundingClientRect()) {
   let zoom = 1;
   for (let el = canvas; el; el = el.parentElement) zoom *= Number.parseFloat(getComputedStyle(el).zoom) || 1;
-  const box = canvas.getBoundingClientRect();
   return canvas.offsetWidth && box.width ? zoom / (box.width / canvas.offsetWidth) : 1;
 }
 
@@ -227,7 +226,7 @@ function local(radar, event) {
   radar.size();
   const { canvas } = radar;
   const box = canvas.getBoundingClientRect();
-  const k = cssZoomFix(canvas);
+  const k = cssZoomFix(canvas, box);
   return [
     (event.clientX / k - box.left) * (canvas.width / box.width),
     (event.clientY / k - box.top) * (canvas.height / box.height),

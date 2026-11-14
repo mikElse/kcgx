@@ -45,7 +45,7 @@ import { onFrame } from "../frames.js";
 import { FONT } from "./draw.js";
 import { drawStatic, init as initStill } from "./still.js";
 import { drawMoving, init as initMoving } from "./moving.js";
-import { init as initView, recentre, scale } from "./view.js";
+import { cssZoomFix, init as initView, recentre, scale } from "./view.js";
 
 const FADE_FRAMES = 30; // frames the persistence fade's interval is the mean of
 const FADE_MAX_MS = 100; // the longest interval it counts; after a longer one the layer is cleared
@@ -71,18 +71,6 @@ export function pollWords(polled, age) {
   return polled.error ? `${polled.error}, PICTURE ${seconds(age)} OLD` : `${seconds(age)} AGO`;
 }
 
-// How far a canvas's getBoundingClientRect falls short of its size on the
-// screen under a CSS zoom: the zoom over it (each ancestor's own, from the
-// stylesheet, multiplied), over how much of that the rectangle carries
-// already. 1 in Chromium, which zooms the rectangle; the zoom in WebKit,
-// which does not. This is MAP's cssZoomFix (radar/view.js on g/map), written
-// again here until MAP is merged; then size() should import that one.
-function zoomFix(canvas, box) {
-  let zoom = 1;
-  for (let el = canvas; el; el = el.parentElement) zoom *= Number.parseFloat(getComputedStyle(el).zoom) || 1;
-  return canvas.offsetWidth && box.width ? zoom / (box.width / canvas.offsetWidth) : 1;
-}
-
 export function mountRadar(canvas, store, { hud = {} } = {}) {
   const range = () => store.state.prefs.range_nm;
   const radar = {
@@ -100,7 +88,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   // The canvases' backing stores: the canvas's size on the screen, times
   // the ratio. Under a CSS zoom on .page, Chromium's getBoundingClientRect
   // gives the size as zoomed and WebKit's as not, so the rectangle is put
-  // right by `zoomFix` (the zoom over the canvas, over how much of it the
+  // right by `cssZoomFix` (the zoom over the canvas, over how much of it the
   // rectangle already has). With the render scale under 1, the screen
   // scales the canvas up stepped (image-rendering: pixelated).
   //
@@ -114,7 +102,7 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
     const scaled = renderScale();
     let ratio = (window.devicePixelRatio || 1) * scaled;
     const box = canvas.getBoundingClientRect();
-    const k = zoomFix(canvas, box);
+    const k = cssZoomFix(canvas, box);
     const area = box.width * k * box.height * k;
     if (area * ratio * ratio > MAX_PIXELS) {
       ratio = Math.sqrt(MAX_PIXELS / area);
