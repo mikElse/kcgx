@@ -544,6 +544,19 @@ label.field-row { flex-wrap: nowrap; }
 
 /* == G:MAP == */
 /* The aircraft's data box, #ac-info, over the radar (Task 12). */
+/* radar/info.js places it beside the focused aircraft, a translate from the
+   radar's top left. Always boxed, by the label box settings, never less than
+   80 % black, a 1 px edge at half the text's colour and 4 px of padding. */
+.ac-info { position: absolute; left: 0; top: 0; margin: 0; pointer-events: none; color: var(--pink);
+  white-space: nowrap; text-shadow: var(--glow); display: flex; flex-direction: column; gap: 1px;
+  background: rgb(0 0 0 / max(var(--box-fill), 80%));
+  border: max(var(--box-width), 1px) solid color-mix(in srgb, currentColor max(var(--box-border), 50%), transparent);
+  padding: max(var(--box-pad), 4px); }
+.ac-info[hidden] { display: none; }
+.ac-info > div { display: flex; gap: 0.5em; }
+.ac-info dt { opacity: 0.7; }
+.ac-info dt::after { content: ":"; }
+.ac-info dd { margin: 0; }
 
 /* == G:TRAFFIC == */
 /* The tags canvas and the HUD's two readouts (Task 11). */

@@ -76,6 +76,11 @@ def test_only_the_home_airports_runways_are_sent():
     assert geodata.clip(45.59, -122.60, icao="KXYZ", data=data)["runways"] == []
 
 
+def test_a_runways_width_goes_to_the_page_as_it_is_and_a_runway_without_one_too():
+    data = world(runways={"KPDX": [[1, 2, 3, 4, 150], [5, 6, 7, 8]]})
+    assert geodata.clip(45.59, -122.60, icao="KPDX", data=data)["runways"] == [[1, 2, 3, 4, 150], [5, 6, 7, 8]]
+
+
 def test_across_the_antimeridian_features_are_shifted_into_the_airports_frame():
     """A field at 179.9 E must see land at 179.9 W beside it, not a world away:
     the piece comes back a whole turn east so the page draws it adjacent."""

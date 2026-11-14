@@ -162,3 +162,29 @@ def test_a_gap_or_an_unknown_point_breaks_the_airway(build, tmp_path):
 
 def test_without_the_csv_zip_there_are_no_airways(build, tmp_path):
     assert build.airways(tmp_path) is None
+
+
+def test_runways_keep_their_width_in_feet_when_ourairports_gives_one(build, tmp_path):
+    """A fifth element, width_ft, where the row has one; four where it is
+    blank or not a number, and the page draws those at 150 ft. Closed
+    runways, runways without both ends and airports not in the dataset are
+    left out as before."""
+    path = tmp_path / "runways.csv"
+    path.write_text(
+        "id,airport_ref,airport_ident,length_ft,width_ft,surface,lighted,closed,le_ident,"
+        "le_latitude_deg,le_longitude_deg,he_ident,he_latitude_deg,he_longitude_deg\n"
+        "1,1,KPDX,11000,150,ASP,1,0,10L,45.5938,-122.6062,28R,45.5888,-122.5636\n"
+        "2,1,KPDX,9825,,ASP,1,0,10R,45.5824,-122.5969,28L,45.5782,-122.5606\n"
+        "3,1,KPDX,6000,100.0,ASP,1,0,03,45.5813,-122.6066,21,45.5958,-122.5982\n"
+        "4,1,KPDX,3000,75,ASP,1,1,08,45.5,-122.6,26,45.5,-122.5\n"
+        "5,1,KPDX,3000,wide,ASP,1,0,09,45.51,-122.6,27,45.51,-122.5\n"
+        "6,2,KTTD,5000,100,ASP,1,0,07,45.5,-122.4,,,\n"
+        "7,3,KSEA,11900,150,CON,1,0,16L,47.46,-122.30,34R,47.43,-122.30\n"
+    )
+    out = build.runways(path, {"KPDX", "KTTD"})
+    assert out == {"KPDX": sorted([
+        [-1226062, 455938, -1225636, 455888, 150],
+        [-1225969, 455824, -1225606, 455782],
+        [-1226066, 455813, -1225982, 455958, 100],
+        [-1226000, 455100, -1225000, 455100],
+    ])}

@@ -1320,16 +1320,42 @@ def test_place_names_brighten_under_the_pointer(page):
     page.wait_for_function("window.kcgx.radar.debug().hovered === null")
 
 
-def test_the_wheel_zooms_in_to_2_5_nm_and_no_further(page):
+def test_the_wheel_zooms_in_to_a_quarter_mile_and_no_further(page):
     wait_for_traffic(page)
     page.mouse.move(*centre_of_the_radar(page))
     turn_wheel(page, -600)
-    assert 2.5 < radar_debug(page)["view"]["nm"] < 40
+    assert 0.25 < radar_debug(page)["view"]["nm"] < 40
     for _ in range(5):
         turn_wheel(page, -600)
-    assert radar_debug(page)["view"]["nm"] == 2.5
+    assert radar_debug(page)["view"]["nm"] == 0.25
     turn_wheel(page, -600)
-    assert radar_debug(page)["view"]["nm"] == 2.5
+    assert radar_debug(page)["view"]["nm"] == 0.25
+
+
+# The last frame drew the view the radar holds, and drew the static layer
+# anew for it, not as an older drawing moved: one predicate, so that the
+# frame waited for is both settled and current.
+SETTLED = """() => { const d = window.kcgx.radar.debug();
+    const now = { ...d.view, range: window.kcgx.store.state.prefs.range_nm };
+    return !d.still_moved && JSON.stringify(d.shown) === JSON.stringify(now); }"""
+
+
+def settled(page):
+    """Until the static layer is drawn for the view it holds (phase G Task
+    5a): while the view moves it is the last drawing moved, and drawn anew
+    120 ms after the wheel stops."""
+    page.wait_for_function(SETTLED)
+    return page.evaluate("window.kcgx.radar.debug()")
+
+
+def view_at_2_5_nm(page):
+    """The view the wheel closed in to before it went on to a quarter mile
+    (phase G Task 10): 2.5 nm about the airport."""
+    page.evaluate(
+        """() => window.kcgx.radar.hook((radar) => {
+            Object.assign(radar.view, { nm: 2.5, panX: 0, panY: 0 }); radar.staticDirty = true; })()"""
+    )
+    frames(page)
 
 
 @pytest.mark.parametrize("range_nm, widest", [(40, 160), (250, 250)])
@@ -1362,7 +1388,7 @@ def test_the_range_ring_fits_the_shorter_side_less_18_px(page):
 
 def test_at_2_5_nm_the_rings_are_half_a_mile_apart_and_numbered_plainly(page):
     wait_for_traffic(page)
-    zoom_right_in(page)
+    view_at_2_5_nm(page)
     debug = radar_drawn(page)
     assert debug["view"]["nm"] == 2.5
     width, height = canvas_size(page)
@@ -1470,12 +1496,17 @@ def nearest(box, x, y):
 
 
 def test_ring_numbers_sit_on_the_north_east_diagonal_just_outside_their_rings(page):
+    """All but the 10's: it would lie on the airport's name, and a ring
+    number gives way to the name, bare or boxed (the owner's decision in
+    phase G's Task 10 review)."""
     wait_for_traffic(page)
     debug = radar_drawn(page)
     ratio = page.evaluate("devicePixelRatio")
     home = debug["home"]
-    assert [ring["text"] for ring in debug["rings"] if ring["label"]] == ["10", "20", "30", "40"]
+    assert [ring["text"] for ring in debug["rings"] if ring["label"]] == ["20", "30", "40"]
     for ring in debug["rings"]:
+        if not ring["label"]:
+            continue
         d = ring["r"] * 0.5**0.5
         label = ring["label"]
         assert label["x"] == pytest.approx(home["x"] + d + 4 * ratio)
@@ -1483,10 +1514,13 @@ def test_ring_numbers_sit_on_the_north_east_diagonal_just_outside_their_rings(pa
         assert label["w"] > 0 and label["h"] == 12 * ratio
 
 
-@pytest.mark.parametrize("range_nm, dim, unnumbered", [(210, [50, 100, 150, 200], [200]), (120, [50, 100], [])])
+@pytest.mark.parametrize(
+    "range_nm, dim, unnumbered", [(210, [50, 100, 150, 200], [50, 200]), (120, [50, 100], [50])],
+)
 def test_a_ring_number_that_would_touch_the_ranges_is_left_off(page, range_nm, dim, unnumbered):
     """Ten miles past a multiple of a 50 nm step, the last dim ring is a few
-    pixels inside the range's: its number gives way, the ring stays."""
+    pixels inside the range's: its number gives way, the ring stays. (The
+    50's gives way to the airport's name.)"""
     wait_for_traffic(page)
     set_prefs(page, range_nm=range_nm)
     debug = radar_drawn(page)
@@ -1532,17 +1566,18 @@ def test_ring_numbers_follow_the_rings_when_the_airport_is_off_the_screen(page, 
 
 
 def test_a_ring_number_that_would_sit_on_the_home_ring_is_left_off(page):
-    """At the closest view the half mile ring is inside the home ring, and
-    its number would land on it."""
+    """At 2.5 nm the half mile ring is inside the home ring, and its number
+    would land on it."""
     wait_for_traffic(page)
-    zoom_right_in(page)
+    view_at_2_5_nm(page)
     debug = radar_drawn(page)
     ratio = page.evaluate("devicePixelRatio")
     home = debug["home"]
     by_nm = {ring["nm"]: ring for ring in debug["rings"]}
     assert by_nm[0.5]["r"] < home["r"], "the test wants a ring inside the home ring"
     assert by_nm[0.5]["label"] is None
-    assert [nm for nm in (1, 1.5, 2, 2.5) if by_nm[nm]["label"]] == [1, 1.5, 2, 2.5]
+    # (the 1's is left off for the airport's name)
+    assert [nm for nm in (1, 1.5, 2, 2.5) if by_nm[nm]["label"]] == [1.5, 2, 2.5]
     for ring in debug["rings"]:
         if ring["label"]:
             assert nearest(ring["label"], home["x"], home["y"]) >= home["r"] + 4 * ratio, ring
@@ -1568,13 +1603,13 @@ def test_the_home_ring_is_2_5_nm_held_between_24_and_64_px(page):
     assert radar_drawn(page)["home"]["r"] == 24 * ratio
     page.mouse.move(*centre_of_the_radar(page))
     turn_wheel(page, -600)
-    debug = radar_drawn(page)
+    debug = settled(page)
     true_size = 2.5 * fit(page) / debug["view"]["nm"]
     assert 24 * ratio < true_size < 64 * ratio, "the test wants a view where 2.5 nm is between the limits"
     assert debug["home"]["r"] == pytest.approx(true_size)
     zoom_right_in(page)
     # and the airport's name is still beside the ring, not out at 2.5 nm
-    debug = radar_drawn(page)
+    debug = settled(page)
     assert debug["home"]["r"] == 64 * ratio
     name = next(p for p in debug["placed"] if p["key"] == "home")
     assert 0 < name["x"] - debug["home"]["x"] <= 64 * ratio
@@ -1585,10 +1620,10 @@ def test_small_airports_show_from_a_27_nm_view(page):
     wait_for_traffic(page)
     page.mouse.move(*centre_of_the_radar(page))
     turn_wheel(page, -250)
-    wide = radar_drawn(page)
+    wide = settled(page)
     assert 27 < wide["view"]["nm"] < 28
     turn_wheel(page, -20)
-    close = radar_drawn(page)
+    close = settled(page)
     assert 26 < close["view"]["nm"] <= 27
     # A closer view shows less ground, so more airports on it are new ones.
     assert close["symbols"]["airport"] > wide["symbols"]["airport"]
@@ -1790,20 +1825,31 @@ def test_a_click_on_either_line_of_a_tag_focuses_its_aircraft(page):
     assert two["y"] == pytest.approx(one["y"] - 18 * ratio)
     assert (two["x"], two["y"] + two["h"]) == pytest.approx((one["x"], one["y"] + one["h"]))
     assert two["w"] > one["w"]
-    for y in (two["y"] + 3, two["y"] + two["h"] - 3):  # far right, well clear of the chevron
-        page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
-        page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
-        page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
-        page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
+    # Focusing follows the aircraft, which moves the view (Task 12): the
+    # tag is read again where each click finds it.
+    set_prefs(page, view_ease="OFF")
+    for top in (True, False):  # far right, well clear of the chevron
+        for focused in ("tr.focused[data-hex=\"a1\"]", None):
+            frames(page)
+            two = tags(page)["a1"]
+            y = two["y"] + 3 if top else two["y"] + two["h"] - 3
+            page.mouse.click(*on_screen(page, two["x"] + two["w"] - 3, y))
+            if focused:
+                page.wait_for_selector(f"#tracks-body {focused}")
+            else:
+                page.wait_for_function("document.querySelectorAll('#tracks-body tr.focused').length === 0")
 
 
-@pytest.mark.parametrize("items", [[], ["AIRCRAFT"]])
-def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(page, items):
-    """A tag's rectangle, and all the more its box at the widest padding, can
-    lie over another aircraft's chevron. The chevron is the aircraft."""
+@pytest.mark.parametrize(
+    "box", [{"box_items": []}, {"box_items": ["AIRCRAFT"], "box_fill": 0}], ids=["unboxed", "unfilled"]
+)
+def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(page, box):
+    """An unboxed tag, or a box with no fill, lets the chevron under it win.
+    (A filled box covers it: test_page_map.py's
+    test_a_filled_box_on_the_tags_layer_covers_the_chevron_under_it.)"""
     wait_for_traffic(page)
     ratio = page.evaluate("devicePixelRatio")
-    ring = draw(page, box_items=items, box_pad=12)["rings"][0]
+    ring = draw(page, box_pad=12, **box)["rings"][0]
     per_nm = ring["r"] / ring["nm"]
     tag = hold_traffic(page, plane("a1", -10, 5))["a1"]
     first = radar_debug(page)["hits"][0]
@@ -1815,9 +1861,13 @@ def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(
     assert (first["hex"], second["hex"]) == ("a1", "a2")
     assert nearest(first["tag"], second["x"], second["y"]) == 0, "the test wants a chevron under the other's tag"
     assert nearest({"x": first["x"], "y": first["y"], "w": 0, "h": 0}, second["x"], second["y"]) > 30 * ratio
+    set_prefs(page, view_ease="OFF")
     page.mouse.click(*on_screen(page, second["x"], second["y"]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
-    # The rest of the tag is still its own aircraft's.
+    # The rest of the tag is still its own aircraft's, where following a2
+    # (Task 12) has moved it.
+    frames(page)
+    first = radar_debug(page)["hits"][0]
     page.mouse.click(*on_screen(page, first["tag"]["x"] + first["tag"]["w"] / 2, first["tag"]["y"] + first["tag"]["h"] / 2))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
 
@@ -1874,6 +1924,9 @@ def test_a_tags_box_is_the_padding_and_the_border_about_the_text(page):
 def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
     wait_for_traffic(page)
     set_prefs(page, **glow(0), display="OFF", box_items=["AIRCRAFT"], box_fill=100, box_border=100, box_pad=12)
+    # Focusing follows the aircraft (Task 12): wide enough to keep both on
+    # the screen, and at once.
+    set_prefs(page, follow_nm=50, view_ease="OFF")
     drawn = hold_traffic(page, plane("a1", -12, 12), plane("a2", 12, -12))
     edges = {hex_: edge_middles(tag["box"]) for hex_, tag in drawn.items()}
     cyan = (*css_colour(page, "--cyan"), 255)
@@ -1882,6 +1935,7 @@ def test_a_tags_box_dims_with_its_aircraft_and_a_click_on_it_focuses(page):
     page.mouse.click(*on_screen(page, *inside_corners(drawn["a1"]["box"])[1]))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
     frames(page)
+    edges = {hex_: edge_middles(tag["box"]) for hex_, tag in tags(page).items()}
     pink = (*css_colour(page, "--pink"), 255)
     focused, dimmed = canvas_pixels(page, edges["a1"][0], edges["a2"][0])
     assert focused == pink
@@ -2064,18 +2118,19 @@ def test_a_box_on_the_still_layer_blacks_out_the_ring_it_lies_across(page):
 
 
 @pytest.mark.parametrize("items", [["HOME"], ["RINGS"], ["HOME", "RINGS"]])
-def test_a_ring_number_on_the_airports_name_is_left_off_once_either_is_boxed(page, items):
-    """Bare, the airport's name is written across the ring number nearest
-    it: light on light, and both read. A box under either would hide the
-    other, so the number, placed after the name, is the one to give way."""
+def test_a_ring_number_on_the_airports_name_is_left_off_bare_or_boxed(page, items):
+    """The number, placed after the name, is the one to give way: boxed, as
+    a box under either would hide the other, and bare too (phase F let the
+    two cross; the owner's decision in phase G's Task 10 review)."""
     wait_for_traffic(page)
     hold_traffic(page)
     plain = draw(page, **glow(0), display="OFF")
     assert plain["placed"][0]["key"] == "home"
     bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
-    assert [text for text, label in bare.items() if overlap(label, plain["placed"][0])] == ["10"]
+    assert [text for text, label in bare.items() if not label] == ["10"]
+    assert not [text for text, label in bare.items() if label and overlap(label, plain["placed"][0])]
     picture(page)
-    lit = {text: canvas_block(page, label) for text, label in bare.items()}
+    lit = {text: canvas_block(page, label) for text, label in bare.items() if label}
     assert all(ink(block) > 10 for block in lit.values())
 
     debug = draw(page, box_items=items, box_fill=100, box_border=100)
@@ -2111,23 +2166,29 @@ def test_a_ring_number_takes_its_other_place_when_a_boxed_name_has_its_first(pag
     page.wait_for_function("window.kcgx.radar.debug().hovered === null")
     plain = radar_drawn(page)
     home = plain["home"]
-    bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
-    assert overlap(bare["10"], plain["placed"][0]) and bare["10"]["y"] < home["y"]
-
-    debug = draw(page, box_items=["HOME"], box_fill=100, box_border=100)
-    name = debug["placed"][0]
-    numbers = {ring["text"]: ring["label"] for ring in debug["rings"]}
-    assert all(numbers.values()), numbers
-    assert not [text for text, label in numbers.items() if overlap(label, name)]
-    # South east of the airport now, towards the middle, and still beside its ring.
-    ten = numbers["10"]
     ratio = page.evaluate("devicePixelRatio")
-    ring = next(ring for ring in debug["rings"] if ring["text"] == "10")
-    assert ten["x"] > home["x"] and ten["y"] > home["y"]
-    assert ring["r"] <= nearest(ten, home["x"], home["y"]) <= ring["r"] + 8 * ratio
-    picture(page)
-    assert ink(canvas_block(page, ten)) > 10
-    assert all(label == bare[text] for text, label in numbers.items() if text != "10")
+    # Its first place, on the north east diagonal, is on the airport's name:
+    # bare too, the number takes its other (the owner's decision in phase
+    # G's Task 10 review; phase F let the two cross).
+    ring = next(ring for ring in plain["rings"] if ring["text"] == "10")
+    d = ring["r"] * 0.5**0.5
+    bare = {ring["text"]: ring["label"] for ring in plain["rings"]}
+    w, h = bare["10"]["w"], bare["10"]["h"]
+    first = {"x": home["x"] + d + 4 * ratio, "y": home["y"] - d - 4 * ratio - h, "w": w, "h": h}
+    assert overlap(first, plain["placed"][0]), "the test wants the first place on the name"
+
+    for debug in (plain, draw(page, box_items=["HOME"], box_fill=100, box_border=100)):
+        name = debug["placed"][0]
+        numbers = {ring["text"]: ring["label"] for ring in debug["rings"]}
+        assert all(numbers.values()), numbers
+        assert not [text for text, label in numbers.items() if overlap(label, name)]
+        # South east of the airport, towards the middle, and still beside its ring.
+        ten = numbers["10"]
+        assert ten["x"] > home["x"] and ten["y"] > home["y"]
+        assert ring["r"] <= nearest(ten, home["x"], home["y"]) <= ring["r"] + 8 * ratio
+        picture(page)
+        assert ink(canvas_block(page, ten)) > 10
+        assert numbers == bare
 
 
 @pytest.mark.parametrize("range_nm", [120, 250])
@@ -2139,14 +2200,15 @@ def test_a_boxed_place_keeps_off_a_bare_ring_number(page, range_nm):
     hold_traffic(page)
     places = ["AIRPORTS", "NAVAIDS", "CITIES", "PEAKS"]
     plain = draw(page, **glow(0), display="OFF", range_nm=range_nm)
-    numbers = [ring["label"] for ring in plain["rings"]]
-    assert all(numbers)
+    # (one, the 50's, is left off for the airport's name)
+    numbers = [ring["label"] for ring in plain["rings"] if ring["label"]]
+    assert len(numbers) >= 2
     across = {p["key"] for p in plain["placed"][1:] for n in numbers if overlap(p, n)}
     assert across, "the test wants a place's name on a ring number"
     # First with boxes that cannot be seen: the places as they will be, the
     # numbers as nothing but themselves and the map.
     unseen = draw(page, box_items=places, box_fill=0, box_border=0)
-    assert [ring["label"] for ring in unseen["rings"]] == numbers
+    assert [ring["label"] for ring in unseen["rings"] if ring["label"]] == numbers
     placed = unseen["placed"][1:]
     assert len(placed) >= 10 and all(p["boxed"] for p in placed)
     assert not [(p["key"], n) for p in placed for n in numbers if overlap(p, n)]
@@ -2217,6 +2279,7 @@ def test_no_two_boxes_overlap_even_at_the_widest_padding(page, view):
     if view == "close":
         page.mouse.move(*centre_of_the_radar(page))
         turn_wheel(page, -900)  # small airports too
+        settled(page)
     plain = draw(page, box_items=[])["placed"]
     debug = draw(page, box_items=ITEMS, box_pad=12, box_width=5)
     placed = debug["placed"]
