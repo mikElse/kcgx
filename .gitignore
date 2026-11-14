@@ -22,3 +22,16 @@ war_games_examples/
 # KCGX.app when it is built in the repo (macos/build.sh build/KCGX.app);
 # setup builds it into ~/Applications.
 /build/
+
+# macOS and tool caches
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+
+# Design working files (the config panel and cockpit drawings); not shipped.
+/Vector Cockpit Drawing/
+
+# Internal build notes: specs, plans and the ambience plan. Kept on disk,
+# out of the published repo.
+/docs/
+/AMBIENCE-PLAN.md

@@ -1,0 +1,27 @@
+# The browserless part of the suite, on macOS and Linux. The page's own
+# tests (Playwright, Chromium and WebKit) skip here without the browser
+# group; run them locally with `uv run --group browser pytest`.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libportaudio2
+      - name: System packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - run: uv sync --group dev
+      - run: uv run pytest -q

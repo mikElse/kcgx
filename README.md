@@ -239,8 +239,7 @@ launcher only knows that `open` took the link, not that the window then
 showed the cockpit. `rm -rf ~/Applications/KCGX.app` puts everything back
 in the browser for good. When this was written the app had been built,
 signed and tested through its links, and nobody had yet watched the window
-do what this section says; the checks still owed are listed under "Built"
-in [the plan](docs/superpowers/plans/2026-11-12-cockpit-tweaks.md#built).
+do what this section says.
 
 **The server runs in the background** and outlives the terminal you started
 it from: close the window or the tab and the audio keeps playing; run
@@ -923,8 +922,7 @@ measurement and fails if the capacity goes back under a burst.
 - Nothing in the round of 2026-11-13 (the boot, one feed at a time, the
   tracks table's new parts, the radar's new behaviour) has yet been
   looked at by a person against real feeds and real traffic, or in
-  KCGX.app; the checks owed are under "Built" in [its
-  plan](docs/superpowers/plans/2026-11-13-cockpit-tweaks-g.md#built).
+  KCGX.app.
 - The window is macOS only, and KCGX.app has the generic icon.
 - All feeds share one output device.
 - Ranking is by level, not speech detection: a feed with a noisy carrier
@@ -965,16 +963,16 @@ with `--check`, what each of some forty links would show, and with
 `--answers`, whether what is on a port says it is kcgx. Nothing in the
 suite opens a window: what the window does once it is open has no test.
 Nothing in it starts the real cockpit either: every server is the demo.
-Specs and plans for everything here are in [`docs/`](docs/README.md).
+GitHub Actions runs the browserless part of the suite on macOS and Linux
+for every push and pull request (`.github/workflows/tests.yml`).
 
 ## History
 
 The cockpit began in a terminal: `squelch`, a Textual audio player in a
 48-column pane, beside [`adsb-tui`](https://github.com/j4v3l/ADS-B_TUI) for
 the radar and a status pane, arranged by a tmux script. It moved to the
-browser in five phases in October 2026 (the plans are in
-[`docs/`](docs/README.md)); the last one removed tmux, adsb-tui and the
-terminal UI. A sixth, on 2026-11-12, tightened the page, moved every
+browser in five phases in October 2026; the last one removed tmux,
+adsb-tui and the terminal UI. A sixth, on 2026-11-12, tightened the page, moved every
 setting into CONFIG, took the radar's range to 250 nm and its zoom to
 2.5, and gave the cockpit a window of its own on macOS. A seventh, on
 2026-11-13, added the boot animation, CONFIG in four tabs with some forty
@@ -1000,3 +998,16 @@ and CPU-bound inference running for the life of the session. It is tagged
 git show squelch-with-transcription:src/squelch/asr.py
 ```
 
+## License
+
+kcgx is released under the [MIT License](LICENSE). What it bundles or
+draws on keeps its own terms:
+
+- **Fonts** in `src/kcgx/web/static/fonts/` are under the SIL Open Font
+  License; each family's licence sits beside it (`OFL-*.txt`).
+- **The map** (`src/kcgx/data/geo.json.gz`) and **the airport list**
+  (`src/kcgx/data/airports.csv`) are built from public domain sources:
+  Natural Earth, OurAirports and the FAA.
+- **Audio feeds** are LiveATC.net's: kcgx plays them locally and never
+  records or redistributes them, and LiveATC.net's own terms of use apply.
+  **Traffic** comes from [adsb.lol](https://adsb.lol/), under its own terms.

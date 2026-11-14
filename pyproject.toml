@@ -3,8 +3,10 @@ name = "squelch"
 version = "0.1.0"
 description = "KCGX: live ATC audio and traffic around an airport, in your browser"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-    { name = "Mike Else", email = "melse@jellyvision.com" }
+    { name = "Mike Else", email = "mikelse@gmail.com" }
 ]
 requires-python = ">=3.14"
 dependencies = [
@@ -14,6 +16,9 @@ dependencies = [
     "uvicorn>=0.54.0,<0.55",
     "websockets>=17.2,<18",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mikElse/kcgx"
 
 [project.scripts]
 kcgx = "kcgx.launcher:main"
