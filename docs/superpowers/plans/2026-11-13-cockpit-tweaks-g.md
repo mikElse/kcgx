@@ -854,8 +854,8 @@ names drop), `tests/test_radar.py`, `tests/test_demo.py`
 
 ### Task 15: By hand, and the docs
 
-- [ ] `uv run --group browser pytest`, green in both engines.
-- [ ] `kcgx --demo` at 1440 by 900 and 1100 by 760, WOPR and AMBER: walk the
+- [x] `uv run --group browser pytest`, green in both engines.
+- [x] `kcgx --demo` at 1440 by 900 and 1100 by 760, WOPR and AMBER: walk the
   [Coverage](#coverage) table line by line. Compare the boot to the
   `.dc.html` played in a browser (it fetches its runtime from unpkg; that is
   the reviewer's machine, not the app).
@@ -864,8 +864,8 @@ names drop), `tests/test_radar.py`, `tests/test_demo.py`
   KPDX for parked fading, follow at 10 nm, 0.25 nm on the runways; the boot in
   KCGX.app; UI zoom in KCGX.app (WKWebView's own zoom is separate and not
   used).
-- [ ] README, spec, a Built section here, a row in `docs/README.md`.
-- [ ] Commit `docs: phase G built`.
+- [x] README, spec, a Built section here, a row in `docs/README.md`.
+- [x] Commit `docs: phase G built`.
 
 ---
 
@@ -1057,3 +1057,213 @@ before TRAFFIC's tag tests run against the real one.
 - Remembered filters.
 - Per-item box styles, decluttering tags at 250 nm (phase F's list).
 - The boot animation's own motion blur and four-ghost burn-in.
+
+---
+
+## Built
+
+Built on 2026-11-13, on `feat/web-cockpit`, from `448c5f2` (this plan) to
+`d4434c0` and the docs commit that carries this section: 66 files,
+about 14,000 lines added. Phase 0 ran serially in the integration
+worktree. The six lanes then ran in their own worktrees, each task as an
+implementer agent, a fresh reviewer and a fix agent. The main session
+merged each lane `--no-ff` and ran the whole suite after each merge.
+
+**Read this first.** As in phase F, no agent started the real server,
+contacted LiveATC or adsb.lol, opened an audio device or opened
+KCGX.app. **Nothing in phase G has been seen by a person at a screen,
+heard, or run against real feeds or real traffic.** Everything below was
+tested or measured in headless Chromium and WebKit, or read from
+screenshots a script took of the demo. What that leaves is under
+[Owed](#owed).
+
+### What was done
+
+| Part | Commits | What |
+|---|---|---|
+| Plan | `448c5f2`, `1d19509`, `dbaca09`, `1862219`, `2bb883b` | This plan; the worktree split; seams added after P0.4a's and P0.4b's reviews. |
+| P0.1, Task 1 | `75d9a01`, `c6080ef` | The `Table` kind and `merge`, which updates a table cell by cell; every new setting; the old `glow` read as `glow_map`, `glow_traffic` and `glow_text`. |
+| P0.2, Task 2 | `96be53c`, `c7de72a` | CONFIG fills the window, in four tabs. Every setting has its control. The map's styles are a grid. The airport picker is fixed and centred. |
+| P0.3 | `ba7e2b8` | `radar.js` split into `radar/` (index, still, moving, view, draw) with no change in behaviour; the pixel difference was under 0.1 %. |
+| P0.4a | `438bfea`, `c657f06` | Each radar module owns its state through `init(radar)`; one frame clock (`frames.js`, capped by `fps_max`). |
+| P0.4b | `f4e3914`, `2bc8561` | `columns.js`; `state.rank`; `tests/page_fixtures.py`; one CSS section and one HTML anchor per lane. |
+| AUDIO: Task 6 | `7c92a8b`, `4f2bbaf` | One feed at a time; a master mute and volume; titles without the airport; chatter left of the glyph; the waveform twice as tall. |
+| CHROME: Task 3 | `b653874`, `030f98a` | UI zoom, font, font size and clock formats. |
+| TRACKS: Tasks 7–9, 4b | `333903d` … `5733677` | Every field adsb.lol gives, and `still`; `poll_secs`; columns, filters and a sort that ranks the radar; a fixed header; drag to resize and click to collapse. |
+| BOOT: Task 14 | `57aa1b2`, `190ebec` | The owner's Vector Cockpit drawing, 21.7 s, played on the first page a server serves; the page fades in beneath it. |
+| MAP: Tasks 10, 12, 5a | `cf9ddae` … `86c4475`, `1e27fa6` | Map layers by setting; labels by zoom; runways close in; click to centre; follow at 10 nm with a data box; glow per colour on the map; the map moved, not drawn anew, while the view moves. |
+| TRAFFIC: Tasks 11, 13, 4e, 5b | `2950a1c` … `d41104a` | Tags over everything; the HUD's "N SECONDS AGO"; tails by time and speed; parked traffic fades or hides; the sort shades the radar; traffic glow; burn-in by time; motion; render scale; culling and caching. |
+| Fonts | `cba4122` | IBM Plex Mono, JetBrains Mono and VT323, Latin 400 WOFF2 from Fontsource 5, each with its OFL text. |
+| Merges | `b61f3c1`, `322e381`, `cf694c6`, `c4766fd` | Fixes found at each merge (below). |
+| Task 15 | `d4434c0`, this commit | UI zoom keeps the page in the window (the walk's one finding). |
+| Docs | this commit | The README, the spec, this section, and a row in `docs/README.md`. |
+
+Every line of the 11/12 list is in the [Coverage](#coverage) table, and
+each has code and tests behind it. Each lane commit's body says where the
+lane built something other than its steps said; the main deviations are
+gathered below.
+
+### Tests
+
+At `d4434c0`, `uv run pytest -q` runs 2154 tests, every page test in both
+Chromium and WebKit, in about 26 minutes on this machine. The last full
+run before this section, at `1b18470`, had 2146 passed and 4 failed;
+`c4766fd` fixed those 4. The run on the commit carrying this section is
+recorded in its message. The suite was about 1700 tests at the start of the
+phase.
+
+### What the merges found
+
+Each lane passed its own tests. Joining them found these. All were
+mended on `feat/web-cockpit`, or on the lane's branch before its merge:
+
+- **AUDIO:** 2 failures in tests it had not touched. Both passed when run
+  again, so they were flakes. (A `| tail` had hidden pytest's exit code;
+  every later run recorded it.)
+- **TRACKS** (`b61f3c1`): the filter row's cells had 3 px of padding where
+  the density test allows 2. The one-column table now scrolls in its pane.
+  The tracks row is now a percentage, which leaves the radar an odd
+  height, so zooming about its middle pans a fraction of a mile.
+- **MAP** (`322e381`, `cf694c6`, `1e27fa6`):
+  - The airway-dash test read along a route two airways share. When the
+    radar went from 588 to 593 px tall, their dashes slipped out of step
+    and filled each other's gaps. The test now leaves such segments out.
+  - A drag test assumed the canvas had exactly `devicePixelRatio` pixels
+    to a CSS pixel; with a fractional height it doesn't on y.
+  - CHROME's strict xfail on the WebKit click under UI zoom came out:
+    MAP's `cssZoomFix` mended it.
+  - A box test had failed since `28f4a37` (Task 10's review fix), unseen
+    because the lane ran only part of `test_page.py`. It assumed every
+    ring has its number, but a number gives way to the airport's name.
+    Fixing the test uncovered a real fault from `83eb1af`: a box with no
+    fill and no border split a colour's glow into two blurs, changing up
+    to 937 nearly transparent pixels. Such a box now only reserves its
+    space.
+- **TRAFFIC** (`e03d0e8`, `d41104a`, `c4766fd`): `size()` uses MAP's
+  `cssZoomFix` in place of its own copy. Two tests needed changes:
+  - the chevron click under UI zoom waits on the painted size;
+  - a test clicking another aircraft's tag finds it by hex, since the
+    focused aircraft's tag is now on top.
+
+### The walk of the demo
+
+An agent walked every row of the [Coverage](#coverage) table in
+`kcgx --demo` at KPDX. It ran Chromium and WebKit, at 1440 by 900 and
+1100 by 760, in WOPR and AMBER, and started the server afresh for each of
+eleven boots. It compared the boot with the owner's `.dc.html` at ten
+times. It took screenshots and read the pages' state, and saw no page or
+console errors in any run.
+
+- **40 of 41 rows work as the list asked.** The rest of the audio, real
+  feed titles, real parked traffic and the speed of a real display are the
+  owner's (see [Owed](#owed)).
+- **The one issue was UI zoom from 150 %.** The page's least height,
+  640 px, was the page's own px, so zoom scaled it. At 150 % the page ran
+  60 px past a 900 px window, and at 200 % 380 px; scrolling to the panes'
+  feet took the header away. Mended in `d4434c0`: 640 of the window's px
+  at any zoom. At 200 % the tracks pane then shows only its header until
+  it is dragged taller.
+- **Seen in passing, not mended:**
+  - with all 17 columns, the "DIST NM" heading wraps to two lines;
+  - VT323 at the default 13 px is small, about 8 px glyphs (FONT SIZE
+    mends it);
+  - the boot's glow is softer than the drawing's, and thinner in WebKit
+    than in Chromium; to be judged in KCGX.app;
+  - the parked-traffic altitude rule was not exercised, since every slow
+    demo aircraft reports GND;
+  - at the default, "PORTLAND INTERNATIONAL" at 30 px sits over the
+    busiest cluster of tags (phase F's setting).
+
+### Measured
+
+Headless, 1440 by 900. Chromium's headless shell draws in software, so
+its numbers are worst cases; WebKit is closer to KCGX.app. The machine
+was shared with other lanes' test runs, so expect ±20 %. The full tables
+are in the bodies of `83eb1af`, `86c4475` and `8388786`.
+
+- **The map** (mean ms between radar frames, before → after Task 5a):
+  - static layer redrawn at 250 nm: Chromium 1x 383 → 70, WebKit 1x
+    42 → 20;
+  - drag at 40 nm: Chromium 1x 83 → 17, WebKit 19 → 10;
+  - following at 10 nm: Chromium 2x 367 → 72 (53 after the review
+    fix), WebKit 2x 97 → 11.
+- **Fast drags (the cost of 5a's review fix):** at 15 px a frame the map
+  is drawn anew about every second frame. WebKit holds 16.7 ms. Software
+  Chromium at 2x went from 35 to 113 ms. Accepted: WebKit is what the
+  app uses.
+- **Traffic** (median ms a frame, 600 aircraft, tails 600 s, CRT):
+  - at 250 nm, with nothing culled: Chromium 1x 49 → 55, WebKit 1x
+    24 → 23;
+  - at 40 nm, where culling helps: Chromium 1x 31 → 22, WebKit 1x
+    20 → 6.
+- **Burn-in:** the half-life at the default 19 ms measured 19.2 ms at
+  60 fps and 18.9 at 30 (Chromium), and 17 to 20 (WebKit).
+- **Render scale SUPER:** each canvas is capped at 8 megapixels, so on a
+  2x display at 1440 by 900 the ratio is 3.645, not 4.
+
+### Deviations from the plan
+
+- **Task 5a:** the map is drawn anew when its scale leaves [0.8, 1.5], not
+  the review's [0.67, 1.5]. At 0.67, everything but the middle third of
+  the screen keeps only 0.38 of its light.
+- **Task 5a:** the once-a-second redraw while moving is gone. The map is
+  drawn anew when a pan uncovers more than 5 % of the screen's shorter
+  side, 120 ms after the view stops, and when a drag ends.
+- **Task 13:** tails are stroked a segment at a time with 255 alpha steps.
+  Batching runs of equal alpha changed 0.7 % of the picture for a fifth
+  off WebKit's frame at tail 600, so it was dropped.
+- **Burn-in:** "elapsed" is the mean of the last 30 frame intervals, and
+  a gap over 100 ms clears the layer. With each frame's own interval,
+  WebKit's uneven headless frames made a still CRT picture shimmer.
+- **Decisions the integrator made:**
+  - the focus's data box is always boxed, with at least 80 % fill;
+  - the poll back-off is capped at max(120 s, 4 × `poll_secs`);
+  - boxed tags glow tag by tag;
+  - unfocusing after a drag keeps the user's view;
+  - with the sort column hidden, the title bar reads "SORT <TITLE> ▲/▼";
+  - the tracks pane can be dragged no smaller than its header and two
+    rows.
+- **Ring numbers** (asked of the owner at Task 10's review, `28f4a37`):
+  a number gives way to the airport's name, boxed or not, where phase F
+  dropped it only when HOME or RINGS was boxed.
+- **The README and spec record what the code does where the plan
+  differs.** View moves use decision 21's OFF, 250 and 600 ms, not
+  decision 10's 400. The map's dash patterns are the old ones, since
+  Task 10's would have changed 11.6 % of pixels. Ring steps go down to
+  0.05 nm. A filled tag box takes a click over the chevron under it. The
+  boot is for the first page that connects as the cockpit, so `/debug`
+  and the self-check don't use it up. `tracks_pct` is a share of the
+  page, not of `vh`.
+
+### How the lanes went
+
+- **A lane agent ran `pkill -f "kcgx.server --demo …"`** during Task 9.
+  That could have killed other lanes' test servers. Every brief after it
+  said never to use `pkill` or `killall`, and to stop only processes an
+  agent started, by PID.
+- **MAP's 5a fix agent stalled for five hours,** waiting on a monitor
+  that never reported. Its test run had finished, leaving two demo
+  servers running. The integrator stopped them by PID and woke the
+  agent.
+- **Running only part of a test file in a lane hides faults.** The box
+  test above went red at Task 10's review fix and stayed red until the
+  merge's full run. Next time, each lane should run the whole page suite
+  once before reporting done.
+
+### Owed
+
+- **Runway widths:** `geo.json.gz` has not been rebuilt (it needs the
+  network), so runways close in are drawn at 150 ft.
+- **adsb.lol's fields:** `reg`, `desc`, `oper`, `vs` and `cat` have not
+  been checked against https://api.adsb.lol/api/openapi.json for which
+  ones `/v2/point` promises.
+- **The owner's, on the Mac** (Task 15's list):
+  - real feeds at KORD: titles without "Chicago", choosing a feed while
+    one is parked, the master mute;
+  - real traffic at KPDX: parked traffic fading, follow at 10 nm, 0.25 nm
+    on the runways;
+  - the boot in KCGX.app;
+  - UI zoom in KCGX.app.
+
+  Phase F's own checks are still owed as well (its plan's "Owed by the
+  owner").

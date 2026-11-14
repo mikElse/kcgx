@@ -3,7 +3,11 @@
 *2026-10-18. Changed by phase F on 2026-11-12 (the owner's "KCGX Tweaks
 11/12" list, and a window of its own); each change is written into the
 section it belongs to and carries that date. The plan, with its fifteen
-decisions, is `docs/superpowers/plans/2026-11-12-cockpit-tweaks.md`.*
+decisions, is `docs/superpowers/plans/2026-11-12-cockpit-tweaks.md`.
+Changed again by phase G on 2026-11-13 (the owner's second list of that
+title), the same way: each change in its section, dated 2026-11-13 and
+naming the decision it comes from. That plan, with its twenty-two
+decisions, is `docs/superpowers/plans/2026-11-13-cockpit-tweaks-g.md`.*
 
 ## The problem
 
@@ -80,6 +84,31 @@ full height of the right column:
 And `kcgx` no longer has to open a browser tab: on a Mac the page is shown
 in a small app of its own (see [The launcher](#the-launcher)).
 
+**The wall since 2026-11-13 (phase G).** The second list kept the layout
+and changed what is in it. The frequencies screen opens with a master
+mute and the volume, and holds one expanded feed, the one heard. The
+tracks screen has a grip along its top edge and tools in its title bar,
+and may be folded to that bar, the radar taking the room. A cockpit
+launch opens on the boot animation, over all of it (see [The boot
+animation](#the-boot-animation)):
+
+```
+ KCGX  LOCAL COCKPIT 127.0.0.1:8473                        ⚙  ⏻
+┌──────────────────────────────────────┐ ┌──────────────────┐
+│ 5 SECONDS AGO              12 TRACKS │ │ KPDX   1955Z     │  the airport
+│ RNG 40 NM                            │ │ PORTLAND       ⌕ │
+│   ┌──────────┐  ASA412 6172          │ ├──────────────────┤
+│   │ data box │ ╲                     │ │ ◁) ━━━━━━━━  80% │  master mute, volume
+│   └──────────┘  ⟵──── TRAFFIC        │ │ TOWER     34%  ● │
+└──────────────────────────────────────┘ │ ╱╲__╱╲╱╲_____╱╲_ │  the one heard
+╞══════════ grip: drag for height ═════╡ │ GROUND    7%   ◐ │  a click picks it
+┌──────────────────────────────────────┐ │                  │
+│ CALLSIGN TYPE ALT…   (sticky header) │ │                  │
+│ [filters]                            │ │                  │
+│ TRACKS          CLEAR COLUMNS  ⌄     │ │   FREQUENCIES    │
+└──────────────────────────────────────┘ └──────────────────┘
+```
+
 **Audio stays on the server.** The Python mixer keeps playing through the
 machine's output device exactly as it does today. The browser is a control
 surface and a display: it never receives audio, only state and meter levels.
@@ -150,6 +179,20 @@ The owner's list of 2026-11-12 then changed these:
 | Running `kcgx` again reattaches | Shows the running cockpit in its own window on a Mac, in a tab elsewhere (decision 14) |
 | Closing the terminal detaches | Closing the window, like closing the tab, leaves the audio playing; **quitting the app stops the cockpit** (decision 15) |
 | `q` quits; `Ctrl-b q` | The power icon in the header, which asks first; Quit in the window |
+
+**Rows changed since, by phase G (2026-11-13).** The second list changed
+these, and the two tables above are left as they were:
+
+| Row | Since 2026-11-13 |
+|---|---|
+| One row per feed, one audible at start | One audible **always**: a feed is picked like a radio button (decision 3). Every feed still has its row and meters |
+| Expanded row when audible, compact when muted | Same rule, and so exactly one expanded row. Its head is title, chatter, state glyph; its trace is 60 px tall |
+| `space` mute, `S` solo; M and S buttons | **No M or S on the page.** A click on a compact row picks that feed. `mute` and `solo` stay in the protocol for `/debug` |
+| Click anywhere on a row toggles mute | Click anywhere on a compact row picks it; a click on the one playing does nothing |
+| Mute/unmute moves the row at once | Picking moves the rows at once |
+| `c` config overlay, master volume live in 5% steps | CONFIG fills the window, in four tabs (decision 2). Volume, and a new master mute, sit at the top of the frequencies screen (decision 3) |
+| adsb-tui traffic table, row selection | Seventeen columns to choose from, a filter on each, the sort a setting that also ranks the radar, a header that stays, a height to drag and a fold (decisions 4, 5 and 18) |
+| Running `kcgx` again reattaches | The first cockpit page after a start plays the boot animation; reattaching does not (decision 1) |
 
 ## Architecture
 
@@ -230,6 +273,18 @@ to the airport, so it stays in the terminal app, which needs it for its
 keys. The web page has no selection at all (see Every action is a click):
 each control sends its own row's ident.
 
+**`Cockpit.select(ident)`** (2026-11-13, phase G decision 3) is not that
+selection: it picks the one feed that is heard. It leaves only that feed
+audible, cancels any solo, reconciles the streams (a parked feed is
+started, and another parked to keep the count), announces each
+feed that changed once, and reorders at once. Picking the feed already
+audible changes nothing and says nothing. The rule "one feed at a time"
+lives here, on the server, so every tab keeps it whatever it sends;
+`build_sessions` already started with one audible feed, and `select` keeps
+it so. The master mute is the mixer's (`Mixer.master_muted`: silence out,
+the volume kept, every channel still metering), not the cockpit's, and,
+like the volume, it is state, not a pref.
+
 ### Changing airport
 
 Today `kcgx go` writes the state file and respawns two tmux panes, so a new
@@ -275,7 +330,8 @@ browser, for three reasons:
 `squelch.toml` as `radar_refresh_secs` (default `15`), `radar_range_nm`
 (default `40`) and `radar_stale_secs` (default `60`), all whole numbers. A
 config file can lengthen the interval but never shorten it below adsb.lol's
-15 s. A refused poll keeps the last good aircraft list, marks it with its
+15 s. (The range left the file on 2026-11-12 and the interval on
+2026-11-13; both are prefs now, below.) A refused poll keeps the last good aircraft list, marks it with its
 age, and backs off: 15 s, 30 s, 60 s, capped at 120 s, reset on the first
 success. The page names the refusal: `ERR 429`, `ERR 403`, `NO CONNECTION`.
 
@@ -295,6 +351,35 @@ range is cut to the new one before it is merged. An aircraft dropped for
 being out of range takes its emergency squawk out of the announced set
 without a line in the log; a wider range that brings it back announces it
 afresh.
+
+**The poll interval is a setting too** (2026-11-13, phase G decision 16).
+`radar_refresh_secs` left `squelch.toml` and became the pref `poll_secs`,
+15 to 120 s in steps of 5 (default 15), RADAR POLL in CONFIG. The schema
+cannot go under 15, adsb.lol's ask. As with the range, a change reaches
+the radar (`Radar.set_refresh`) and never causes a poll. The back-off
+still doubles the interval per refusal in a row, now capped at two
+minutes or four intervals, whichever is longer, so it backs off at least
+twice at any interval (15, 30, 60, 120 s; at 120: 240 and 480 s).
+
+**Every field the table can show** (2026-11-13, Task 7). Each aircraft
+now also keeps readsb's `r`, `desc`, `ownOp`, `baro_rate` and `category`,
+sent as `reg`, `desc`, `oper`, `vs` and `cat`: text in capitals, the rate
+rounded, `null` where the reply leaves one out. The plan said to read
+adsb.lol's OpenAPI document first and keep only the fields `/v2/point`
+promises. **That check is still owed**; all five are kept, and a column
+whose field never comes stays empty.
+
+**How long a track has stood still** (2026-11-13, decision 9). A track is
+still while its ground speed is under `ground_gs` and it reports `GND`
+or, with `ground_alt` above 0, a barometric altitude under it. The frame's
+`still` is the seconds it has been so, counted from the poll it first
+qualified; one poll that finds it otherwise resets it to 0, and one that
+does not hear from it changes nothing. It is counted on the server so
+every tab agrees and a reload keeps the clock. The altitude is above sea
+level, since the airport dataset has no elevations; at a high field
+`ground_alt` should stay 0, where only `GND` counts. `Radar.set_ground`
+takes the two thresholds from the prefs, as `set_range` takes the range.
+What the page does with `still` is under Visual language.
 
 The picture is the server's (`kcgx.radar`, built in phase D): it merges
 each poll into the aircraft it already has, drops any not heard from for
@@ -326,6 +411,52 @@ its own screen. Since 2026-11-12 (decision 7) the focused aircraft is the
 table's first row however it was focused, and sorting orders the rest
 beneath it; see "Click an aircraft to focus it" under Visual language.
 
+**The table since 2026-11-13 (phase G).**
+
+* **Columns are chosen.** `columns.js` holds all seventeen (CALLSIGN,
+  TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, DESC, OPER, CAT, AGE,
+  LAT, LON), each with its title, its text, its sort value and its filter
+  kind; the table and the radar's data box both read an aircraft through
+  it, so a value reads the same in each. A figure not reported sorts
+  below every real one. The table shows `track_cols` in that order,
+  chosen in CONFIG or from a COLUMNS checklist in the title bar (a
+  popover, so the pane does not clip it). The last column shown cannot be
+  unchecked.
+* **Filters belong to the table** (decision 4). A row under the header
+  holds one per column: a substring in any case for text columns, a MIN
+  and a MAX for number columns (`GND` is 0; once a bound is set an
+  aircraft that reports nothing is left out). CLEAR empties them. They
+  hide rows and never touch the radar, and they are the page's, not
+  prefs: gone on a reload, so nothing is hidden at the next launch for a
+  reason nobody remembers. The focused aircraft passes every filter.
+* **The sort belongs to both** (decisions 4 and 5). `track_sort` and
+  `track_desc` are prefs: a header click sends both, and the table sorts
+  on the server's answer, so every tab sorts alike. The sort, with no
+  filter applied and the focus first, ranks every aircraft for the radar:
+  `store.state.rank`, hex to 0 for the first and 1 for the last, with a
+  `rank` event when it changes. A sort on a column not shown is named in
+  the title bar (`SORT GS KT ▼`).
+* **The header stays.** The header row and the filter row are sticky and
+  opaque, so the table scrolls under them.
+* **The pane resizes and folds** (decision 18). Its top edge is a grip, a
+  `separator` 6 px tall, dragged or moved by the arrow keys (2 %), Page Up
+  and Down (10 %), Home and End; a drag previews on the page and sends
+  `tracks_pct` on release, and Escape puts it back. `tracks_pct` is the
+  pane's share of the page's content box, not of `vh`, so it holds under
+  UI zoom in both engines. The row is `minmax(0, N%)`: a share too tall
+  for the window, as a stored 80 from a taller one, shortens the pane and
+  never lengthens the page. A drag stops at the larger of 10 % and the
+  header, the filters and two rows, and where the radar would be left
+  under 48 px. A button in the title bar sends `tracks_open`; folded, the
+  pane is its title bar and the radar takes the rest, and with the
+  teletype shown the two title bars stay level. Under 1100 px there is no
+  grip, and folding works. Rows are rebuilt only on traffic, the table's
+  prefs, the focus and the filters: 600 aircraft take 4 to 5 ms of
+  script.
+
+So the "collapses to a single summary line" of earlier drafts, not built
+in phase D, now is, as a fold to the title bar.
+
 ### Transport
 
 **HTTP** for things that happen once:
@@ -347,17 +478,17 @@ object with a `t`. Server to page:
 
 | `t` | Carries | When |
 |---|---|---|
-| `snapshot` | `protocol`, `airport`, `loading`, `feeds` (stack order), `volume`, `max_streams`, `audio_ok`, `log`, `prefs` | the first frame on every connect, always; after an airport change, once with `loading: true` and again with the feeds |
-| `feed` | one feed view | its state, mute, solo, ambient or connection changed |
+| `snapshot` | `protocol`, `airport`, `loading`, `feeds` (stack order), `volume`, `max_streams`, `audio_ok`, `log`, `prefs`; since 2026-11-13 `muted` (the master mute) and `boot` | the first frame on every connect, always; after an airport change, once with `loading: true` and again with the feeds |
+| `feed` | one feed view; since 2026-11-13 it carries `title`, the name without the airport when `short_names` is on | its state, mute, solo, ambient or connection changed; every feed again when `short_names` changes |
 | `added` | one feed view | a feed opened from the picker |
 | `order` | `idents`, the new stack order | any reorder |
 | `levels` | `v`: ident to dBFS, one decimal | 25 Hz, only while a page is open; droppable |
 | `chatter` | `v`: ident to five-minute fraction | every resort tick; droppable |
-| `volume` | `value` | the volume changed |
+| `volume` | `value`; since 2026-11-13 `muted` | the volume or the master mute changed |
 | `message` | `z` (Zulu, `1955Z`), `text` | a line added to the log |
-| `prefs` | every setting: `palette`, `glow`, `display` (phase C) and, since 2026-11-12, the eleven more listed under Themes | any page changed one; every tab follows |
+| `prefs` | every setting: `palette`, `glow`, `display` (phase C) and, since 2026-11-12, the eleven more listed under Themes; since 2026-11-13 the fifty-four of `kcgx.prefs.SCHEMA`, `map` whole | any page changed one; every tab follows |
 | `error` | `text` | this page sent something the protocol does not have |
-| `aircraft` | `ok`, `error`, `age` (seconds since the last good poll), `refresh`, `range`, and `ac`: per aircraft `hex`, `label`, `type`, `lat`, `lon`, `alt` (feet or `GND`), `gs`, `trk`, `sq`, `age`, `dist`, `brg` | each poll, success or refusal, and on an airport change (empty); the snapshot carries the latest as `radar` (phase D) |
+| `aircraft` | `ok`, `error`, `age` (seconds since the last good poll), `refresh`, `range`, and `ac`: per aircraft `hex`, `label`, `type`, `lat`, `lon`, `alt` (feet or `GND`), `gs`, `trk`, `sq`, `age`, `dist`, `brg`; since 2026-11-13 also `reg`, `desc`, `oper`, `vs`, `cat` and `still` | each poll, success or refusal, and on an airport change (empty); the snapshot carries the latest as `radar` (phase D) |
 
 Page to server: `mute`, `solo`, `ambient` and `open_feed`, each with an
 `ident`; `volume` with a `value`, clamped to 0..1; `input`, the "you
@@ -371,6 +502,25 @@ known names); a bad value is refused naming the setting, and so is a
 setting the schema does not have, even beside ones it does. The new keys
 are additive, so `protocol` is still 1. Since the same date the page sends
 no `open_feed`; the message stays for `/debug`.
+
+Since 2026-11-13 (phase G): `select` with an `ident` picks the one feed
+heard, and `master_mute` with `on`, a JSON boolean, silences the output.
+The page sends no `mute` or `solo`; both stay, for `/debug`. A `prefs`
+message may carry any of the fifty-four settings, and a table (`map`)
+**partially**: any rows, any of each row's own columns
+(`{"map": {"COAST": {"alpha": 60}}}`). The server lays it over what is
+set a cell at a time (`prefs.merge`), so two tabs changing two cells both
+land; the file and every frame hold the table whole. A cell that fails,
+or a row or column the table does not have, refuses the whole message
+and the refusal names it (`map.COAST.alpha`). All of it is additive:
+`protocol` is still 1.
+
+**The boot is told once** (decision 1). The snapshot's `boot` is true for
+the first cockpit page the hub welcomes after the server starts, and
+false for every other, a reconnect included. Only the cockpit uses it up:
+the page connects to `/ws?page=cockpit`, and anything else (`/debug`, the
+self check, an older page) is told false without spending it, so a self
+check run before the window opens cannot take the animation from it.
 The parser is strict: a wrong type, an ident that is not lower case letters,
 digits and underscores, a non-finite volume, or an unknown `t` gets an
 `error` frame back, so a page bug shows up rather than a control that
@@ -432,6 +582,23 @@ person who reads the Python.
 If the UI outgrows that, Preact with `htm` can be vendored the same way
 without introducing a build. Choosing a framework now is not needed to start.
 
+Since 2026-11-13 (phase G decision 17) five fonts are vendored: the two
+above, and IBM Plex Mono, JetBrains Mono and VT323, each Latin 400 WOFF2
+from the Fontsource 5 packages with its OFL text beside it (`cba4122`).
+All five are monospaced and OFL, and none is fetched at run time. Still
+no build step and no npm.
+
+**One frame clock** (2026-11-13, P0.4a, Task 4). `frames.js` is the page's
+only `requestAnimationFrame` loop; the radar, the feed traces and the boot
+animation hang off it through `onFrame(fn)`. It runs its callbacks when at
+least `1000 / fps_max` ms, less 1 ms of slack, have passed since the last
+run, on the display's own frame times; 120 means every frame. "The last
+run" is when it was due rather than when it came, by up to one interval,
+so the cap holds on average where frames come late or unevenly (headless
+WebKit's come 1 to 35 ms apart; counted from arrival, a cap of 15 gave 12
+a second). An error from one callback goes to the console once and the
+others still run.
+
 ### Visual language
 
 The reference is the NORAD wall in *WarGames*: four stills in
@@ -454,10 +621,25 @@ fill is black and the border takes the label's own colour. Turning a box
 on, or changing its size, never moves the label's text. How boxes are
 painted and placed is under [Rendering](#rendering).
 
+Two more fills since 2026-11-13, both asked for. **Runways close in**
+(decision 14): once a runway's true width on the screen is wider than its
+line, it is drawn as a solid quadrilateral that wide, white as before.
+**The focused aircraft's data box** (decision 11) is black behind its
+text, like a label box.
+
 **Lines glow.** Each stroke is drawn twice with additive blending: a wide,
 faint, blurred pass and a thin bright core. That is the phosphor look, and
 it is cheap. On top of the glow sits a display effects layer, CRT by
 default; see [Display effects](#display-effects).
+
+**Glow is three numbers** (2026-11-13, decision 15): `glow_map` for the
+map, `glow_traffic` for the aircraft, their tails and tags and the feed
+traces, and `glow_text` for the page's text, frames and lamps, each 0 to
+100, which is 0 to 12 px of blur. The phase F choice became them: a
+stored `glow` of OFF, LOW or FULL is read as 0, 33 or 75 in all three,
+unless the file has the new one already. 33 is 3.96 px on the canvases,
+not quite LOW's 4; on the text it is exactly LOW's shadow and 75
+exactly FULL's, with the halo growing between and beyond.
 
 **Colour is meaning, not decoration.** One palette, used the same way on
 every screen:
@@ -492,6 +674,18 @@ the numbers where the one line has always been. What an aircraft does not
 report is left out. No fields chosen means no tag: the chevron alone, and
 it still takes the click.
 
+**Tags go over everything** (2026-11-13, decision 8). The owner asked for
+labels and their boxes over every map element. A tag had been light added
+to the moving layer, so a trail crossing it brightened its letters and it
+left a persistence ghost. Tags are now drawn last, on a layer of their
+own cleared every frame and laid over the map and the aircraft
+`source-over`: each tag's box, then its letters, so a tag and its box sit
+over map lines, other aircraft and other tails, and leave no ghost. They
+go down in the sort's order, the last ranked first, so the table's first
+row's tag is on top, and the focused aircraft's above all. Their size is
+`tag_px` (16 px) at the range's view, and it follows the zoom as labels
+do.
+
 Decided 2026-10-19 from the mockup review:
 
 * **A trail is part of its aircraft:** the same colour and stroke width as
@@ -517,6 +711,70 @@ Decided 2026-10-19 from the mockup review:
   table, a callsign pressed far down brings the first row into view, and a
   click on the radar leaves the page where it is.
 
+Changed 2026-11-13 (phase G), from the second list:
+
+* **A tail is time, and its strength is speed** (decision 7). A trail is
+  now where the aircraft was in the last `tail_secs` (180 s; 0 to 600),
+  not its last twelve positions, so its length holds when the poll
+  interval changes. The page keeps each aircraft's `[lat, lon, t]` for
+  600 s whatever is set, `t` being when the position was reported, so
+  lengthening the tail shows history at once; the tail's old end is cut
+  where the aircraft was `tail_secs` ago. Its strength is one of three
+  bands: `tail_alpha_min` (35 %) under `tail_gs_low` (40 kt),
+  `tail_alpha_max` (95 %) over `tail_gs_high` (250 kt), and `tail_alpha`
+  (95 %) between or with no speed. The fade along it stays.
+* **Aircraft may step** (decision 21). `motion` GLIDE dead reckons between
+  polls as before; STEP draws each aircraft where it was last reported
+  until the next poll, and cuts its tail by that report's time, so a
+  stepped tail holds still too.
+* **Parked traffic fades or hides** (decision 9). Once an aircraft's
+  `still` (see Radar) passes `ground_min` minutes (2), `ground_mode` FADE
+  draws it, chevron, tail and tag, at `ground_alpha` (25 %); HIDE leaves
+  it out of the picture, the hits and the HUD's count; SHOW changes
+  nothing. The focused aircraft is never faded or hidden. The table is
+  not touched: its filters are for that.
+* **The sort shades the radar** (decision 5). The table's rank sets each
+  aircraft's strength, linearly from full for the first row to
+  `sort_floor` (40 %) for the last, and its place in the stack: within a
+  colour, the last ranked is drawn first. The glow is still drawn a
+  colour at a time, so between colours the order is cyan under alarm
+  under pink, as before; tags, on their own layer, follow the rank
+  exactly. The focused aircraft is always first. One alpha is reckoned
+  per aircraft per frame: stale × focus dim × rank × parked, and for its
+  tail also the speed band.
+* **Focusing goes to the aircraft and follows it** (decision 10). From
+  the radar or the table, focusing eases the view to `follow_nm` (10 nm)
+  from the aircraft to the nearer edge, centred on it, and keeps it
+  centred on where each frame drew it. The wheel zooms about it and keeps
+  following; a drag ends the following and keeps the focus; a double
+  click recentres on the airport, ends the following and forgets the
+  view from before. Unfocusing eases back to the view from before the
+  focus, unless a drag or a click on a place has moved it since: the
+  view is the user's then, and stays.
+* **The focused aircraft has a data box** (decision 11): a `<dl>` over
+  the radar with a `NAME: VALUE` line for each column the table shows,
+  in the table's order, read through the table's own columns. It is a
+  page element, not a drawing, so it is sharp at any render scale and in
+  the page's font. It sits left of the chevron, its right edge 12 px
+  clear of the chevron's reach and its middle level with it; where that
+  would leave the radar, right of it and 12 px under it, clear of the
+  tag, which runs up and right. It is placed after every frame from
+  where that frame drew the aircraft, and hidden with `info_box` off,
+  with nothing focused, and while the aircraft is off the screen. It is
+  always boxed, with the label box settings but never under 80 % black, a
+  1 px border at 50 % and 4 px of padding. The plan boxed it only when
+  AIRCRAFT was boxed; Task 12's review made it always boxed.
+* **A click on a place centres it** (decision 12). A click that is on no
+  aircraft tries the labels placed, then the nearest symbol within 10 px
+  (the home ring's reach being the ring), and eases the view to centre
+  it at the same zoom. Places are the home ring, airports, navaids,
+  cities, peaks and state names; lines are not targets.
+* **What a click is on is what is on top.** Since the tags went over
+  everything, a tag whose box is filled (AIRCRAFT boxed, `box_fill` over
+  0) wins over the chevrons it covers, and otherwise chevrons come first
+  as before; tags are tried top first, then trails. Phase F's "a click
+  tries every chevron before any tag" holds only for unboxed tags.
+
 **Text.** Two faces, both OFL, both vendored:
 
 * **Share Tech Mono** for anything large or on a screen: the airport name,
@@ -529,6 +787,21 @@ Decided 2026-10-19 from the mockup review:
   the log). Tabular figures throughout, so nothing jitters as it updates.
 
 All caps everywhere, as on the wall.
+
+**The face, its size and the page's zoom are settings** (2026-11-13,
+decision 17). `font` CLASSIC is the pair above; B612, SHARETECH, PLEX,
+JETBRAINS and VT323 each set one face for everything; SYSTEM is
+`ui-monospace, Menlo`. All are monospaced, so the tables keep their
+columns. They are two custom properties, `--font-text` and
+`--font-display`; the radar reads the second for its labels and draws
+again when a font loads. `font_px` (13 px) is the body's size, and the
+buttons, the airport's name and the tracks table follow it; titles, the
+big figures and the radar's readouts stay fixed. `ui_zoom` (50 to 200 %)
+is CSS `zoom` on `.page` and on each dialog. Neither changes the radar's
+labels, which have sizes of their own (Rendering). The clocks are three
+flags: `clock_24h` (12-hour local reads `3:07 PM`), `clock_seconds`
+(`:SS` on both, set smaller, as is AM/PM, so the longest, `11:07:42 AM
+PST`, stays on the ICAO's row at every size) and `clock_zone`.
 
 **The wall, not a dashboard.** Each region of the page is a framed screen
 with a title set in caps along its bottom edge (`TRAFFIC`, `FREQUENCIES`,
@@ -582,6 +855,34 @@ zero, four characters wide and right aligned so it does not shift as it
 changes. M and S are 28 px wide and 24 high (they were 44 and 34), and a
 compact row is 32 px high (it was 44).
 
+Changed 2026-11-13 (phase G decision 3), from the second list: **one feed
+at a time, and no M or S.** The expanded row is the feed that is not
+muted, and there is one. Its head reads title, chatter (`34%`) and state
+glyph, left to right, the chatter's right edge as near the glyph as in a
+compact row, with no CHATTER label; its trace is 60 px tall, twice what it
+was, drawn at the render scale with the traffic's glow. Every compact row
+is a button that sends `select`; the expanded one is no button, since
+picking what plays does nothing. A compact row whose feed is audible
+anyway (only `/debug` or `open_feed` can make two) is marked playing. The
+titles are tighter (`letter-spacing: 0.04em`). The line of feed counts at
+the top became the master mute (a speaker, crossed when muted;
+`aria-pressed`) and the volume slider with its figure, moved there from
+CONFIG.
+
+**Feed titles leave out the airport** (2026-11-13, decision 19).
+`kcgx.names.short_feed_name` drops, as whole words anywhere in the title,
+the airport's name where it heads it (its words up to the first of
+International, Regional, Airport, Field or Municipal: `Chicago O'Hare`,
+`Seattle–Tacoma`), its city (the part of `where` before the comma), both
+in any case, and its ICAO and IATA codes, in capitals only, since many
+codes are words (`LAS` in Las Vegas, `SAN` in San Diego, `AND`). The ICAO
+goes first and the IATA after the city. Hyphens and dashes are one dash,
+and a dash with no space joins words, so `SEA-TAC Ground` stays whole.
+Dangling dashes and slashes, doubled separators and empty brackets are
+tidied. If nothing would be left, the title stays as it was; `ZSE Seattle
+Center` at KPDX names another city and stays. The server sends it as each
+feed's `title`, and `short_names` turns it off.
+
 **The log is a teletype.** New messages type out a character at a time, in
 caps, with a block cursor, each prefixed with its Zulu time (`1955Z`).
 Fast enough never to delay a warning (the whole line inside 400 ms), and
@@ -612,7 +913,9 @@ low, full; default low), and so is the display layer (`display`: off,
 vector, crt; default crt). `prefers-reduced-motion` turns off flicker,
 jitter, line draw on, the teletype, trail fading and any easing, whatever
 `display` says. Contrast is checked against the
-black for every palette colour at the sizes it is used.
+black for every palette colour at the sizes it is used. (Since
+2026-11-13 the glow is three numbers, above; reduced motion also skips
+the boot animation, and view moves jump rather than ease.)
 
 ### Themes
 
@@ -674,7 +977,109 @@ message and the page redraws from the server's `prefs` frame. A slider
 shows its value at once, sends it 80 ms after it last moved, and is not
 moved by a `prefs` frame while it is in hand. The sheet is still a modal
 dialog: the page behind is not darkened, but it takes no clicks until the
-sheet is closed.
+sheet is closed. *Superseded on 2026-11-13; see below.*
+
+**A fifth kind, the table** (2026-11-13, phase G). The second list asked
+for show, opacity, line type and label size on every map marking. That is
+a grid, not a row, so `kcgx.prefs` gained `Table`: named rows of cells,
+each row having only the columns that mean something for it, each cell
+checked by its column's own kind. A page may send part of a table, any
+rows and any of a row's own columns, and `merge` lays it over what is
+set a cell at a time, so two tabs changing two cells both land; the file
+and every frame hold it whole. Read from the file, a bad cell is dropped
+and the rest kept; on the wire it refuses the message, naming
+`ROW.column`. The one table is `map`:
+
+| row | show | alpha | line | width (tenths of a px) | label (px) |
+|---|---|---|---|---|---|
+| COAST | on | 100 | SOLID | 18 | |
+| LAKE | on | 75 | SOLID | 12 | |
+| RIVER | on | 50 | SOLID | 10 | |
+| COUNTRY | on | 90 | DASH | 12 | |
+| STATE | on | 55 | SOLID | 10 | |
+| AIRWAY | on | 70 | DASH | 12 | |
+| CLASS_B | on | 90 | DASH | 14 | |
+| CLASS_C | on | 80 | DASH | 13 | |
+| CLASS_D | on | 45 | DOT | 10 | |
+| RUNWAYS | on | 100 | | 16 | |
+| RINGS | on | 35 | SOLID | 10 | 12 |
+| HOME | on | 100 | | 18 | 30 |
+| AIRPORTS, NAVAIDS, CITIES, PEAKS | on | 85 | | 13 | 13 |
+| STATE_NAMES | on | 100 | | | 14 |
+
+The columns' ranges: alpha 0 to 100 %, line SOLID, DASH or DOT, width 5
+to 80, label 8 to 32. `Number` also gained a step, counted from its low
+end, so a value off its slider's step (a hand-edited range of 45) is
+refused on the wire and dropped from the file.
+
+**The schema since 2026-11-13.** Fifty-four settings: thirty-two numbers,
+ten flags, eight choices, three subsets and the table. `glow` left it
+(above, under Visual language). The phase F table above holds for every
+key it lists but `glow`; the new keys, by the CONFIG tab that holds them:
+
+| key | kind | values | default | CONFIG row |
+|---|---|---|---|---|
+| `boot_anim` | flag | | true | BOOT ANIMATION |
+| `ui_zoom` | number | 50 to 200 (%), step 5 | 100 | UI ZOOM |
+| `font` | choice | CLASSIC, B612, SHARETECH, PLEX, JETBRAINS, VT323, SYSTEM | CLASSIC | FONT |
+| `font_px` | number | 10 to 20 (px) | 13 | FONT SIZE |
+| `clock_24h`, `clock_seconds`, `clock_zone` | flag | | true, false, true | 24-HOUR LOCAL, SECONDS, ZONE NAME |
+| `glow_map`, `glow_traffic`, `glow_text` | number | 0 to 100 | 33 | GLOW: MAP, TRAFFIC, TEXT |
+| `aa` | choice | OFF, ON, SUPER | ON | ANTI-ALIASING |
+| `burn_in` | number | 0 to 100 (ms, a half-life) | 19 | BURN-IN |
+| `fps_max` | number | 15 to 120 | 60 | MAX FRAME RATE |
+| `poll_secs` | number | 15 to 120 (s), step 5 | 15 | RADAR POLL |
+| `motion` | choice | GLIDE, STEP | GLIDE | AIRCRAFT MOTION |
+| `view_ease` | choice | OFF, QUICK, SMOOTH | QUICK | VIEW MOVES |
+| `zoom_speed` | number | 25 to 400 (%) | 100 | ZOOM SPEED |
+| `map` | table | above | the map as drawn before | MAP LAYERS |
+| `label_min`, `label_max` | number | 6 to 20, 12 to 48 (px) | 9, 26 | LABEL MIN, LABEL MAX |
+| `tag_px` | number | 10 to 28 (px) | 16 | TAG SIZE |
+| `follow_nm` | number | 1 to 50 | 10 | FOLLOW RADIUS |
+| `info_box` | flag | | true | DATA BOX |
+| `tail_secs` | number | 0 to 600 (s), step 15 | 180 | TAIL LENGTH |
+| `tail_alpha`, `tail_alpha_min`, `tail_alpha_max` | number | 0 to 100 (%) | 95, 35, 95 | TAIL DEFAULT, SLOW, FAST |
+| `tail_gs_low`, `tail_gs_high` | number | 0 to 600 (kt) | 40, 250 | SLOW BELOW, FAST ABOVE |
+| `ground_mode` | choice | SHOW, FADE, HIDE | FADE | PARKED TRAFFIC |
+| `ground_gs` | number | 0 to 50 (kt) | 5 | BELOW SPEED |
+| `ground_alt` | number | 0 to 5000 (ft), step 100 | 0 | BELOW ALTITUDE |
+| `ground_min` | number | 0 to 30 (min) | 2 | AFTER |
+| `ground_alpha` | number | 0 to 100 (%) | 25 | FADE TO |
+| `track_cols` | subset | CALLSIGN, TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, DESC, OPER, CAT, AGE, LAT, LON | CALLSIGN, TYPE, ALT, GS, TRK, DIST, SQWK | COLUMNS |
+| `track_sort` | choice | the same names | DIST | SORT BY |
+| `track_desc` | flag | | false | DESCENDING |
+| `sort_floor` | number | 0 to 100 (%) | 40 | DIMMEST (RADAR) |
+| `tracks_open` | flag | | true | (the pane's fold button) |
+| `tracks_pct` | number | 10 to 80 (% of the page) | 24 | (the pane's grip) |
+| `short_names` | flag | | true | DROP THE AIRPORT FROM NAMES |
+
+`range_nm` gained the step its slider always had, 10. The master mute and
+the volume are not prefs: they are audio state, like the volume always
+was.
+
+**CONFIG is full-screen, in four tabs** (2026-11-13, decision 2). The
+second list asked for it centred and full-screen, and that won over phase
+F's reason for docking it. It is the window less a 16 px margin, centred,
+over an 85 % black backdrop, so it covers the radar: a change is seen
+once the sheet is closed. Its tabs are GENERAL (page, clocks, look,
+glow, rendering, radar, layout), TRAFFIC (radar, boxes, the map grid,
+labels, focus, tails, parked), TRACKS (table, radar) and FREQUENCIES
+(names). They are `role="tab"` buttons; the arrow keys, Home and End move
+between them, and the sheet reopens on the last tab used while the page
+is open. The panel scrolls; the head and the tabs do not. Every key but
+`tracks_open` and `tracks_pct`, which the tracks pane binds itself, has
+one `[data-pref]` control in the tab the plan names, and
+`tests/test_page_prefs.py` holds that, the table's rows, columns, ranges
+and names included. The map's grid is `data-kind="table"`: `data-rows`
+lists each row's columns and each column's heading declares its kind and
+range, `sheets.js` makes a cell only where a row has that column, bound
+with the same binders as single controls, and each sends
+`{t: "prefs", map: {ROW: {col: value}}}`. The rest of what was said of
+the sheet above holds.
+
+**The airport picker is fixed** (decision 20): `min(840px, 100% - 32px)`
+wide, 50 % over its 560, and `min(80vh, 720px)` tall whatever it finds,
+centred, its results scrolling inside it.
 
 ### Rendering
 
@@ -702,7 +1107,110 @@ headless shell took 19.2 ms for the same picture at 1x and 45.5 ms at 2x.
 Two things are not done: aircraft and trail points that are off the
 screen are still drawn, and the static layer still redraws with a shadow
 on every map line and symbol while the map is panned, zoomed or drawing
-on.
+on. *Both were done on 2026-11-13 (phase G Task 5); see below.*
+
+**The radar is four modules on one frame clock** (2026-11-13, phase G
+P0.3 and P0.4a). `radar.js` became `radar/`: `index.js` (mounting, the
+canvases and their size, the frame and the order its layers are put
+together in, the HUD, what the store says), `still.js` (the map, rings,
+the home airport, places, label sizes), `moving.js` (aircraft, tails,
+tags, culling), `view.js` (the view, the pointer, view moves, following,
+hit tests) and two helpers, `draw.js` (the font and label boxes) and
+`info.js` (the data box). The split was made so that three people could
+work on the radar at once, and was proved a pure move: twelve frozen
+screenshots in both engines, 0 pixels different. Each module's
+`init(radar)` adds its own part of one shared object and binds its own
+listeners, and may return `tick`, `post` and `debug` hooks; `index.js`
+runs the inits in a fixed order (view, still, moving), each `tick` before
+drawing and each `post` after it, and builds `debug()` from every
+module's, a key given twice being an error. Objects on `radar` are
+changed in place, never replaced, so a module may hold one. The frame is
+one `onFrame` callback of `frames.js` (Front end), so `fps_max` caps it.
+
+**A frame is three canvases put together:** the static layer (`still`)
+copied, the moving layer (`trace`) added to it (`lighter`), and since
+2026-11-13 the tags' layer (`tags`) laid over both as it is
+(`source-over`; see "Tags go over everything" under Visual language).
+Scratch canvases (`bare`, `stillBare`) hold lines drawn without a glow,
+for the glow to be put on once.
+
+**The map's glow is one shadow for each colour too** (2026-11-13, Task
+5a), as the aircraft's has been since phase F: every line, ring and
+symbol of a colour is drawn bare on `stillBare`, and that is drawn onto
+`still` once, with the shadow, only over what it inked and the glow's
+reach (WebKit puts an image's shadow only inside the rectangle it is
+drawn to). A label's box hides what is under it, so the glow waiting is
+drawn before each box; a box with no fill and no border hides nothing,
+and only keeps its room, since flushing for it split a colour's blur in
+two and changed some 900 nearly clear pixels. Labels have no glow. The
+picture is not quite what a shadow on each line drew: over black, at
+most 0.02 % of pixels differ by more than 16 of 255, and none is visible
+side by side.
+
+**While the view moves, the map is moved, not drawn** (Task 5a). A drag,
+the wheel, an eased move and following each say when the view last moved
+(`radar.movedAt`). While it moves, `still` is the last full drawing
+(`radar.stillWas`) moved and scaled to the view, by whole pixels when not
+scaled, and what it placed (labels, marks, rings, the home ring) is moved
+the same way, so hover and clicks land on what is on the screen. It is
+drawn anew 120 ms after the view stops; at once when a drag is let go,
+when a move gets there, when the view jumps, and when anything else it
+is drawn from changes; and while the view moves on, once the moved
+drawing would be scaled outside 0.8 to 1.5 times, or leave more than 5 %
+of the screen's shorter side bare. (At 0.8 the screen's outer third keeps
+about 0.6 of its light; at the 0.67 a review asked for, 0.38.) Measured
+on 2026-11-13, headless, 1440 by 900, mean ms between radar frames,
+before and after: the static layer redrawn at 250 nm, Chromium 1x 383 to
+70 and WebKit 1x 42 to 20; a drag at 40 nm, 83 to 17 and 19 to 10;
+following at 10 nm, Chromium 2x 367 to 53 and WebKit 2x 97 to 11. A fast
+drag (15 px a frame) is drawn anew about every second frame: WebKit holds
+16.7 ms, software Chromium at 2x falls to 113. WebKit is what the window
+uses, so that was accepted.
+
+**What is off the screen is not drawn, and what has not changed is not
+reckoned again** (2026-11-13, Task 5b). A chevron, a tail segment or a
+tag wholly off the screen is left out; a tag is given its own width of
+margin (one em a letter until it is measured), and its box and glow.
+Aircraft off the screen stay in the hits, without a tag. Each tail's
+points are kept in nm until the projection or the trail changes, so a
+view moving every frame projects nothing again. Chevrons of a colour are
+one path for each strength. Tails are still stroked a segment at a time:
+batching runs of equal strength saved WebKit a fifth at 600 s tails and
+changed 0.7 % of the picture, so it was dropped. Measured, median ms a
+frame, 600 aircraft with 600 s tails, CRT, headless: at 250 nm, where
+nothing is culled, Chromium 1x 49 to 55 and WebKit 1x 24 to 23 (Chromium's
+shell pays by the pixel for the glow and the tails, which this did not
+touch); at 40 nm, where most is off the screen, Chromium 1x 31 to 22 and
+WebKit 1x 20 to 6.
+
+**The render scale** (2026-11-13, decision 6). The owner asked for
+anti-aliasing as a setting, but Canvas 2D has no switch for it on lines,
+so `aa` is the resolution the canvases are drawn at: OFF half the
+display's, scaled up stepped (`image-rendering: pixelated`), ON the
+display's own, SUPER twice, scaled down by the browser. `theme.js`
+`renderScale()` gives 0.5, 1 or 2; every radar canvas, the feed traces
+and the boot's canvas are `devicePixelRatio × renderScale()` pixels to a
+CSS pixel. `size()` returns that ratio, and pointer and hit maths take it
+from there and never from `devicePixelRatio`, so the scale reaches them.
+**No radar canvas is over 8 megapixels:** SUPER on a 2x display gives 4
+pixels to a point, and at 1440 by 900 five canvases of some 9.6 million
+each. Where the ratio would make one so, it is cut, the same both ways,
+to the ratio that comes to 8 million, and `size()` returns the ratio cut
+(3.645 at that size), so everything drawn by it follows.
+
+**The page's zoom and the canvas** (2026-11-13). Under CSS `zoom` on
+`.page` (`ui_zoom`), the engines disagree: Chromium's
+`getBoundingClientRect` gives the canvas's box as zoomed, WebKit's as
+not, while `clientX` is the window's in both. `view.js` exports
+`cssZoomFix(canvas, box)`, the zoom over the canvas (the product of every
+ancestor's computed `zoom`) over how much of it the box already has: 1 in
+Chromium, the zoom in WebKit. The pointer is `(clientX / k − box.left) ×
+canvas.width / box.width`, and `size()` sizes the backing store from the
+box times `k`, so the radar is as sharp and a click lands at any zoom in
+both. The data box is placed in the canvas's own CSS pixels
+(`offsetWidth`), which need no fix. The tracks pane does the like for its
+grip and its COLUMNS popover. KCGX.app's own WKWebView zoom is separate
+and not used.
 
 **The radar fills its screen** (decided 2026-10-19). The top row of the
 wall (radar, status, frequencies) has a set height: the window's, less the
@@ -734,6 +1242,10 @@ opens in the default layout. The page fits any window from 640 px high,
 in all four; below 1100 px wide it is one column in the order radar,
 airport, frequencies, lamps, tracks, teletype. No two screens overlap in
 any of them, which the browser tests hold at five sizes by four layouts.
+Since 2026-11-13 (decision 18) the tracks row is `--tracks-row`, which
+`tracks.js` sets from `tracks_pct` and `tracks_open` (see the table under
+Radar), so the radar is what the tracks pane leaves, and is never under
+48 px.
 
 The radar pans by dragging and zooms with the wheel about the pointer,
 from a quarter (160 nm across the shorter side) to six times; a RECENTRE
@@ -772,12 +1284,65 @@ wheel runs from **2.5 nm**, the closer zoom the owner asked for, out to
 * **A new range resets the view on every open page**, since the range is
   the server's and the view is drawn from it.
 
+Changed 2026-11-13 (phase G):
+
+* **The wheel closes in to 0.25 nm** (decision 14), from 2.5, near enough
+  for a runway to fill the screen. The ring steps gained 0.05, 0.1 and
+  0.2 nm, so at 0.25 nm five rings still lie between the airport and the
+  nearer edge. The home ring keeps its 24 to 64 px.
+* **The view moves** (decision 21). `goTo` eases the view in and out
+  (cubic, the distance on a log scale) over `view_ease`'s time: OFF 0,
+  QUICK 250 ms, SMOOTH 600 ms. (Decision 10 said 400 ms; decision 21's
+  three settings replaced it.) A wheel or a drag ends a move, and reduced
+  motion makes every move a jump. `zoom_speed` scales the wheel's rate,
+  25 to 400 % of phase F's. The view's moves are centring a place,
+  focusing an aircraft and coming back, and following.
+* **A ring number gives way to the airport's name, boxed or not**
+  (decided by the owner at Task 10's review), reversing phase F's "bare
+  labels may cross" for ring numbers and the home name only; other
+  places are as before. At the default 40 nm view, the 10's number is
+  left off.
+
 **Labels never overlap.** Places are labelled in priority order (the home
 airport, then peaks, large airports, VORs, medium airports and cities by
 Natural Earth's rank, then state names) and a label that would overlap one
 already placed is left off, its symbol kept. Navaids on screen are the VOR
 family; small airports appear from 1.5 times zoom (since 2026-11-12: from
 a 27 nm view inwards, which is the same thing at the 40 nm range).
+
+**Labels follow the zoom** (2026-11-13, decision 13). The owner asked for
+a minimum, a maximum and a default size. Each layer's default is its
+`label` in the map table (the tags', `tag_px`), and it is the size at the
+view the range sets. A view k times closer makes it `k^0.35` times as
+big, a view further out smaller the same way, held between `label_min`
+(9 px) and `label_max` (26 px): `labelPx(base) = clamp(min(label_min,
+base), base × (range / view)^0.35, max(label_max, base))`. The bounds
+widen to take in a default outside them, so the range's view always
+shows a label at its own size: the home airport's name is 30 px, over
+the ceiling. Every still label and every tag goes through it.
+
+**Map layers by setting** (2026-11-13, Task 10). Every map line, the
+rings, the runways, the home airport, places and state names are drawn
+from their row of `prefs.map`: shown or not (a hidden row counts 0 in
+`debug().layers`), a strength that scales each part from its old alpha,
+a line pattern, a width and a label size. The default table draws the
+map as it was: the five dashed layers keep their old patterns as their
+default line's, since DASH as `5w 5w` and DOT as `w 3w` alone would
+have changed 11.6 % of Chromium's pixels, the airways most. A line piece
+wholly off the screen is left out, and each segment kept is cut to a
+margin rectangle (Liang–Barsky), starting its dash a phase back so the
+dashes fall where the whole line's would: Chromium stopped dashing an
+airway whose segments ran tens of thousands of px off the screen at
+0.25 nm, and drew it solid.
+
+**Runways close in** (decision 14). A runway whose true width on the
+screen is wider than its row's line is a filled quadrilateral that wide,
+and never narrower than the line. The width is OurAirports' `width_ft`,
+which `tools/build_geodata.py` keeps as a runway's fifth element since
+2026-11-13 and `geodata` passes on, or 150 ft where the map has none.
+**The map that ships has none:** `geo.json.gz` has not been rebuilt with
+widths (the rebuild needs the network), so every runway is drawn 150 ft
+wide until it is. A map with widths and one without both draw.
 
 **How a label box is painted and placed** (2026-11-12; the setting is
 under Visual language). Both radar layers are light added to light, so
@@ -799,6 +1364,18 @@ every chevron before any tag, so an aircraft under another's tag or box
 is still the one focused. The map that ships names no states, so STATES
 has nothing to box until one does.
 
+*Changed 2026-11-13 (phase G decision 8, Task 11):* a flight tag's box is
+no longer painted between the static layer and the moving one. Tags and
+their boxes are on the tags' layer, over both, each box and then its
+letters, at its aircraft's own alpha as before. Unboxed tags' letters
+glow a colour at a time from the bare canvas, clipped to that colour's
+tags; a boxed tag's letters glow one tag at a time, after its own box,
+so a box never hides its own glow and is cut only by the boxes above it.
+(A glow per tag through the bare canvas cost 105 to 420 ms a frame for
+300 tags, and was not used.) A tag whose box is filled now takes the
+click over the chevrons it covers; see "What a click is on" under Visual
+language.
+
 ### Display effects
 
 The film's screens were vector displays, and the effects that make the
@@ -810,7 +1387,7 @@ default**:
 
 | `display` | What it adds |
 |---|---|
-| `off` | nothing; glow alone, per the `glow` setting |
+| `off` | nothing; glow alone, per the `glow` setting (the three glow numbers since 2026-11-13) |
 | `vector` | flicker, jitter, line draw on, phosphor persistence, vignette |
 | `crt` | everything in `vector`, plus scanlines, rounded screen corners and a slight colour fringe on the radar |
 
@@ -845,9 +1422,26 @@ The values below are the mockup's, and are the starting point:
 **Where each effect is done.** Phase D does them without WebGL. Glow is
 Canvas 2D's own shadow blur with additive blending, the same on the radar
 as on the traces. (Since 2026-11-12 the aircraft take theirs as one
-shadow for each colour, not one for each stroke; see Rendering.) Persistence is a separate layer for the moving things
+shadow for each colour, not one for each stroke, and since 2026-11-13 the
+map does too; see Rendering.) Persistence is a separate layer for the moving things
 that fades by 45% a frame instead of being cleared, in `vector` and `crt`
-only. Line draw on traces the coastlines, lakes, rivers and borders over
+only.
+
+**Burn-in is by time** (2026-11-13, decision 15). A fade of 45 % a frame
+is a different afterglow at 60 and 120 Hz, and with a frame rate cap it
+would change with the setting. `burn_in` is now the fade's half-life in
+ms (0 to 100), and each frame takes `1 − 0.5^(elapsed / burn_in)` of what
+is there. The default, 19, is phase F's look at 60 Hz (0.55 left after
+16.7 ms is a half-life of 19.3 ms); 0 clears every frame, as do display
+OFF and reduced motion. "Elapsed" is the mean of the last 30 frame
+intervals, to the half ms, not each frame's own: headless WebKit's frames
+came 10 and 20 ms apart in turn, and a fade that changed every frame made
+a still picture's edges shimmer. A gap over 100 ms (a hidden tab, a long
+frame) clears the layer, since what is on it is of where the traffic was
+then, and is left out of the mean; a new `fps_max` starts the mean again.
+Measured at the default: 19.2 ms at 60 frames a second and 18.9 at 30 in
+Chromium, 17 to 20 in WebKit. The boot animation's canvas fades the same
+way. Line draw on traces the coastlines, lakes, rivers and borders over
 two seconds when an airport's map arrives. Flicker, jitter, vignette,
 scanlines, corners and the colour fringe are CSS, as they already were for
 every other screen: an overlay element per screen, with `pointer-events:
@@ -878,6 +1472,53 @@ in the dim colour with a block in cyan, the dropdown is square with an
 arrow in the text's colour, and they are the same in both engines. The
 sliders lost their filled part in Chromium by it, so a value reads by the
 thumb's place and the number beside it.
+
+### The boot animation
+
+Decided and built 2026-11-13 (phase G decision 1, Task 14). The owner's
+list asked for the cockpit to boot with his Vector Cockpit drawing, in
+the last palette, and then fade in and boot normally.
+
+**What it is.** The drawing was a React component inside a design tool's
+runtime (`Vector Cockpit Drawing/vector-scene.jsx`, which fetches React
+and Babel from unpkg). `boot-scene.js` ports it to a 2D canvas, citing
+its lines: the path data, the six scenes (Draw, Takeoff, Turn, Tower,
+Lights, Outro) as one pure `frame(ctx, T, colours, options)`, the
+engine's clamp, its three easings and its time warp (Lights plays 5
+authored seconds over 5.5, Outro 5 over 4), 21.7 s in all. Draw-on is a
+dash of each path's length, measured once from a detached
+`SVGPathElement`; KCGX on the tower is `strokeText` in `--font-display`
+once the fonts are in. Its colours are the page's palette: wall, cyan,
+dim, pink, blue, white and amber for the drawing's own, and the runway
+edges in `--alarm`, or `--frame` in AMBER and MATRIX, where the alarm
+colour is white and broke the one-colour picture. Left out: its four
+ghost renders (the canvas fades by `burn_in` instead), its motion blur,
+its 24 fps step, its two-blur glow filter and its own phosphor palettes;
+its scanlines and vignette are the page's `.ovl` over the cover. The
+folder stays out of the repo (decision 22).
+
+**Once a launch, whole, and skippable.** It plays on the first cockpit
+page the server welcomes after it starts (`boot` in the snapshot; see
+Transport), not on a reload, a second tab or the window reopened. Any key
+(not a modifier alone) or press skips it at once. `boot_anim` turns it
+off and reduced motion skips it. The page under it connects and fills in
+while it plays, so skipping lands on a live cockpit, and the radar is
+drawing beneath it before it fades. It plays on `frames.js` at `fps_max`
+and `renderScale()`, glows by `glow_map` (a shadow on each stroke in
+WebKit; in Chromium, which has canvas filters, a blurred copy at half
+the CSS pixels under the sharp scene), and fades out over 600 ms as the
+page fades in.
+
+**The first paint is black.** `<html data-booting>` holds `.page`, every
+dialog and its backdrop at opacity 0 from the first paint, so the
+default palette never flashes before the server's prefs are in. The
+first snapshot, or 1.5 s without one, decides once, from its `boot &&
+boot_anim` and reduced motion; a later prefs frame changes nothing. A
+3 s fallback in `index.html`'s head takes `data-booting` off should
+nothing decide (`main.js` failed to load), so an error is never a black
+window. What waits for the boot, such as the airport search a `#airport`
+link opens, runs once the cover has gone (`afterBoot`). Done, the cover
+gives its canvases' backing stores back.
 
 ### Map data
 
@@ -918,6 +1559,13 @@ every coastline is drawn cyan; country borders are green and dashed, the
 The home airport's runways are drawn as white lines inside its ring at
 close zoom, which is the stills' base outlines put to honest use.
 
+Since 2026-11-13 (phase G Task 10) the build keeps OurAirports'
+`width_ft` as a runway's fifth element where the row has one, for the
+radar to draw runways at their true width close in. **The committed map
+has not been rebuilt with it**, since the rebuild fetches OurAirports
+and the lane could not; that is owed, and until it is done runways are
+drawn 150 ft wide. The old map loads and draws as it did.
+
 ### Every action is a click
 
 Decided 2026-10-19: **the page never needs a keyboard, and never asks for
@@ -945,6 +1593,24 @@ controls are fewer:
 * **RECENTRE is gone; a double click on the radar recentres it**
   (decision 3). It is the one action on the page with no visible control,
   which the list chose; the canvas's label for a screen reader says it.
+
+Changed 2026-11-13 (phase G). The rule stands; the controls moved:
+
+* **A feed row is one button.** M and S are gone; a click anywhere on a
+  compact row picks that feed, and the expanded row, the one playing, is
+  not a button. The master mute is a button at the top of the
+  frequencies screen, beside the volume.
+* **The tracks pane has its own controls**, in its title bar: CLEAR (the
+  filters), COLUMNS (a checklist) and a fold button, each with an
+  `aria-label` or its word, and a grip along its top edge, a
+  `separator` that takes the arrow keys, Page Up and Down, Home and End,
+  as a slider does. Its headers sort, as before.
+* **A click on a place centres it**, and a click on an aircraft also
+  takes the view to it. Like the double click, neither has a control of
+  its own; the canvas's label still names the double click.
+* **Any key skips the boot animation.** That is the one time a key does
+  something no control does, and it does nothing a click would not:
+  the boot listens for any key or any press, and goes.
 
 **There are no keyboard shortcuts**, which also removes the feed selection
 the terminal needed for them: every control acts on its own row, so there
@@ -1168,6 +1834,13 @@ src/kcgx/prefs.py             rewritten in F: one schema for all fourteen settin
 macos/KCGXWindow.swift        new in F: KCGX.app, one WKWebView window on the local server
 macos/Info.plist.in           new in F: bundle metadata, the kcgx: scheme
 macos/build.sh                new in F: swiftc, the bundle, an ad hoc signature
+src/kcgx/names.py             new in G: feed titles without the airport
+src/kcgx/web/static/js/radar/ new in G: radar.js as index, still, moving, view, draw, info
+src/kcgx/web/static/js/frames.js       new in G: the one frame clock, capped by fps_max
+src/kcgx/web/static/js/columns.js      new in G: every tracks column, for the table and the data box
+src/kcgx/web/static/js/boot.js         new in G: the boot's cover, playback, skip and fade
+src/kcgx/web/static/js/boot-scene.js   new in G: the Vector Cockpit drawing, ported
+src/kcgx/web/static/fonts/    + IBM Plex Mono, JetBrains Mono, VT323 in G, each with its OFL
 ```
 
 Phase F (2026-11-12) otherwise changed files that were there: the page
@@ -1177,6 +1850,16 @@ Phase F (2026-11-12) otherwise changed files that were there: the page
 `setup.sh` and `squelch/config.py`. It deleted no file: what went (the
 page's feeds sheet, the PALETTE and RECENTRE buttons, LIMITS,
 `radar_range_nm`) went from inside files that stayed.
+
+Phase G (2026-11-13) otherwise changed `prefs.py` (the table kind and
+forty new keys), `protocol.py`, `station.py`, `hub.py`, `server.py`,
+`radar.py`, `demo.py`, `geodata.py`, `squelch/cockpit.py`,
+`squelch/mixer.py`, `squelch/config.py` (which no longer has
+`radar_refresh_secs`), `tools/build_geodata.py`, and the page
+(`index.html`, `cockpit.css`, `main.js`, `sheets.js`, `store.js`,
+`theme.js`, `status.js`, `stack.js`, `tracks.js`, `connection.js`). It
+deleted one file, `radar.js`, which became `radar/`. `geo.json.gz` is
+unchanged.
 
 Removed in phase E, with their tests: `bin/kcgx`'s tmux logic,
 `bin/kcgx-no-radar`, `kcgx.tmux.conf`, the whole terminal app
@@ -1261,6 +1944,25 @@ all of that code.
   `tests/test_page_prefs.py` needs no browser: it parses `index.html` and
   holds each `[data-pref]` control to `kcgx.prefs.SCHEMA`, which is what
   stops the page and the server drifting apart.
+  Phase G (2026-11-13) split the page's tests by the part of the page they
+  cover, so that six worktrees could add to them at once: `test_page_audio.py`,
+  `_tracks`, `_chrome`, `_map`, `_traffic`, `_seams` (the shared module
+  contracts) and `test_boot.py`, all on fixtures in
+  `tests/page_fixtures.py`. They hold, in both engines: one expanded feed
+  and a click that picks; the tabs, the map grid and a cell reaching a
+  second tab; UI zoom with a click still landing on a chevron; columns,
+  filters, the sticky header, the grip and the fold; the map's styles
+  against a pinned picture of the old one, labels by zoom, the 0.25 nm
+  wheel, a drag moving the map and drawing it anew; tags over a trail,
+  tails by time and speed, the parked fade, the sort's shading, the
+  frame cap, the render scale and the burn-in's half-life; the boot's
+  black first paint, its one play per launch, its skip and its palette.
+  `test_page_prefs.py` now checks the table's rows, columns, ranges and
+  names too, and that each control sits in its tab. `test_names.py`
+  holds the feed titles. The page fixture starts each test with
+  `boot_anim` off, the sort's shading at 100 % and parked traffic shown,
+  so the older pixel tests see the picture they were written for.
+  About 2,150 tests; about 26 minutes.
 * **The window.** Built in phase F as `tests/test_window.py`. No test
   reaches Swift through a window. One kind reaches the program: on a Mac
   with `swiftc` the real app is built into the test's own folder, checked
@@ -1294,6 +1996,7 @@ all of that code.
 | **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata, radar and browser tests; manual check at a busy airport |
 | **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | launcher, self check and setup tests; a fresh `./setup.sh` and `kcgx` on the Mac |
 | **F** | The 11/12 tweaks (density, icons, every setting in CONFIG, range to 250 nm, zoom to 2.5, flight tags, label boxes); the page in WebKit; KCGX.app (2026-11-12) | prefs, page and window tests in Chromium and WebKit; by hand on the Mac, against real feeds and with the window open, **still owed** |
+| **G** | The second 11/12 list (2026-11-13): the boot animation; CONFIG full-screen in four tabs, the table kind and forty new settings; one feed at a time, a master mute, titles without the airport; the tracks table's columns, filters, sort, header, height and fold; map layers by setting, labels by zoom, 0.25 nm and runways, click to centre, follow and the data box, tags over everything, tails by time and speed, parked traffic, the sort's shading; the radar split in four on one frame clock, glow per colour on the map, culling, burn-in by time, the render scale | page and Python tests in Chromium and WebKit, six lanes merged one by one with the whole suite after each. **Still owed:** the map rebuilt with runway widths; adsb.lol's OpenAPI document read for the fields `/v2/point` promises; by hand on the Mac, real feeds at KORD (titles, picking while one is parked, the master mute), real traffic at KPDX (parked fading, follow at 10 nm, 0.25 nm on the runways), and the boot and UI zoom in KCGX.app |
 
 A comes first because it is the only phase that touches working code, and it
 leaves the terminal cockpit intact. B through D add new files alongside the
@@ -1324,7 +2027,14 @@ the terminal cockpit is tagged `terminal-cockpit`.
 * **adsb.lol refused.** Last good picture, backoff, as above. The radar's
   corner reads `ERR 429, PICTURE 45S OLD`, the RADAR lamp turns amber (red
   orange if there is no picture at all), and the tracks table says the
-  radar is not answering when it has nothing to show.
+  radar is not answering when it has nothing to show. Since 2026-11-13
+  the corner's first line is the poll, in words: `ERR 429, PICTURE 45
+  SECONDS OLD`, and when all is well `5 SECONDS AGO`, with the range
+  under it.
+* **The boot cannot decide** (2026-11-13). No snapshot in 1.5 s plays no
+  animation and shows the page; `main.js` failing before the boot
+  decides is caught by `index.html`'s 3 s fallback; a frame of the scene
+  that throws is written to the console once and the cover still leaves.
 
 ## Open questions
 
@@ -1355,13 +2065,27 @@ the terminal cockpit is tagged `terminal-cockpit`.
    pressed button is the palette's pink, which in AMBER, MATRIX and MONO
    is within a shade of the text's colour, so only its border changes.
    CONFIG now has 26 such buttons. Older than phase F; for the owner's
-   eye.
+   eye. Since 2026-11-13 it has many more, and the tabs are pressed
+   buttons too.
 7. **Tags that overlap** (raised 2026-11-12). Flight tags are not placed
    around one another, and with many fields or a 250 nm picture they pile
    up. Decluttering was left out of phase F until real traffic at 250 nm
-   has been looked at.
+   has been looked at. Phase G left it out too; tags now go over
+   everything, so a boxed tag hides what is under it, map and traffic
+   alike, and the sort decides which is on top.
 8. **Should the config sheet be modal?** (raised 2026-11-12). It has no
    backdrop, so the page behind looks live, but it takes no clicks and a
    click outside does not close the sheet. A click outside closing it, or
    a sheet that is not modal so the radar can be panned while settings
-   change, are both open.
+   change, are both open. *Settled 2026-11-13 (decision 2):* the list
+   asked for it full-screen and centred, so it covers the page over an
+   85 % backdrop and is plainly modal. What is lost is watching a change
+   on the radar while it is made.
+9. **Parked traffic by altitude above sea level** (raised 2026-11-13).
+   The airport dataset has no elevations, so `ground_alt` is above sea
+   level and at a high field only 0 (`GND` alone) is safe. Field
+   elevation (`elevation_ft` in `airports.csv`, and a rebuild) would fix
+   it.
+10. **Filters on the radar?** (raised 2026-11-13). Filters hide rows only
+    (decision 4). A setting to dim on the radar what the filters hide, and
+    filters remembered across a reload, were both left out.

@@ -5,11 +5,12 @@ own on a Mac or in your browser, named for Meigs Field — the Chicago
 lakefront strip that a generation of flight-sim pilots took off from,
 bulldozed in the middle of the night in 2003.
 
-It plays **every** ATC feed an airport publishes at once, one metered row
-each, beside its own vector radar of the traffic around the field, on a
-page drawn like the NORAD wall in *WarGames*. Everything runs on your own
-machine: a small local server plays the audio and polls the radar, and the
-page at `http://127.0.0.1:8473/` is the display and the controls.
+It opens **every** ATC feed an airport publishes, one metered row each,
+and plays the one you pick, beside its own vector radar of the traffic
+around the field, on a page drawn like the NORAD wall in *WarGames*.
+Everything runs on your own machine: a small local server plays the audio
+and polls the radar, and the page at `http://127.0.0.1:8473/` is the
+display and the controls.
 
 ```
 kcgx              # start the cockpit if it is not running, and open it
@@ -255,11 +256,12 @@ Quit in the window. Each stops every feed and the server; the page says
 COCKPIT SHUT DOWN.
 
 **The demo** (`kcgx --demo`, or `kcgx-web --demo`) runs synthetic feeds that
-meter, chatter, reconnect and park like real ones, and a dozen aircraft on
+meter, chatter, reconnect and park like real ones, a dozen aircraft on
 fixed paths around whatever airport is open (fewer of them at a short
-range), one of which squawks 7600 for a minute in every five. No network, no `ffmpeg`, no audio, and nothing is
-remembered. It is what the tests run against, and a way to look at the page
-anywhere.
+range), one of which squawks 7600 for a minute in every five, and two
+more parked at the field from the start. No network, no `ffmpeg`, no
+audio, and nothing is remembered. It is what the tests run against, and
+a way to look at the page anywhere.
 
 **`kcgx-web`** is the server itself, in the foreground: `kcgx-web [--port
 8473] [--icao KPDX] [--demo]`, Ctrl-C to stop. `kcgx-web --refresh-feeds
@@ -270,15 +272,36 @@ another host or come from another site's page.
 
 ## The cockpit
 
+**It boots with a drawing** (since 2026-11-13). The first cockpit page the
+server shows after it starts plays the Vector Cockpit animation over the
+whole window: the runway and the skyline drawn on, a takeoff and a turn,
+the tower with KCGX on its face, and its lights, 21.7 s in all, in the
+theme you last chose. The page connects and fills in underneath it, then
+fades in over 0.6 s as the drawing fades out. Any key or click skips it
+at once (Shift and the other modifier keys alone do not), and lands on a
+cockpit already live. It plays once a launch: a reload, a second tab or
+the window reopened does not play it again. BOOT ANIMATION in CONFIG
+turns it off, and reduced motion in your system settings skips it. Until
+the server's settings arrive (1.5 s at most) the page is black, rather
+than drawn in the default theme first.
+
 The page is a wall of framed screens with their names along the bottom:
 
 | Screen | Shows |
 |---|---|
 | TRAFFIC | the radar (see [The radar](#the-radar)) |
 | the airport (it has no title) | the ICAO, Zulu and your local time, the airport's name and place, and a search icon, bottom right, that opens CHANGE AIRPORT |
-| FREQUENCIES | every feed, with a trace of its level; it runs the full height of the right column |
-| TRACKS | the traffic table: callsign, type, altitude, speed, track, distance, squawk |
+| FREQUENCIES | every feed, the one you hear with a trace of its level, and the master mute and volume at the top; it runs the full height of the right column |
+| TRACKS | the traffic table: the columns you choose, filtered and sorted as you like; drag its top edge to resize it, or fold it away |
 | TELETYPE | the message log, typed out; **off until you turn it on** in CONFIG |
+
+The clocks are 24-hour by default, Zulu and local both. CLOCKS in CONFIG
+gives 12-hour local time (`3:07 PM`), seconds on both, and the zone's
+name or not.
+
+The airport search (CHANGE AIRPORT) is 840 px wide, or the window less
+32 px, and keeps its height whatever it finds; the results scroll inside
+it.
 
 The page was tightened on 2026-11-12: less padding round everything, and
 two parts that are shown only when asked for, both under LAYOUT in CONFIG.
@@ -308,33 +331,84 @@ reader. FEEDS and PALETTE left the header on 2026-11-12: every feed an
 airport publishes opens at launch already, and the palette is THEME in
 CONFIG. Tab, Enter, Space and Escape work as they do on any page.
 
-**The feed stack.** An audible feed is an expanded row: its name, an
-oscilloscope trace of its level, **M** (mute; lit when muted) and **S**
-(solo; lit when soloed, press again to restore the mix), and its chatter
-figure, a percentage (`27%`). A muted feed is one compact line, and
-clicking it unmutes it. Every feed meters whether or not you can hear it.
+**The feed stack plays one feed at a time** (since 2026-11-13). Every feed
+the airport publishes is a row, and you hear one of them, like the
+buttons of a radio. The feed you hear is the expanded row at the top: its
+title, its chatter figure, a percentage (`27%`), and its state glyph, left
+to right, over an oscilloscope trace of its level 60 px tall. Every other
+feed is one compact line, and a click anywhere on it picks it: it becomes
+the one you hear, and the one you heard goes quiet. A click on the feed
+already playing does nothing. The M and S buttons, and the word CHATTER,
+went on 2026-11-13. Every feed meters whether or not you hear it.
 
-Audible feeds sit at the top. Everything below is ordered by how busy it
-has been over the last five minutes — the fraction of that window spent
-above `activity_threshold_dbfs`. A new order is applied only once it has
-held for fifteen seconds and the pointer has been off the stack for two,
-because a row that moves while you reach for it silences the wrong
-frequency. Muting and unmuting move the row at once.
+**The master mute and volume** are at the top of the pane, where the line
+counting feeds used to be: a speaker button, crossed when muted, then
+the volume slider and its figure. The mute silences the output and keeps
+the feed you picked and the volume as they were. Neither is in CONFIG:
+they are the audio's state, which the server keeps while it runs and
+every tab shows alike. The volume starts at `master_volume` in
+`squelch.toml`, and the cockpit starts unmuted.
+
+**Titles leave out the airport** (since 2026-11-13). LiveATC names feeds
+`KPDX Tower (Both)` or `Chicago Approach (10R/28C)`; the stack shows
+`Tower (Both)` and `Approach (10R/28C)`. The airport's city and the start
+of its name (`Chicago O'Hare`, `Seattle–Tacoma`) go in any case, and its
+ICAO and IATA codes in capitals only, since many codes are words (`LAS`,
+`SAN`); each only as whole words, wherever it is in the title. A centre
+named for another city keeps it (`ZSE Seattle Center` at KPDX), and a
+title that would be left empty stays whole. DROP THE AIRPORT FROM NAMES,
+under FREQUENCIES in CONFIG, turns it off.
+
+The feed you hear sits at the top. Everything below is ordered by how
+busy it has been over the last five minutes — the fraction of that window
+spent above `activity_threshold_dbfs`. A new order is applied only once
+it has held for fifteen seconds and the pointer has been off the stack
+for two, because a row that moves while you reach for it picks the wrong
+frequency. Picking a feed moves the rows at once.
 
 **LiveATC streams seven feeds at once from one address.** Past that the
-quietest muted feeds are parked (dark lamp, `‖`); unmute one and the
-quietest muted feed gives up its place.
+quietest feeds are parked (dark lamp, `‖`); pick a parked one and it
+starts, and the quietest of the others gives up its place.
+
+**The tracks table** (since 2026-11-13). COLUMNS, in its title bar, opens
+a checklist of seventeen columns: callsign, type, registration, altitude,
+vertical speed, ground speed, track, distance, bearing, squawk, the hex
+code, the type's description, the operator, the category, the age of the
+position, latitude and longitude. The default is the seven it always had.
+The last column shown cannot be unchecked. Under the header is a row of
+filters: a text column matches any part of what you type, in any case; a
+number column takes a MIN and a MAX, either left empty (ALT reads `GND`
+as 0, and an aircraft that does not report a figure is left out once a
+bound is set). CLEAR empties them. Filters are this tab's alone and go
+with a reload; they hide rows and never touch the radar.
+
+Click a header to sort by it, and again to reverse it. The sort is a
+setting, so every tab sorts alike, and it **shades the radar**: the
+table's first row is drawn at full strength and on top, the last at
+DIMMEST (RADAR), 40 % unless you change it, and the rest in between, in
+the order of the whole sort, filtered rows included. Sorted by a column
+that is not shown, the title bar says so (`SORT GS KT ▼`). The header and the
+filter row stay put while the table scrolls.
+
+**Drag the top edge of TRACKS** to make it taller or shorter, from 10 % of
+the page to 80 % (at least its header and two rows, and never so tall the
+radar goes); the radar takes what is left. On the edge, the arrow keys
+move it by 2 %, Page Up and Page Down by 10 %, and Escape during a drag
+puts it back. The chevron in its title bar folds the pane to its title
+bar, and the radar takes the room. Both are remembered. Under 1100 px
+wide there is no edge to drag, and folding still works.
 
 **The focused track leads the table.** Click an aircraft on the radar, or
 its callsign in TRACKS, and its row moves to the top of the table, a fifth
-larger in every cell, with the rest dimmed; sorting orders the others
-beneath it. Click again and it goes back to its place.
+larger in every cell, with the rest dimmed, whatever the filters say;
+sorting orders the others beneath it. The radar goes to it and follows it
+(see [The radar](#the-radar)). Click again and it goes back to its place.
 
-**Every setting is remembered.** The theme, glow (off, low, full), display
-(off; vector, with flicker and jitter; CRT, adding scanlines and rounded
+**Every setting is remembered.** The theme, the glow, the display (off;
+vector, with flicker and jitter; CRT, adding scanlines and rounded
 screens) and everything else in CONFIG are kept by the server, so every
 tab, the window and every start agree. Reduced motion in your system
-settings turns off every animation.
+settings turns off every animation, the boot's included.
 
 ## The radar
 
@@ -346,36 +420,95 @@ range fits the shorter side of the screen; the longer side shows more map.
 - **The range** is how far out traffic is asked for: 40 nm unless you
   change it, and anything from 10 to 250 nm on CONFIG's RANGE slider. 250
   is the most adsb.lol will answer for. The range's own ring is drawn
-  bright and the readout in the radar's corner names it (`RNG 40 NM`). A
-  new range resets the view to it.
+  bright. A new range resets the view to it.
+- **The readouts** in the radar's top left corner are, since 2026-11-13,
+  how long ago the radar was polled, in words (`5 SECONDS AGO`), and
+  under it the range (`RNG 40 NM`). Top right is the number of aircraft
+  drawn (`12 TRACKS`).
 - **Aircraft** are chevrons along their track, each with a flight tag and
-  a trail that fades from the arrow back. Positions are dead reckoned
-  between polls, an aircraft fades after 30 s without a position and drops
-  at `radar_stale_secs`, and one with no callsign is `UNK1`, `UNK2` in
+  a tail. Positions are dead reckoned between polls (AIRCRAFT MOTION
+  GLIDE; STEP leaves each where it was last reported until the next
+  poll), an aircraft fades after 30 s without a position and drops at
+  `radar_stale_secs`, and one with no callsign is `UNK1`, `UNK2` in
   order of first sighting. An emergency squawk turns it red orange and
   adds one line to the teletype.
+- **Tails** are where the aircraft has been in the last TAIL LENGTH
+  seconds (180 unless you change it, up to 600; 0 draws none), so a
+  tail is as long in time at any poll rate. They fade from the chevron
+  back as before, and how bright they start goes by ground speed: TAIL
+  SLOW (35 %) under SLOW BELOW (40 kt), TAIL FAST (95 %) over FAST ABOVE
+  (250 kt), and TAIL DEFAULT (95 %) between, or when the speed is not
+  reported. Ten minutes of each aircraft's positions are kept whatever
+  the setting, so a longer tail shows its history at once.
 - **The flight tag** shows the fields chosen under FLIGHT TAG in CONFIG:
   callsign, type, squawk, altitude, ground speed, track and distance. With
   two or fewer it is one line, and the default, callsign and altitude, is
   `ASA412 6200`. With more it is two: who it is over what it is doing,
   `ASA412 B39M 4512` over `3100 230KT 270° 11.0NM`. What an aircraft does
   not report is left out, and with no field chosen there is no tag, only
-  the chevron.
+  the chevron. **Tags are drawn over everything** (since 2026-11-13): over
+  the map, other aircraft and other tails, with a boxed tag's box first,
+  so a line crossing a tag no longer brightens its letters. The tag
+  ranked first by the table's sort is on top, and the focused one above
+  all. TAG SIZE sets the size at the range's view (16 px).
+- **Parked traffic fades** (since 2026-11-13). An aircraft is parked
+  while its ground speed is under BELOW SPEED (5 kt) and it reports `GND`,
+  or an altitude under BELOW ALTITUDE (0 ft unless you set it, so `GND`
+  alone counts). After AFTER minutes (2) parked, it is drawn at FADE TO
+  (25 %), chevron, tail and tag, under PARKED TRAFFIC's FADE; HIDE leaves
+  it off the radar, and SHOW changes nothing. The altitude is above sea
+  level, so at a high field leave BELOW ALTITUDE at 0. The server keeps
+  the count, so every tab agrees and a reload does not restart it. The
+  focused aircraft is never faded or hidden, and the table is not
+  affected: its filters are for that.
 - **Click an aircraft** (arrow, trail or tag) to focus it: it turns pink
-  with a ring and the rest dim, and its row leads the TRACKS table. Click
-  again to restore them.
+  with a ring and the rest dim, and its row leads the TRACKS table.
+  Since 2026-11-13 the radar also goes to it, 10 nm from it to the nearer
+  edge (FOLLOW RADIUS), and follows it. The wheel zooms about it and keeps
+  following; a drag stops the following and keeps the focus. Click it
+  again and the view goes back to where it was before (unless you have
+  dragged it, or centred a place, since). Where a tag with a filled box lies over another
+  aircraft's chevron, the click is the tag's: you click what you see.
+- **The data box** sits beside the focused aircraft, to its left, or to
+  its right and below it when the left would leave the radar: one line
+  for each column the tracks table shows, in the table's order, name and
+  value (`ALT FT: 6200`). It follows the aircraft, hides while the
+  aircraft is off the screen, and is always on a box, at least 80 %
+  black. DATA BOX in CONFIG turns it off.
+- **Click a place** (an airport, a navaid, a city, a peak, a state's
+  name, or the home ring) and the view eases to centre it, at the same
+  zoom. Lines (coasts, airspace, airways) are not places.
 - **Drag** to pan, **scroll** to zoom, **double click** to come back to
-  the airport at the range. The closest view is 2.5 nm from the centre to
-  the nearer edge, near enough to read the runways; the widest is 160 nm,
-  or the range if that is more. The title strip shows the pointer's
-  bearing and distance from the field. (There was a RECENTRE button until
+  the airport at the range (that also ends a follow). The closest view is
+  0.25 nm from the centre to the nearer edge, close enough for the
+  runways to fill the screen (2.5 nm until 2026-11-13); the widest is 160
+  nm, or the range if that is more. ZOOM SPEED scales the wheel from a
+  quarter to four times. Every move the radar makes for you (to a place,
+  to an aircraft and back) eases over 250 ms, or 600 ms with VIEW MOVES
+  at SMOOTH; OFF jumps. The title strip shows the pointer's bearing and
+  distance from the field. (There was a RECENTRE button until
   2026-11-12.)
-- **Range rings** follow the view: every 0.5, 1, 2, 5, 10, 20 or 50 nm,
-  whichever puts no more than five between the centre and the nearer
-  edge, out to the range, each numbered where its number has room.
+- **Range rings** follow the view: every 0.05, 0.1, 0.2, 0.5, 1, 2, 5,
+  10, 20 or 50 nm, whichever puts no more than five between the centre
+  and the nearer edge, out to the range, each numbered where its number
+  has room. A number that would lie across the airport's name is left
+  off.
 - **Place names** sit back at about 40% and come up under the pointer.
   Labels never overlap: one that does not fit is left off, its symbol
-  kept. Small airports appear from a 27 nm view inwards.
+  kept. Small airports appear from a 27 nm view inwards. Since
+  2026-11-13 **labels grow as you zoom in and shrink as you zoom out**:
+  each layer's LABEL size is its size at the range's view, and a view k
+  times closer makes it k^0.35 times as big, held between LABEL MIN (9
+  px) and LABEL MAX (26 px). The airport's own name, at 30 px, is never
+  made smaller than that at the range's view. Flight tags grow the same
+  way from TAG SIZE.
+- **Map layers** are styled by MAP LAYERS in CONFIG (since 2026-11-13):
+  for each of coasts, lakes, rivers, country and state borders, airways,
+  class B, C and D airspace, runways, range rings, the home airport,
+  other airports, navaids, cities, peaks and state names, whether it
+  shows, its strength, its line (SOLID, DASH, DOT), its width and its
+  label's size, as far as each has them. The defaults draw the map as it
+  was.
 - **Label boxes** put a black box behind the labels you choose under
   LABEL BOXES in CONFIG: flight tags, the home airport's name, other
   airports, navaids, cities, peaks, state names, ring numbers, and the
@@ -390,21 +523,34 @@ and state lines, cities, peaks, VORs (diamonds), other airports
 (triangles), the home airport's runways in white, its pink ring (2.5 nm
 in radius, held between 24 and 64 px on screen so the name stays beside
 it), and in the US the class B, C and D airspace (red orange, dashed) and
-the Victor airways (blue, dashed).
+the Victor airways (blue, dashed). Close in, once a runway is wider on
+the screen than its line, it is drawn solid at its true width. The map
+that ships has no widths yet, so every runway is drawn 150 ft wide for
+now (see [Known limitations](#known-limitations)).
 
 **Where the traffic comes from.** The server polls
-[adsb.lol](https://adsb.lol) for the range around the field every 15 s and
-sends the picture to every open tab, so two tabs do not double the rate.
+[adsb.lol](https://adsb.lol) for the range around the field every 15 s,
+unless you set it longer, and sends the picture to every open tab, so two tabs do not double the rate.
 Changing the range never causes a poll: the new range is asked for at the
 next one that was due anyway, so a wider picture fills in up to 15 s
 later, while a narrower one drops what is beyond it at once.
 Fifteen seconds is deliberate: adsb.lol says its [rate limits are dynamic
 based on the environment load](https://github.com/adsblol/api), and from
 one address 2 s and 5 s polling drew a steady stream of `429`s that
-persisted through slower intervals once tripped. A config file can lengthen
-the interval, never shorten it below 15 s. A refused poll keeps the last
-picture and backs off (30 s, 60 s, then 120 s); the radar's corner says
-`ERR 429, PICTURE 45S OLD` and the RADAR lamp turns amber.
+persisted through slower intervals once tripped. RADAR POLL in CONFIG
+(since 2026-11-13; `radar_refresh_secs` in `squelch.toml` until then)
+lengthens the interval, 15 to 120 s in fives, and never shortens it
+below 15 s; like the range, a new interval never causes a poll. A refused
+poll keeps the last picture and backs off, doubling the interval each
+time, to two minutes or four intervals, whichever is longer (at 15 s: 30,
+60, then 120 s); the radar's corner says `ERR 429, PICTURE 45 SECONDS
+OLD` and the RADAR lamp turns amber.
+
+Each aircraft carries everything the table can show: since 2026-11-13
+that includes adsb.lol's registration, description, operator, vertical
+rate and category where it sends them. Which of those its point query
+promises has not been checked against its API document yet; an aircraft
+that lacks one shows an empty cell.
 
 adsb.lol refuses a request with no `User-Agent` (`403 User-Agent too
 generic; include valid contact info.`), so the server sends
@@ -438,45 +584,141 @@ empty and it says so.
 
 ## Configuration
 
-There are two places: CONFIG on the page, for everything about the look
-and the radar, and a TOML file, for the audio engine and the poller.
+There are two places: CONFIG on the page, for the look, the radar, the
+tracks table and the feeds' names, and a TOML file, for the audio engine
+and the poller's staleness.
 
 ### CONFIG, on the page
 
-The gear in the header opens a sheet docked to the right edge. It does not
-darken the page, so each control is seen working as it moves; the page
-behind takes no clicks until the sheet is closed, with CLOSE or Escape. A
-change
-goes to the server, which checks it, saves it and tells every open page,
-so every tab and the window agree. The settings live in
-`~/.local/state/kcgx/prefs.json`; a value there that is not one of those
-below falls back to its own default and disturbs no other. The demo never
-writes the file.
+The gear in the header opens CONFIG, which since 2026-11-13 fills the
+window less a 16 px margin, over the page darkened to 85 % black. (It was
+a sheet docked to the right edge, over a page left as it was.) It has
+four tabs, GENERAL, TRAFFIC, TRACKS and FREQUENCIES; the arrow keys move
+between them, and it opens on the tab you last used while the page is
+open. CLOSE or Escape leaves it. A change goes to the server, which
+checks it, saves it and tells every open page, so every tab and the
+window agree. The settings live in `~/.local/state/kcgx/prefs.json`; a
+value there that is not one of those below falls back to its own default
+and disturbs no other. The demo never writes the file.
 
-MASTER VOLUME is at the top, under OUTPUT. The rest:
+The master volume and mute left CONFIG on 2026-11-13: they are at the top
+of FREQUENCIES. Everything else:
 
-| Section | Row | Values | Default | In `prefs.json` |
+| Tab: group | Row | Values | Default | In `prefs.json` |
 |---|---|---|---|---|
-| LOOK | THEME (a dropdown) | WOPR, AMBER, MATRIX, MONO | WOPR | `palette` |
-| | GLOW | OFF, LOW, FULL | LOW | `glow` |
+| GENERAL: PAGE | BOOT ANIMATION | OFF, ON | ON | `boot_anim` |
+| | UI ZOOM | 50 to 200 %, in fives | 100 | `ui_zoom` |
+| | FONT | CLASSIC, B612 MONO, SHARE TECH MONO, IBM PLEX MONO, JETBRAINS MONO, VT323, SYSTEM | CLASSIC | `font` |
+| | FONT SIZE | 10 to 20 px | 13 | `font_px` |
+| GENERAL: CLOCKS | 24-HOUR LOCAL | OFF, ON | ON | `clock_24h` |
+| | SECONDS | OFF, ON | OFF | `clock_seconds` |
+| | ZONE NAME | OFF, ON | ON | `clock_zone` |
+| GENERAL: LOOK | THEME (a dropdown) | WOPR, AMBER, MATRIX, MONO | WOPR | `palette` |
 | | DISPLAY | OFF, VECTOR, CRT | CRT | `display` |
 | | SCANLINE OPACITY | 0 to 100 % | 34 | `scan_opacity` |
 | | SCANLINE SIZE | 2 to 8 px from one line to the next | 3 | `scan_size` |
-| LAYOUT | STATUS LAMPS | OFF, ON | OFF | `lamps` |
+| GENERAL: GLOW | GLOW: MAP, GLOW: TRAFFIC, GLOW: TEXT | 0 to 100 each (0 to 12 px of blur) | 33 each | `glow_map`, `glow_traffic`, `glow_text` |
+| GENERAL: RENDERING | ANTI-ALIASING | OFF, ON, SUPER | ON | `aa` |
+| | BURN-IN | 0 to 100 ms | 19 | `burn_in` |
+| | MAX FRAME RATE | 15 to 120 fps | 60 | `fps_max` |
+| GENERAL: RADAR | RADAR POLL | 15 to 120 s, in fives | 15 | `poll_secs` |
+| | AIRCRAFT MOTION | GLIDE, STEP | GLIDE | `motion` |
+| | VIEW MOVES | OFF, QUICK, SMOOTH | QUICK | `view_ease` |
+| | ZOOM SPEED | 25 to 400 % | 100 | `zoom_speed` |
+| GENERAL: LAYOUT | STATUS LAMPS | OFF, ON | OFF | `lamps` |
 | | TELETYPE | OFF, ON | OFF | `teletype` |
-| RADAR | RANGE | 10 to 250 nm, in tens | 40 | `range_nm` |
+| TRAFFIC: RADAR | RANGE | 10 to 250 nm, in tens | 40 | `range_nm` |
 | | FLIGHT TAG | any of CALLSIGN, TYPE, SQWK, ALT, GS, TRK, DIST | CALLSIGN, ALT | `tag_fields` |
-| | LABEL BOXES | any of AIRCRAFT, HOME, AIRPORTS, NAVAIDS, CITIES, PEAKS, STATES, RINGS, HUD | none | `box_items` |
+| TRAFFIC: BOXES | LABEL BOXES | any of AIRCRAFT, HOME, AIRPORTS, NAVAIDS, CITIES, PEAKS, STATES, RINGS, HUD | none | `box_items` |
 | | BOX FILL | 0 to 100 % black | 70 | `box_fill` |
 | | BOX PADDING | 0 to 12 px | 4 | `box_pad` |
 | | BOX BORDER | 0 to 100 % of the label's colour | 50 | `box_border` |
 | | BORDER WIDTH | 1 to 5 px | 1 | `box_width` |
+| TRAFFIC | MAP LAYERS (a grid) | below | the map as it was | `map` |
+| TRAFFIC: LABELS | LABEL MIN | 6 to 20 px | 9 | `label_min` |
+| | LABEL MAX | 12 to 48 px | 26 | `label_max` |
+| | TAG SIZE | 10 to 28 px | 16 | `tag_px` |
+| TRAFFIC: FOCUS | FOLLOW RADIUS | 1 to 50 nm | 10 | `follow_nm` |
+| | DATA BOX | OFF, ON | ON | `info_box` |
+| TRAFFIC: TAILS | TAIL LENGTH | 0 to 600 s, in fifteens | 180 | `tail_secs` |
+| | TAIL DEFAULT, TAIL SLOW, TAIL FAST | 0 to 100 % | 95, 35, 95 | `tail_alpha`, `tail_alpha_min`, `tail_alpha_max` |
+| | SLOW BELOW, FAST ABOVE | 0 to 600 kt | 40, 250 | `tail_gs_low`, `tail_gs_high` |
+| TRAFFIC: PARKED | PARKED TRAFFIC | SHOW, FADE, HIDE | FADE | `ground_mode` |
+| | BELOW SPEED | 0 to 50 kt | 5 | `ground_gs` |
+| | BELOW ALTITUDE | 0 to 5,000 ft, in hundreds | 0 | `ground_alt` |
+| | AFTER | 0 to 30 min | 2 | `ground_min` |
+| | FADE TO | 0 to 100 % | 25 | `ground_alpha` |
+| TRACKS: TABLE | COLUMNS | any of CALLSIGN, TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, DESC, OPER, CAT, AGE, LAT, LON | CALLSIGN, TYPE, ALT, GS, TRK, DIST, SQWK | `track_cols` |
+| | SORT BY | one of the same | DIST | `track_sort` |
+| | DESCENDING | OFF, ON | OFF | `track_desc` |
+| TRACKS: RADAR | DIMMEST (RADAR) | 0 to 100 % | 40 | `sort_floor` |
+| FREQUENCIES: NAMES | DROP THE AIRPORT FROM NAMES | OFF, ON | ON | `short_names` |
+
+Two more are set on the TRACKS pane itself, not in CONFIG: whether it is
+folded (`tracks_open`, default `true`) and its height (`tracks_pct`, 10
+to 80 % of the page, default 24). The COLUMNS checklist in the pane's
+title bar and a click on a header set `track_cols`, `track_sort` and
+`track_desc` as the rows above do.
+
+**MAP LAYERS** is a grid: a row for each layer, and in it the columns
+that mean something for that layer. SHOW is on or off; ALPHA is 0 to 100
+%, a share of the layer's own strength; LINE is SOLID, DASH or DOT; WIDTH
+is 0.5 to 8 px (in the file, tenths: `18` is 1.8 px); LABEL is 8 to 32
+px, the label's size at the range's view. Every layer shows by default,
+and the rest are as the map was drawn before:
+
+| Row | ALPHA | LINE | WIDTH | LABEL |
+|---|---|---|---|---|
+| COAST | 100 | SOLID | 1.8 | |
+| LAKE | 75 | SOLID | 1.2 | |
+| RIVER | 50 | SOLID | 1.0 | |
+| COUNTRY | 90 | DASH | 1.2 | |
+| STATE | 55 | SOLID | 1.0 | |
+| AIRWAY | 70 | DASH | 1.2 | |
+| CLASS_B, CLASS_C | 90, 80 | DASH | 1.4, 1.3 | |
+| CLASS_D | 45 | DOT | 1.0 | |
+| RUNWAYS | 100 | | 1.6 | |
+| RINGS | 35 | SOLID | 1.0 | 12 |
+| HOME | 100 | | 1.8 | 30 |
+| AIRPORTS, NAVAIDS, CITIES, PEAKS | 85 | | 1.3 | 13 |
+| STATE_NAMES | 100 | | | 14 |
+
+Some of the rest, explained:
+
+- **UI ZOOM** scales the whole page, CONFIG included, as a browser's zoom
+  would; the radar stays as sharp. KCGX.app has a zoom of its own, which
+  is not used. **FONT SIZE** is the base size of the small text (the
+  tracks table, the buttons, the airport's name); titles, big figures and
+  the radar's labels keep theirs. **FONT** CLASSIC is the pair the
+  cockpit always had, B612 Mono for text and Share Tech Mono for titles
+  and the radar; each of the others is used for everything. All of them
+  are monospaced, OFL, and served from the cockpit itself, never fetched.
+- **GLOW** is three numbers since 2026-11-13, for the map, the traffic
+  (aircraft, tails, tags and the feeds' traces) and the page's text; 33
+  is the old LOW and 75 the old FULL. A `prefs.json` from before keeps
+  its look: its `glow` (OFF, LOW or FULL) is read as 0, 33 or 75 in all
+  three.
+- **ANTI-ALIASING** is the radar's and the traces' resolution: OFF draws
+  them at half the display's and scales them up stepped; ON at the
+  display's own; SUPER at twice it and lets the browser scale it down,
+  smoother and four times the pixels. No canvas is given more than 8
+  million pixels, so SUPER on a large Retina window is a little less than
+  twice.
+- **BURN-IN** is how long the moving traffic's afterglow takes to fade
+  to half, with DISPLAY at VECTOR or CRT: 19 ms is how it looked before
+  at 60 frames a second, and it looks the same at any frame rate. 0 leaves
+  none.
+- **MAX FRAME RATE** caps every animation on the page, the boot's
+  included; 120 means the display's own rate, whatever it is.
 
 The two scanline sliders work only with DISPLAY at CRT, and are greyed
-otherwise; the dark line is a third of the size. In the file, ON and OFF
-are `true` and `false`, numbers are whole, and the two lists are JSON
-lists. The sheet used to end with LIMITS, which showed the stream limit
-and changed nothing; it went on 2026-11-12.
+otherwise; the dark line is a third of the size. A slider moves in its
+own steps, and a hand-edited value off its step (a range of 45) falls
+back to the default. In the file, ON and OFF are `true` and `false`,
+numbers are whole, the lists are JSON lists, and `map` is an object of
+rows, each an object of its cells. The sheet used to end with LIMITS,
+which showed the stream limit and changed nothing; it went on
+2026-11-12.
 
 ### `squelch.toml`
 
@@ -496,9 +738,9 @@ stops the server with a message naming the file and the key.
 | Key | Default | Meaning |
 |---|---|---|
 | `icao` | `"KPDX"` | The airport to open when none has been chosen yet |
-| `feed` | `"kpdx3_twr"` | The one feed left unmuted at start |
+| `feed` | `"kpdx3_twr"` | The one feed heard at start |
 | `activity_threshold_dbfs` | `-40.0` | Level above which a feed counts as busy for the five-minute ranking. A decimal (`-40.0`, not `-40`). |
-| `master_volume` | `1.0` | Output gain, 0.0 to 1.0; CONFIG's slider changes it while running |
+| `master_volume` | `1.0` | Output gain at start, 0.0 to 1.0; the slider at the top of FREQUENCIES changes it while running |
 | `buffer_seconds` | `4.0` | How far behind live a feed may fall before it drops audio; see [Buffering](#buffering) |
 | `max_streams` | `7` | Streams held open at once; LiveATC's limit |
 | `radar_stale_secs` | `60` | An aircraft not heard from for this long drops off |
@@ -579,8 +821,9 @@ empty stack with a message rather than Portland tower under a KORD header.
 
 - Opens every feed the airport publishes, each with its own `ffmpeg`
   process and ring buffer, into one stereo output.
-- Starts with everything muted except the configured feed: you see the
-  whole field at once, but hear one frequency until you choose otherwise.
+- Starts with everything muted except the configured feed, and keeps it
+  to one: you see the whole field at once, but hear one frequency, the
+  one you last picked.
 - Isolates failures per feed: one that cannot resolve, or whose `ffmpeg`
   dies, goes offline on its own row and says why. The others keep going.
 - Does **not** record, save, or redistribute any audio. Playback is local
@@ -593,17 +836,21 @@ One `ffmpeg` process, one ring buffer, and one thread per feed — twelve of
 each at KPDX, seven of them streaming — feeding **one** stereo output
 stream. Bandwidth is roughly 16–32 kbps per feed; the CPU is mostly
 `ffmpeg` decode plus one mixing callback every 16 ms. The server adds a
-radar poll every 15 s and about 15 KB/s of levels to each open tab. The
-page's radar redraws only what moves; the map is drawn once per airport,
-pan or zoom.
+radar poll every 15 s (or RADAR POLL's interval) and about 15 KB/s of
+levels to each open tab. The page draws at MAX FRAME RATE, 60 a second
+unless you change it. Its radar redraws only what moves, and leaves out
+aircraft, tails and tags that are off the screen; the map is drawn when
+the airport, a setting or the window changes, and while you pan, zoom or
+follow an aircraft the last drawing is moved, and drawn afresh once the
+view stops (or has moved far enough to need it).
 
 ## Audio shaping
 
 **There is none.** What reaches the device is the decoded feed scaled by
-master volume:
+master volume, or silence while the master mute is on:
 
 ```
-ffmpeg ─► ring buffer ─► sum ─► master volume ─► stereo
+ffmpeg ─► ring buffer ─► sum ─► master volume ─► master mute ─► stereo
 ```
 
 A per-feed noise gate and an upward compressor were **removed** on
@@ -654,6 +901,23 @@ measurement and fails if the capacity goes back under a burst.
   hides the one under it. At 250 nm a busy picture will be crowded.
 - STATES under LABEL BOXES has nothing to box: the map that ships names
   no states.
+- Runways are drawn 150 ft wide, whatever their width. The map's build
+  keeps OurAirports' widths since 2026-11-13, but `geo.json.gz` has not
+  been rebuilt with them yet (that needs the network).
+- REG, DESC, OPER, VS and CAT are read from fields adsb.lol's replies
+  have carried, and not yet checked against its API document for what
+  its point query promises. A column that adsb.lol stops sending stays
+  empty.
+- Parked traffic is judged by an altitude above sea level, as the
+  airport list has no field elevations: at a high field keep BELOW
+  ALTITUDE at 0, where only `GND` counts.
+- The tracks table's filters do not reach the radar, and are forgotten
+  on a reload.
+- Nothing in the round of 2026-11-13 (the boot, one feed at a time, the
+  tracks table's new parts, the radar's new behaviour) has yet been
+  looked at by a person against real feeds and real traffic, or in
+  KCGX.app; the checks owed are under "Built" in [its
+  plan](docs/superpowers/plans/2026-11-13-cockpit-tweaks-g.md#built).
 - The window is macOS only, and KCGX.app has the generic icon.
 - All feeds share one output device.
 - Ranking is by level, not speech detection: a feed with a noisy carrier
@@ -674,9 +938,13 @@ uv run playwright install chromium webkit          # once
 
 `tests/test_page.py` drives the page in a real browser, and runs each of
 its tests twice: in Chromium and in WebKit, Safari's engine and the one
-KCGX.app shows the page in. Without the browser group it skips; without
-one of the two browsers, that browser's half skips. With both, the suite
-is about 1,290 tests and takes about ten minutes:
+KCGX.app shows the page in. So do the files beside it from 2026-11-13,
+one for each part of that round (`test_page_audio.py`, `_tracks`,
+`_chrome`, `_map`, `_traffic`, `_seams` and `test_boot.py`), which share
+their fixtures through `tests/page_fixtures.py`. Without the browser
+group they skip; without one of the two browsers, that browser's half
+skips. With both, the suite is about 2,150 tests and takes about 26
+minutes:
 
 ```bash
 uv run --group browser pytest -q
@@ -701,8 +969,12 @@ browser in five phases in October 2026 (the plans are in
 [`docs/`](docs/README.md)); the last one removed tmux, adsb-tui and the
 terminal UI. A sixth, on 2026-11-12, tightened the page, moved every
 setting into CONFIG, took the radar's range to 250 nm and its zoom to
-2.5, and gave the cockpit a window of its own on macOS. The last commit
-with the terminal cockpit is tagged `terminal-cockpit`:
+2.5, and gave the cockpit a window of its own on macOS. A seventh, on
+2026-11-13, added the boot animation, CONFIG in four tabs with some forty
+new settings, one feed at a time under a master mute, the tracks table's
+columns, filters and sort, and a radar that styles its map by layer,
+follows the focused aircraft and zooms in to the runways. The last
+commit with the terminal cockpit is tagged `terminal-cockpit`:
 
 ```bash
 git show terminal-cockpit:bin/kcgx
