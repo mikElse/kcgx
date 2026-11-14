@@ -612,7 +612,18 @@ function drawAnew(radar, now, ratio, width, height) {
   radar.blurMap = glowBlur("map") * ratio;
   const glowing = glower(radar, ctx, width, height);
   // A label's box hides what is under it, so what waits to glow goes first.
-  const box = (r, colour) => { glowing.flush(); paintBox(ctx, r, colour, ratio, prefs); };
+  // A box with no fill and no border hides nothing and paints nothing: it
+  // only keeps its room, and the glow is not cut in two for it: a colour
+  // blurred in two parts is not quite the colour blurred once (each blur
+  // rounds its faint edge to whole levels, alpha 1 to 7 of 255 here, where
+  // the colour of a pixel all but clear can be anything), and the picture
+  // with such boxes is to be the picture without them, pixel for pixel.
+  const paints = prefs.box_fill > 0 || prefs.box_border > 0;
+  const box = (r, colour) => {
+    if (!paints) return;
+    glowing.flush();
+    paintBox(ctx, r, colour, ratio, prefs);
+  };
 
   if (map) {
     for (const [layer, lines] of Object.entries(map.lines)) {

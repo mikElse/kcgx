@@ -2272,12 +2272,16 @@ def test_boxes_with_no_fill_and_no_border_leave_the_picture_as_it_was(page):
     assert [r["text"] for r in debug["rings"] if r["label"]] == numbered
     assert picture(page) == before
     # The airport's name and the ring numbers too: the number that the name
-    # is written across is left off, and nothing else changes place.
+    # is written across is left off, and nothing else changes place. Bare,
+    # it is left off already (the owner's decision in phase G's Task 10
+    # review, 8e08305; until then only a box gave it up, and this picture
+    # changed): so nothing changes, and the boxes, clear, show nothing.
+    assert "10" not in numbered
     debug = draw(page, box_items=ITEMS)
     assert [p["key"] for p in debug["placed"]] == kept and all(p["boxed"] for p in debug["placed"])
     assert [r["text"] for r in debug["rings"] if not r["label"]] == ["10"]
     assert all(r["label"]["boxed"] for r in debug["rings"] if r["label"])
-    assert picture(page) != before
+    assert picture(page) == before
     set_prefs(page, box_items=[i for i in ITEMS if i not in ("HOME", "RINGS")], box_fill=100)
     assert picture(page) != before
 
