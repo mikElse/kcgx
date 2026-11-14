@@ -195,6 +195,10 @@ missing_packages() {
     local needed=""
     have_command ffmpeg  || needed="$needed $(pkg_name ffmpeg)"
     portaudio_present    || needed="$needed $(pkg_name portaudio)"
+    # A minimal Linux (a container, a fresh server) can lack curl, which
+    # step 3 fetches uv with and step 7 probes the feeds and the radar with.
+    # It is one package of the same name everywhere; macOS always has it.
+    have_command curl    || needed="$needed curl"
     # shellcheck disable=SC2086
     set -- $needed
     printf '%s' "$*"
@@ -270,7 +274,7 @@ install_packages() {
 
     packages="$(missing_packages)"
     if [ -z "$packages" ]; then
-        say "ffmpeg and PortAudio are both present. Nothing to install."
+        say "ffmpeg, PortAudio and curl are all present. Nothing to install."
         return 0
     fi
 

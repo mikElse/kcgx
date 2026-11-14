@@ -1007,6 +1007,27 @@ def test_portaudio_is_installed_on_linux(tmp_path):
     assert "libportaudio2" in log.read_text(), log.read_text()
 
 
+def test_curl_is_installed_when_missing(tmp_path):
+    """A fresh Ubuntu container has no curl, and step 3 fetches uv with it:
+    setup once installed ffmpeg and PortAudio there and then died with
+    "curl is needed to fetch uv". Step 2 installs it with the rest."""
+    log = tmp_path / "apt.log"
+    path_dir = stub_path(
+        tmp_path, tools=("uv", "ffmpeg"),
+        scripts={
+            "apt-get": f'#!/bin/sh\necho "$@" >> "{log}"\nexit 0\n',
+            "sudo": SUDO_PASSTHROUGH,
+            "ldconfig": "#!/bin/sh\necho 'libportaudio.so.2 => /usr/lib/libportaudio.so.2'\n",
+        },
+    )
+    run_setup(
+        tmp_path, path_dir, KCGX_SETUP_YES="1",
+        KCGX_SETUP_OS="linux", KCGX_SETUP_PKG="apt",
+    )
+    assert log.exists(), "apt-get was never called"
+    assert "install -y curl" in log.read_text(), log.read_text()
+
+
 def test_portaudio_is_not_a_package_on_macos(tmp_path):
     """Asking Homebrew for it would be wrong, not merely redundant: the
     wheel loads the copy it ships with, so a brew portaudio is a second
