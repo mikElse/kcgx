@@ -199,17 +199,22 @@ def expected_label(base, range_nm, view_nm, low=9, high=26):
 # -- the default table is today's look ----------------------------------------
 
 
-def test_at_the_default_table_the_static_layer_is_as_it_was(page, browser, server):
-    """Within 0.1 % of its pixels, the picture still.js drew with a shadow
-    on every line and symbol, as the screen shows it (over black). One
-    shadow for each colour (Task 5a) is not one for each line: the bare
-    canvas rounds each line to whole levels before its glow is drawn, and
-    each engine blurs an image a little otherwise than a path, so most of
-    the glow is a level or two off (Chromium at 1x: 9 % of pixels by more
-    than 2, 0.5 % by more than 8), and at a few crossings more. A pixel
-    differs here when it is off by more than 16 of 255: 0.02 to 0.04 % of
-    them, in either engine at 1x and 2x, and none visibly."""
+@pytest.mark.parametrize("glow", [DEFAULTS["glow_map"], 100])
+def test_at_the_default_table_the_static_layer_is_as_it_was(page, browser, server, glow):
+    """At the default glow and the most, within 0.1 % of its pixels, the
+    picture still.js drew with a shadow on every line and symbol, as the
+    screen shows it (over black). One shadow for each colour (Task 5a) is
+    not one for each line: the bare canvas rounds each line to whole levels
+    before its glow is drawn, and each engine blurs an image a little
+    otherwise than a path, so most of the glow is a level or two off
+    (Chromium at 1x: 9 % of pixels by more than 2, 0.5 % by more than 8),
+    and at a few crossings, where the bare lines add up past white, more. A
+    pixel differs here when it is off by more than 16 of 255: 0.01 to 0.02 %
+    of them in either engine. (WebKit at glow 100 was 0.104 % until the
+    glow's rectangle took in its reach: WebKit draws an image's shadow only
+    within the rectangle the image is drawn to.)"""
     wait_for_traffic(page)
+    set_prefs(page, glow_map=glow)  # the server's, so the old page's too
     now = still_picture(page)
     context = browser.new_context(viewport={"width": 1440, "height": 900})
     try:
@@ -224,6 +229,7 @@ def test_at_the_default_table_the_static_layer_is_as_it_was(page, browser, serve
         before.goto(server + "/")
         before.wait_for_selector(".feed.expanded")
         wait_for_traffic(before)
+        before.wait_for_function("glow => window.kcgx.store.state.prefs.glow_map === glow", arg=glow)
         then = still_picture(before)
         served = before.evaluate(
             "() => performance.getEntriesByType('resource').map((e) => e.name.split('/').pop())"
@@ -1327,11 +1333,36 @@ def sample(page, count, step=None):
     return page.evaluate(SAMPLE, [count, step])
 
 
-def test_during_a_drag_the_map_is_moved_and_drawn_anew_when_let_go(page):
+# Until the static layer is drawn anew for the view it holds: the last
+# frame drew that view, and not by moving an older drawing (one predicate,
+# so that the frame waited for is both).
+SETTLED = """() => { const d = window.kcgx.radar.debug();
+    const now = { ...d.view, range: window.kcgx.store.state.prefs.range_nm };
+    return !d.still_moved && JSON.stringify(d.shown) === JSON.stringify(now); }"""
+
+
+def settled(page):
+    page.wait_for_function(SETTLED)
+    return radar_debug(page)
+
+
+def bare_px(page):
+    """How far, in page px, the view may be dragged from the last drawing
+    before the drawing moved would leave the screen bare past BARE (5 %) of
+    its shorter side, and is drawn anew."""
+    return 0.05 * min(canvas_size(page)) / page.evaluate("devicePixelRatio")
+
+
+def test_during_a_drag_the_map_is_moved_and_drawn_anew_as_it_is_uncovered(page):
+    """Moved from the first frame of the drag, though the map was last drawn
+    seconds before; drawn anew only once a drag has uncovered more than 5 %
+    of the screen's shorter side, and at once when let go."""
     wait_for_traffic(page)
     hold_traffic(page)
     drawn_on(page)  # while the map draws itself on, it is drawn anew every frame
+    page.wait_for_timeout(1100)  # at rest a while before the drag
     x, y = on_screen(page, 300, 300)
+    rest = radar_debug(page)["still_drawings"]
     page.mouse.move(x, y)
     page.mouse.down()
     page.mouse.move(x + 20, y + 10, steps=2)
@@ -1339,8 +1370,11 @@ def test_during_a_drag_the_map_is_moved_and_drawn_anew_when_let_go(page):
         during = sample(page, 12, DRAG_STEP % (x + 20, y + 10))
     finally:
         page.mouse.up()
-    assert all(f["moved"] for f in during[1:]), during
-    assert during[-1]["drawings"] == during[1]["drawings"], "not drawn anew while it is dragged"
+    assert during[0]["moved"] is True and during[0]["drawings"] == rest, during
+    redrawn = [b for a, b in zip(during, during[1:]) if b["drawings"] > a["drawings"]]
+    assert all(f["moved"] for f in during if f not in redrawn), during
+    # 20 then 6 page px a frame: drawn anew each time 5 % of the shorter side is uncovered
+    assert 1 <= len(redrawn) <= (20 + 6 * 11) / bare_px(page), during
     assert max(f["off"] for f in during) <= 1, "what a click finds is where it is on the screen"
     after = sample(page, 1)[0]
     assert after["moved"] is False and after["drawings"] > during[-1]["drawings"], "drawn anew when let go"
@@ -1354,8 +1388,7 @@ def test_after_the_wheel_the_map_is_drawn_anew_once_it_stops(page):
     turn_wheel(page, -200)
     moved = sample(page, 1)[0]
     assert moved["moved"] is True and moved["off"] <= 1, moved
-    page.wait_for_function("() => !window.kcgx.radar.debug().still_moved")
-    drawn = radar_drawn(page)
+    drawn = settled(page)
     assert drawn["still_drawings"] == moved["drawings"] + 1
     # and drawn for the view it stopped at: its range's ring is where the view puts it
     s = fit(page) / drawn["view"]["nm"]
@@ -1363,18 +1396,76 @@ def test_after_the_wheel_the_map_is_drawn_anew_once_it_stops(page):
     assert max(f["off"] for f in sample(page, 1)) <= 1e-6
 
 
-def test_while_following_the_map_is_moved_and_drawn_anew_now_and_then(page):
+def test_while_following_the_map_is_moved_and_seldom_drawn_anew(page):
+    """At 10 nm, a1 at 360 kt moves the view some 3 px a second (at 1x): in
+    2.5 s it uncovers no more than a few of the 29 px (5 % of 588) that
+    would have it drawn anew. It was drawn anew once a second before."""
     wait_for_traffic(page)
     hold_traffic(page, *MOVING)
     drawn_on(page)
     click_row(page, "a1")
     wait_followed(page, "a1")
     page.wait_for_timeout(300)
-    frames_ = sample(page, 60)
-    assert sum(f["moved"] for f in frames_) >= 50, "the following moves the view every frame"
-    # At most every REDRAW_MS (1 s): 60 frames are 0.5 s or more.
-    assert frames_[-1]["drawings"] - frames_[0]["drawings"] <= 2
+    frames_ = sample(page, 30)
+    assert sum(f["moved"] for f in frames_) >= 25, "the following moves the view every frame"
     assert max(f["off"] for f in frames_) <= 1
+    page.wait_for_timeout(2500)
+    assert radar_debug(page)["still_moved"] is True
+    assert radar_debug(page)["still_drawings"] - frames_[0]["drawings"] <= 1
+
+
+# From here on, `window.frame_lit` is, for each frame, the view's nm, how many
+# times the static layer had been drawn anew, whether it was moved, and the
+# share of the layer's outer frame (all but its middle third each way) that
+# is lit: a channel, over black, of more than 8.
+RECORD_LIT = """() => { window.frame_lit = [];
+    window.kcgx.radar.hook((radar) => ({ post() {
+        const c = radar.still, w = c.width, h = c.height;
+        const data = c.getContext("2d").getImageData(0, 0, w, h).data;
+        let lit = 0, all = 0;
+        for (let y = 0; y < h; y += 2) {
+            for (let x = 0; x < w; x += 2) {
+                if (x > w / 3 && x < 2 * w / 3 && y > h / 3 && y < 2 * h / 3) continue;
+                const i = 4 * (y * w + x);
+                all += 1;
+                if (Math.max(data[i], data[i + 1], data[i + 2]) * data[i + 3] / 255 > 8) lit += 1;
+            }
+        }
+        window.frame_lit.push({ nm: radar.view.nm, drawings: radar.drawings, moved: radar.moved, lit: lit / all });
+    } })); }"""
+
+
+def test_an_eased_zoom_out_draws_anew_before_the_picture_shrinks_far(page):
+    """Unfocusing eases 10 nm out to 40. The last drawing is scaled down to
+    no less than 0.8 of itself before the map is drawn anew, so the black it
+    leaves about it is never more than a tenth of the screen each way, and
+    the outer frame of the picture keeps at least half the light it had in
+    the drawing moved, a drawing at rest for its view (it was a quarter-size
+    picture with black all round, then the whole: the frame went black; at
+    0.67, it kept 0.38 of it)."""
+    wait_for_traffic(page)
+    hold_traffic(page, *MOVING)
+    set_prefs(page, view_ease="SMOOTH")
+    drawn_on(page)
+    click_row(page, "a1")
+    wait_followed(page, "a1")
+    settled(page)
+    page.evaluate(RECORD_LIT)
+    click_row(page, "a1")
+    page.wait_for_selector("#tracks-body tr.focused", state="detached")
+    page.wait_for_function("() => window.kcgx.radar.debug().view.nm === 40")
+    settled(page)
+    frames(page, 2)
+    seen = page.evaluate("window.frame_lit")
+    easing = [f for f in seen if 10 < f["nm"] < 40]
+    assert len(easing) >= 5, seen
+    assert easing[-1]["drawings"] > easing[0]["drawings"], "drawn anew while it eases out"
+    assert any(f["moved"] for f in easing), "and moved between"
+    drawing = seen[0]["lit"]  # the following's drawing, moved a pixel or two
+    for f in seen:
+        if not f["moved"]:
+            drawing = f["lit"]
+        assert f["lit"] >= drawing / 2, (f, seen)
 
 
 def test_a_click_on_a_place_lands_while_the_map_is_moved(page):

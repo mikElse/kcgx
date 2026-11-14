@@ -1332,12 +1332,20 @@ def test_the_wheel_zooms_in_to_a_quarter_mile_and_no_further(page):
     assert radar_debug(page)["view"]["nm"] == 0.25
 
 
+# The last frame drew the view the radar holds, and drew the static layer
+# anew for it, not as an older drawing moved: one predicate, so that the
+# frame waited for is both settled and current.
+SETTLED = """() => { const d = window.kcgx.radar.debug();
+    const now = { ...d.view, range: window.kcgx.store.state.prefs.range_nm };
+    return !d.still_moved && JSON.stringify(d.shown) === JSON.stringify(now); }"""
+
+
 def settled(page):
     """Until the static layer is drawn for the view it holds (phase G Task
     5a): while the view moves it is the last drawing moved, and drawn anew
     120 ms after the wheel stops."""
-    page.wait_for_function("() => !window.kcgx.radar.debug().still_moved")
-    return radar_drawn(page)
+    page.wait_for_function(SETTLED)
+    return page.evaluate("window.kcgx.radar.debug()")
 
 
 def view_at_2_5_nm(page):

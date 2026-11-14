@@ -15,8 +15,11 @@
 // last drawing (`radar.stillWas`) is drawn moved and scaled to the view,
 // and what it placed for the pointer is moved with it, so a click lands on
 // what is on the screen. It is drawn anew SETTLE_MS after the view stops,
-// at once when a drag is let go, at least every REDRAW_MS while it keeps
-// moving, and at once when anything else it is drawn from changes.
+// at once when a drag is let go, at once when anything else it is drawn
+// from changes, and, while the view moves on, once the moved drawing would
+// be scaled past SCALED (a quarter-size picture with black all round, or
+// one blown up 4x) or moved to leave more than BARE of the screen's
+// shorter side uncovered: then that drawing is the one moved.
 //
 // How each part is drawn is a row of the `map` table (prefs.map, phase G
 // Task 10): whether it shows, its alpha, its line's pattern and width and
@@ -57,7 +60,11 @@ const MARK_PX = 10; // and a click this near its point is on it
 const BOXED_AS = { navaid: "NAVAIDS", airport: "AIRPORTS", city: "CITIES", peak: "PEAKS" };
 
 const SETTLE_MS = 120; // the layer is drawn anew this long after the view last moved,
-const REDRAW_MS = 1000; // and at least this often while it moves on
+// At 0.8 the black a drawing scaled down leaves is a tenth of the screen
+// each way, and the screen's outer third keeps 0.6 of its light; at 0.67,
+// a sixth each way and 0.38 of it.
+const SCALED = [0.8, 1.5]; // or once the last drawing would be scaled outside this,
+const BARE = 0.05; // or moved to leave more than this share of the shorter side uncovered
 
 const DRAWN_ON = new Set(["coast", "lake", "river", "country", "state"]);
 const RUNWAY_FT = 150; // a runway's width where the map has none
@@ -147,8 +154,8 @@ export function init(radar) {
   radar.still = document.createElement("canvas");
   radar.stillWas = document.createElement("canvas"); // the last drawing, kept while the view moves
   radar.stillBare = document.createElement("canvas"); // a colour's lines bare, before their glow
-  radar.canvases.push(radar.still, radar.stillWas, radar.stillBare);
-  // The last drawing: what it was drawn from, its view and scale, when, and
+  radar.canvases.push(radar.still, radar.stillWas); // stillBare is sized by the glow (glower)
+  // The last drawing: what it was drawn from, its view and scale, and
   // (once the view has moved from it) itself and what it placed, kept.
   radar.was = null;
   radar.moved = false; // the layer is the last drawing moved, not drawn anew
@@ -426,11 +433,18 @@ function strokeLines(radar, ctx, lines, s, width, height, progress, margin, peri
 // (save and restore are about it), and `rect` is what it inks, or null for
 // anywhere. With no glow it is drawn on the layer at once. Otherwise each
 // colour's waits, and `flush()` draws it bare and then onto the layer with
-// the shadow, only the part of the bare canvas that it inked. Everything on
-// the layer but a label's box is added to what is there, so the order the
-// colours go down in changes nothing.
+// the shadow, only the part of the bare canvas that it inked and its glow
+// reaches. Everything on the layer but a label's box is added to what is
+// there, so the order the colours go down in changes nothing.
+//
+// The bare canvas is the screen and `reach` about it, where a line just off
+// the screen still glows onto it, as a line's own shadow did. And the part
+// drawn takes in the glow's reach about the ink: WebKit draws an image's
+// shadow only within the rectangle the image is drawn to, and cut the halo
+// off at the ink's edge (at glow 100, a ring's halo went black past it).
 function glower(radar, ctx, width, height) {
   const blur = radar.blurMap;
+  const reach = Math.ceil(3 * blur);
   const waiting = new Map(); // colour -> { draws: [draw], rect: [x0, y0, x1, y1] }
   const drawOn = (g, draw) => { g.save(); draw(g); g.restore(); };
   return {
@@ -439,14 +453,19 @@ function glower(radar, ctx, width, height) {
       let group = waiting.get(colour);
       if (!group) { group = { draws: [], rect: [Infinity, Infinity, -Infinity, -Infinity] }; waiting.set(colour, group); }
       group.draws.push(draw);
-      const [x0, y0, x1, y1] = rect || [0, 0, width, height];
+      const [x0, y0, x1, y1] = rect || [-reach, -reach, width + reach, height + reach];
       const r = group.rect;
       r[0] = Math.min(r[0], x0); r[1] = Math.min(r[1], y0); r[2] = Math.max(r[2], x1); r[3] = Math.max(r[3], y1);
     },
     flush() {
       if (!waiting.size) return;
-      const bare = radar.stillBare.getContext("2d");
-      bare.setTransform(1, 0, 0, 1, 0, 0);
+      const canvas = radar.stillBare;
+      if (canvas.width !== width + 2 * reach || canvas.height !== height + 2 * reach) {
+        canvas.width = width + 2 * reach;
+        canvas.height = height + 2 * reach;
+      }
+      const bare = canvas.getContext("2d");
+      bare.setTransform(1, 0, 0, 1, reach, reach);
       bare.globalCompositeOperation = "lighter";
       bare.lineJoin = "round";
       bare.lineCap = "round";
@@ -455,16 +474,17 @@ function glower(radar, ctx, width, height) {
       ctx.globalAlpha = 1;
       ctx.shadowBlur = blur;
       for (const [colour, { draws, rect }] of waiting) {
-        // The part of the screen it inked, on whole pixels and a pixel over.
-        const x = Math.max(0, Math.floor(rect[0]) - 1);
-        const y = Math.max(0, Math.floor(rect[1]) - 1);
-        const w = Math.min(width, Math.ceil(rect[2]) + 1) - x;
-        const h = Math.min(height, Math.ceil(rect[3]) + 1) - y;
+        // What it inked and its glow reaches, on whole pixels and a pixel
+        // over, within the bare canvas.
+        const x = Math.max(-reach, Math.floor(rect[0]) - reach - 1);
+        const y = Math.max(-reach, Math.floor(rect[1]) - reach - 1);
+        const w = Math.min(width + reach, Math.ceil(rect[2]) + reach + 1) - x;
+        const h = Math.min(height + reach, Math.ceil(rect[3]) + reach + 1) - y;
         if (w <= 0 || h <= 0) continue;
         bare.clearRect(x, y, w, h);
         for (const draw of draws) drawOn(bare, draw);
         ctx.shadowColor = colour;
-        ctx.drawImage(radar.stillBare, x, y, w, h, x, y, w, h);
+        ctx.drawImage(canvas, x + reach, y + reach, w, h, x, y, w, h);
       }
       ctx.restore();
       waiting.clear();
@@ -497,25 +517,45 @@ export function drawStatic(radar, now) {
   const { ratio, width, height } = radar.size();
   const from = drawnFrom(radar, width, height, ratio);
   const was = radar.was;
-  if (
-    was && sameSource(was.from, from)
-    && performance.now() - radar.movedAt < SETTLE_MS && now - was.at < REDRAW_MS
-  ) {
-    moveDrawing(radar, was, width, height, ratio);
+  const s = scale(radar, width, height, ratio);
+  const move = was && sameSource(was.from, from) && performance.now() - radar.movedAt < SETTLE_MS
+    ? moveFor(radar, was, s, width, height) : null;
+  if (move) {
+    moveDrawing(radar, was, move);
     radar.staticDirty = true; // drawn anew once the view stops
     return;
   }
   drawAnew(radar, now, ratio, width, height);
   radar.drawings += 1;
   radar.moved = false;
-  radar.was = radar.staticDirty ? null : { from, at: now, view: { ...radar.view }, s: scale(radar, width, height, ratio), kept: null };
+  radar.was = radar.staticDirty ? null : { from, view: { ...radar.view }, s, kept: null };
 }
 
-// The last drawing, moved and scaled from its view to this one, and what it
-// placed with it. The first time, the drawing (still on the layer) and what
-// it placed are kept. A move with no scaling is by whole pixels, which keeps
-// the lines sharp.
-function moveDrawing(radar, was, width, height, ratio) {
+// How the last drawing is moved onto the view: { k, dx, dy }, the
+// transform from its pixels to the screen's, or null when it no longer
+// stands for the view. A drawing scaled down by k leaves a frame of
+// (1 - k) / 2 of the screen black each way, which SCALED bounds; what is
+// left bare besides, by the pan, is held under BARE of the shorter side
+// (a drawing scaled up overhangs, and may be moved that far for nothing).
+// A move with no scaling is by whole pixels, which keeps the lines sharp.
+function moveFor(radar, was, s, width, height) {
+  const k = s / was.s;
+  if (!(k >= SCALED[0] && k <= SCALED[1])) return null;
+  const shiftX = (was.view.panX - radar.view.panX) * s;
+  const shiftY = (was.view.panY - radar.view.panY) * s;
+  const bareX = Math.abs(shiftX) - Math.max(0, ((k - 1) * width) / 2);
+  const bareY = Math.abs(shiftY) - Math.max(0, ((k - 1) * height) / 2);
+  if (Math.max(bareX, bareY) > BARE * Math.min(width, height)) return null;
+  let dx = (width / 2) * (1 - k) + shiftX;
+  let dy = (height / 2) * (1 - k) + shiftY;
+  if (k === 1) { dx = Math.round(dx); dy = Math.round(dy); }
+  return { k, dx, dy, width, height };
+}
+
+// The last drawing, moved by `move` (see `moveFor`), and what it placed with
+// it. The first time, the drawing (still on the layer) and what it placed
+// are kept.
+function moveDrawing(radar, was, { k, dx, dy, width, height }) {
   const still = radar.still.getContext("2d");
   if (!was.kept) {
     const keep = radar.stillWas.getContext("2d");
@@ -530,11 +570,6 @@ function moveDrawing(radar, was, width, height, ratio) {
       home: { ...radar.home },
     };
   }
-  const s = scale(radar, width, height, ratio);
-  const k = s / was.s;
-  let dx = (width / 2) * (1 - k) + (was.view.panX - radar.view.panX) * s;
-  let dy = (height / 2) * (1 - k) + (was.view.panY - radar.view.panY) * s;
-  if (k === 1) { dx = Math.round(dx); dy = Math.round(dy); }
   still.setTransform(1, 0, 0, 1, 0, 0);
   still.globalCompositeOperation = "source-over";
   still.globalAlpha = 1;
