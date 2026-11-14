@@ -1252,11 +1252,16 @@ are in the bodies of `83eb1af`, `86c4475` and `8388786`.
 
 ### Owed
 
-- **Runway widths:** `geo.json.gz` has not been rebuilt (it needs the
-  network), so runways close in are drawn at 150 ft.
-- **adsb.lol's fields:** `reg`, `desc`, `oper`, `vs` and `cat` have not
-  been checked against https://api.adsb.lol/api/openapi.json for which
-  ones `/v2/point` promises.
+- ~~**Runway widths**~~ Done 2026-11-14: `geo.json.gz` rebuilt; 5,987
+  of 5,989 runways have a width. Natural Earth and FAA layers identical;
+  OurAirports' nightly data moved airports 18,848 → 18,814.
+- ~~**adsb.lol's fields**~~ Done 2026-11-14: the OpenAPI document has
+  `r`, `baro_rate` and `category`, not `desc` or `ownOp`; a live
+  `/v2/point` at KORD (36 aircraft) agreed. DESC and OPER dropped.
+- **adsb.lol's quota (new, 2026-11-14):** its document states 500
+  requests a day per address with no key on `/v2/`; polling every 15 s
+  is 5,760. Not seen enforced. The owner to decide: a key setting, a
+  longer default interval, or neither.
 - **The owner's, on the Mac** (Task 15's list):
   - real feeds at KORD: titles without "Chicago", choosing a feed while
     one is parked, the master mute;

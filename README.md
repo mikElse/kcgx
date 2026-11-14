@@ -371,10 +371,9 @@ quietest feeds are parked (dark lamp, `‖`); pick a parked one and it
 starts, and the quietest of the others gives up its place.
 
 **The tracks table** (since 2026-11-13). COLUMNS, in its title bar, opens
-a checklist of seventeen columns: callsign, type, registration, altitude,
+a checklist of fifteen columns: callsign, type, registration, altitude,
 vertical speed, ground speed, track, distance, bearing, squawk, the hex
-code, the type's description, the operator, the category, the age of the
-position, latitude and longitude. The default is the seven it always had.
+code, the category, the age of the position, latitude and longitude. The default is the seven it always had.
 The last column shown cannot be unchecked. Under the header is a row of
 filters: a text column matches any part of what you type, in any case; a
 number column takes a MIN and a MAX, either left empty (ALT reads `GND`
@@ -524,9 +523,8 @@ and state lines, cities, peaks, VORs (diamonds), other airports
 in radius, held between 24 and 64 px on screen so the name stays beside
 it), and in the US the class B, C and D airspace (red orange, dashed) and
 the Victor airways (blue, dashed). Close in, once a runway is wider on
-the screen than its line, it is drawn solid at its true width. The map
-that ships has no widths yet, so every runway is drawn 150 ft wide for
-now (see [Known limitations](#known-limitations)).
+the screen than its line, it is drawn solid at its true width, from
+OurAirports (a runway it gives no width is drawn 150 ft wide).
 
 **Where the traffic comes from.** The server polls
 [adsb.lol](https://adsb.lol) for the range around the field every 15 s,
@@ -547,10 +545,11 @@ time, to two minutes or four intervals, whichever is longer (at 15 s: 30,
 OLD` and the RADAR lamp turns amber.
 
 Each aircraft carries everything the table can show: since 2026-11-13
-that includes adsb.lol's registration, description, operator, vertical
-rate and category where it sends them. Which of those its point query
-promises has not been checked against its API document yet; an aircraft
-that lacks one shows an empty cell.
+that includes adsb.lol's registration, vertical rate and category where
+it sends them. All three are in its [API document](https://api.adsb.lol/api/openapi.json),
+as optional fields; an aircraft that lacks one shows an empty cell. The
+type's description and the operator were columns for a day, until the
+document and a live reply (2026-11-14) showed adsb.lol sends neither.
 
 adsb.lol refuses a request with no `User-Agent` (`403 User-Agent too
 generic; include valid contact info.`), so the server sends
@@ -901,13 +900,13 @@ measurement and fails if the capacity goes back under a burst.
   hides the one under it. At 250 nm a busy picture will be crowded.
 - STATES under LABEL BOXES has nothing to box: the map that ships names
   no states.
-- Runways are drawn 150 ft wide, whatever their width. The map's build
-  keeps OurAirports' widths since 2026-11-13, but `geo.json.gz` has not
-  been rebuilt with them yet (that needs the network).
-- REG, DESC, OPER, VS and CAT are read from fields adsb.lol's replies
-  have carried, and not yet checked against its API document for what
-  its point query promises. A column that adsb.lol stops sending stays
-  empty.
+- adsb.lol's API document (read 2026-11-14) gives a quota for the
+  `/v2/` paths: 500 requests a day for an address with no key, 1,000
+  with a free key and 7,200 for a feeder. Polling every 15 s is 5,760 a
+  day, so an unkeyed install that runs all day may be over it; a refusal
+  shows as `ERR 429` and backs off as above. KCGX sends no key. Whether
+  adsb.lol enforces the figure has not been seen: a live reply that day
+  carried no quota headers.
 - Parked traffic is judged by an altitude above sea level, as the
   airport list has no field elevations: at a high field keep BELOW
   ALTITUDE at 0, where only `GND` counts.

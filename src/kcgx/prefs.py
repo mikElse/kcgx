@@ -163,7 +163,7 @@ TAG_FIELDS = ("CALLSIGN", "TYPE", "SQWK", "ALT", "GS", "TRK", "DIST")
 BOX_ITEMS = ("AIRCRAFT", "HOME", "AIRPORTS", "NAVAIDS", "CITIES", "PEAKS", "STATES", "RINGS", "HUD")
 TRACK_COLS = (
     "CALLSIGN", "TYPE", "REG", "ALT", "VS", "GS", "TRK", "DIST", "BRG", "SQWK",
-    "HEX", "DESC", "OPER", "CAT", "AGE", "LAT", "LON",
+    "HEX", "CAT", "AGE", "LAT", "LON",
 )
 LINES = ("SOLID", "DASH", "DOT")
 

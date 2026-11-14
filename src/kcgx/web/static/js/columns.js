@@ -17,7 +17,7 @@
 //
 // The aircraft is one entry of an aircraft frame's `ac` (kcgx.radar
 // Radar.frame): hex, label, type, lat, lon, alt (feet, or "GND"), gs, trk,
-// sq, age, dist, brg; and from Task 7, reg, desc, oper, vs, cat and still.
+// sq, age, dist, brg; and from Task 7, reg, vs, cat and still.
 
 const blank = (value) => value === null || value === undefined;
 const plain = (value) => (blank(value) ? "" : String(value));
@@ -57,8 +57,6 @@ export const COLUMNS = [
   // A squawk is four figures and set as one, but it is a code: matched as text.
   textColumn("SQWK", "SQWK", "sq", { num: true }),
   textColumn("HEX", "HEX", "hex", { text: (ac) => plain(ac.hex).toUpperCase(), sort: (ac) => plain(ac.hex) }),
-  textColumn("DESC", "DESC", "desc"),
-  textColumn("OPER", "OPER", "oper"),
   textColumn("CAT", "CAT", "cat"),
   numberColumn("AGE", "AGE S", "age", fixed(0)),
   numberColumn("LAT", "LAT", "lat", fixed(4)),

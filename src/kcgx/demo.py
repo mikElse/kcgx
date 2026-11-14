@@ -203,44 +203,44 @@ class DemoMixer:
 # emergency lamp and the log can be seen working. Two more are parked at the
 # field (GND, 0 kt) from the first poll on, so parked traffic's fade can be
 # seen once `ground_min` has passed. Every aircraft carries every field the
-# radar keeps (registration, description, operator, vertical rate, category),
-# with made-up registrations.
+# radar keeps (registration, vertical rate, category), with made-up
+# registrations.
 
 NM_PER_DEG_LAT = 60.0
 
 # callsign, type, start bearing, start nm, heading, leg nm, kt, alt from, alt to, squawk,
-# then readsb's r, desc, ownOp, category
+# then readsb's r and category
 LEGS = [
     ("ASA412", "B39M", 90, 38, 270, 36, 230, 9000, 1200, "4512",
-     "N915AK", "BOEING 737 MAX 9", "ALASKA AIRLINES INC", "A3"),
+     "N915AK", "A3"),
     ("DAL1388", "A321", 30, 6, 30, 40, 310, 3000, 17000, "2251",
-     "N391DN", "AIRBUS A321-200", "DELTA AIR LINES INC", "A3"),
+     "N391DN", "A3"),
     ("UAL1650", "B738", 350, 10, 350, 34, 330, 8000, 26000, "6011",
-     "N37267", "BOEING 737-800", "UNITED AIRLINES INC", "A3"),
+     "N37267", "A3"),
     ("SWA2183", "B737", 300, 36, 125, 32, 250, 12000, 2500, "3305",
-     "N7718B", "BOEING 737-700", "SOUTHWEST AIRLINES CO", "A3"),
+     "N7718B", "A3"),
     ("QXE2041", "DH8D", 260, 30, 80, 28, 200, 6000, 1500, "4471",
-     "N441QX", "DE HAVILLAND DHC-8-400", "HORIZON AIR INDUSTRIES INC", "A2"),
+     "N441QX", "A2"),
     ("N7243K", "C172", 200, 8, 160, 18, 105, 2500, 2500, "1200",
-     "N7243K", "CESSNA 172 SKYHAWK", "CASCADE FLYING CLUB", "A1"),
+     "N7243K", "A1"),
     ("", "PA28", 120, 18, 270, 20, 95, 1800, 1800, "1200",
-     "N8113J", "PIPER PA-28 CHEROKEE", "PRIVATE", "A1"),
+     "N8113J", "A1"),
     ("N52RT", "BE36", 320, 34, 120, 40, 150, 7500, 6500, "1200",
-     "N52RT", "BEECH 36 BONANZA", "PRIVATE", "A1"),
+     "N52RT", "A1"),
     ("FDX1207", "B763", 180, 40, 0, 36, 260, 11000, 2000, "5213",
-     "N119FE", "BOEING 767-300F", "FEDERAL EXPRESS CORP", "A5"),
+     "N119FE", "A5"),
     ("AAL2210", "A320", 60, 40, 245, 80, 450, 33000, 33000, "3466",
-     "N653AW", "AIRBUS A320-200", "AMERICAN AIRLINES INC", "A3"),
+     "N653AW", "A3"),
     ("N911PD", "AS50", 150, 12, 330, 16, 110, 1500, 1500, "1200",
-     "N911PD", "EUROCOPTER AS350 ECUREUIL", "METRO POLICE AIR SUPPORT", "A7"),
+     "N911PD", "A7"),
 ]
 
-# Parked: callsign, type, bearing and nm from the field, heading, squawk, r, desc, ownOp, category
+# Parked: callsign, type, bearing and nm from the field, heading, squawk, r, category
 PARKED = [
     ("ASA1022", "B739", 300, 0.4, 120, "2000",
-     "N413AS", "BOEING 737-900", "ALASKA AIRLINES INC", "A3"),
+     "N413AS", "A3"),
     ("N3842C", "C182", 140, 0.6, 90, "1200",
-     "N3842C", "CESSNA 182 SKYLANE", "PRIVATE", "A1"),
+     "N3842C", "A1"),
 ]
 
 
@@ -256,7 +256,7 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
     now = clock()
     aircraft = []
     for index, (callsign, kind, bearing, start, heading, leg, kt, alt0, alt1, squawk,
-                reg, desc, oper, cat) in enumerate(LEGS):
+                reg, cat) in enumerate(LEGS):
         period = leg / kt * 3600 + 20
         phase = (now + index * 97) % period
         flown = min(leg, phase / 3600 * kt)
@@ -284,12 +284,10 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
             "squawk": squawk,
             "seen_pos": 0.4,
             "r": reg,
-            "desc": desc,
-            "ownOp": oper,
             "baro_rate": round((alt1 - alt0) / (leg / kt * 60)),  # ft/min over the leg
             "category": cat,
         })
-    for offset, (callsign, kind, bearing, nm, heading, squawk, reg, desc, oper, cat) in enumerate(PARKED):
+    for offset, (callsign, kind, bearing, nm, heading, squawk, reg, cat) in enumerate(PARKED):
         p_lat, p_lon = (round(x, 5) for x in _offset(lat, lon, bearing, nm))
         if distance_bearing(lat, lon, p_lat, p_lon)[0] > range_nm:
             continue
@@ -305,8 +303,6 @@ def traffic(lat: float, lon: float, range_nm: int, *, clock=time.time) -> dict:
             "squawk": squawk,
             "seen_pos": 0.4,
             "r": reg,
-            "desc": desc,
-            "ownOp": oper,
             "baro_rate": 0,
             "category": cat,
         })

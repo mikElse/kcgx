@@ -197,14 +197,14 @@ COLUMNS = """() => import('/static/js/columns.js').then(({ COLUMNS, COLUMN }) =>
 FULL = {
     "hex": "a1b2c3", "label": "DAL1388", "type": "A321", "reg": "N123DX", "lat": 45.58899, "lon": -122.5975,
     "alt": 5900, "vs": -640, "gs": 310, "trk": 30, "sq": "2251", "age": 3.4, "dist": 14.3, "brg": 7,
-    "desc": "AIRBUS A-321", "oper": "DELTA AIR LINES", "cat": "A3", "still": 0,
+    "cat": "A3", "still": 0,
 }
 TITLES = {
     "CALLSIGN": "CALLSIGN", "TYPE": "TYPE", "REG": "REG", "ALT": "ALT FT", "VS": "V/S FPM", "GS": "GS KT",
-    "TRK": "TRK", "DIST": "DIST NM", "BRG": "BRG", "SQWK": "SQWK", "HEX": "HEX", "DESC": "DESC", "OPER": "OPER",
+    "TRK": "TRK", "DIST": "DIST NM", "BRG": "BRG", "SQWK": "SQWK", "HEX": "HEX",
     "CAT": "CAT", "AGE": "AGE S", "LAT": "LAT", "LON": "LON",
 }
-TEXT_FILTERS = {"CALLSIGN", "TYPE", "REG", "SQWK", "HEX", "DESC", "OPER", "CAT"}  # Task 8; the rest are numbers
+TEXT_FILTERS = {"CALLSIGN", "TYPE", "REG", "SQWK", "HEX", "CAT"}  # Task 8; the rest are numbers
 RIGHT = {"ALT", "VS", "GS", "TRK", "DIST", "BRG", "SQWK", "AGE", "LAT", "LON"}  # figures, set right
 
 
@@ -220,13 +220,13 @@ def test_every_tracks_column_reads_an_aircraft_and_one_that_reports_nothing(page
     full, empty, ground, unknown = found["read"]
     assert {name: text for name, (text, _) in full.items()} == {
         "CALLSIGN": "DAL1388", "TYPE": "A321", "REG": "N123DX", "ALT": "5900", "VS": "-640", "GS": "310",
-        "TRK": "030", "DIST": "14.3", "BRG": "007", "SQWK": "2251", "HEX": "A1B2C3", "DESC": "AIRBUS A-321",
-        "OPER": "DELTA AIR LINES", "CAT": "A3", "AGE": "3", "LAT": "45.5890", "LON": "-122.5975",
+        "TRK": "030", "DIST": "14.3", "BRG": "007", "SQWK": "2251", "HEX": "A1B2C3",
+        "CAT": "A3", "AGE": "3", "LAT": "45.5890", "LON": "-122.5975",
     }
     assert {name: sort for name, (_, sort) in full.items()} == {
         "CALLSIGN": "DAL1388", "TYPE": "A321", "REG": "N123DX", "ALT": 5900, "VS": -640, "GS": 310, "TRK": 30,
-        "DIST": 14.3, "BRG": 7, "SQWK": "2251", "HEX": "a1b2c3", "DESC": "AIRBUS A-321",
-        "OPER": "DELTA AIR LINES", "CAT": "A3", "AGE": 3.4, "LAT": 45.58899, "LON": -122.5975,
+        "DIST": 14.3, "BRG": 7, "SQWK": "2251", "HEX": "a1b2c3",
+        "CAT": "A3", "AGE": 3.4, "LAT": 45.58899, "LON": -122.5975,
     }
     # Nothing reported, or not yet sent by the server: an empty cell, sorted
     # below every figure, negative ones included (V/S, LON).

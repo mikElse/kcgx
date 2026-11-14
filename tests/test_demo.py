@@ -133,13 +133,13 @@ def test_every_demo_aircraft_carries_every_field_the_radar_keeps():
     for t in range(1_000_000, 1_003_600, 60):
         reply = demo.traffic(45.5887, -122.5975, 250, clock=lambda: float(t))
         for ac in reply["ac"]:
-            for key in ("r", "desc", "ownOp", "baro_rate", "category"):
+            for key in ("r", "baro_rate", "category"):
                 assert ac.get(key) not in (None, ""), (key, ac)
     radar = Radar(on_frame=lambda f: None, on_note=lambda n: None, clock=lambda: 1_000_000.0)
     radar.retarget(45.5887, -122.5975)
     radar.merge(demo.traffic(45.5887, -122.5975, 250, clock=lambda: 1_000_000.0))
     for ac in radar.frame()["ac"]:
-        assert None not in (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]), ac
+        assert None not in (ac["reg"], ac["vs"], ac["cat"]), ac
     climbing = {ac["label"]: ac["vs"] for ac in radar.frame()["ac"]}
     assert "DAL1388" in climbing and "ASA412" in climbing, sorted(climbing)
     assert climbing["DAL1388"] > 0 and climbing["ASA412"] < 0

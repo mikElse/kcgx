@@ -90,15 +90,16 @@ def test_every_field_adsb_lol_gives_is_kept_under_a_short_key():
     radar.merge({"ac": [plane(r="n412as ", desc="boeing 737 max 9", ownOp="Alaska Airlines Inc",
                               baro_rate=-704.4, category="a3")]})
     ac = radar.frame()["ac"][0]
-    assert (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]) == (
-        "N412AS", "BOEING 737 MAX 9", "ALASKA AIRLINES INC", -704, "A3")
+    assert (ac["reg"], ac["vs"], ac["cat"]) == ("N412AS", -704, "A3")
+    # Not in adsb.lol's OpenAPI document nor seen in a reply: not kept.
+    assert not {"desc", "oper", "ownOp"} & set(ac)
 
 
 def test_a_field_not_given_is_none():
     radar, *_ = make()
-    radar.merge({"ac": [plane("a"), plane("b", r="  ", desc="", ownOp=None, baro_rate="fast", category=7)]})
+    radar.merge({"ac": [plane("a"), plane("b", r="  ", baro_rate="fast", category=7)]})
     for ac in radar.frame()["ac"]:
-        assert (ac["reg"], ac["desc"], ac["oper"], ac["vs"], ac["cat"]) == (None,) * 5, ac
+        assert (ac["reg"], ac["vs"], ac["cat"]) == (None,) * 3, ac
 
 
 # -- parked traffic ------------------------------------------------------------

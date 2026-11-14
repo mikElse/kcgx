@@ -325,6 +325,12 @@ browser, for three reasons:
 * One poller serves every open tab, so two tabs do not double the rate.
 * The 15 second interval and the over-rate penalty described in the README
   apply per address; the server is where that discipline can be kept.
+* adsb.lol's OpenAPI document (read 2026-11-14) now also states a daily
+  quota on `/v2/`: 500 requests per address with no key, 1,000 with a
+  free key, 7,200 for a feeder, `429` with `Retry-After` beyond it.
+  Every 15 s is 5,760 a day. KCGX sends no key and does not read
+  `Retry-After`; whether the quota is enforced has not been seen (a live
+  reply carried no quota headers). An open question for the owner.
 
 `KCGX_ADSB_UA` keeps its meaning. `refresh_secs` and the range move into
 `squelch.toml` as `radar_refresh_secs` (default `15`), `radar_range_nm`
@@ -362,12 +368,18 @@ minutes or four intervals, whichever is longer, so it backs off at least
 twice at any interval (15, 30, 60, 120 s; at 120: 240 and 480 s).
 
 **Every field the table can show** (2026-11-13, Task 7). Each aircraft
-now also keeps readsb's `r`, `desc`, `ownOp`, `baro_rate` and `category`,
-sent as `reg`, `desc`, `oper`, `vs` and `cat`: text in capitals, the rate
-rounded, `null` where the reply leaves one out. The plan said to read
-adsb.lol's OpenAPI document first and keep only the fields `/v2/point`
-promises. **That check is still owed**; all five are kept, and a column
-whose field never comes stays empty.
+now also keeps readsb's `r`, `baro_rate` and `category`, sent as `reg`,
+`vs` and `cat`: text in capitals, the rate rounded, `null` where the
+reply leaves one out. The plan said to read adsb.lol's OpenAPI document
+first and keep only the fields `/v2/point` promises. Task 7 kept `desc`
+and `ownOp` too, as `desc` and `oper`, without the document; read on
+2026-11-14, it has `r`, `baro_rate` and `category` (optional, as every
+field but a few is) and neither of the others, and a live `/v2/point`
+reply at KORD that day (36 aircraft) had `r` on all, `category` on 35,
+`baro_rate` on 22 and `desc` or `ownOp` on none. DESC and OPER were
+dropped. A file that saved either among its columns, or as the sort,
+loses that setting to its default, as any bad value does; both lived one
+day, unreleased.
 
 **How long a track has stood still** (2026-11-13, decision 9). A track is
 still while its ground speed is under `ground_gs` and it reports `GND`
@@ -413,9 +425,9 @@ beneath it; see "Click an aircraft to focus it" under Visual language.
 
 **The table since 2026-11-13 (phase G).**
 
-* **Columns are chosen.** `columns.js` holds all seventeen (CALLSIGN,
-  TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, DESC, OPER, CAT, AGE,
-  LAT, LON), each with its title, its text, its sort value and its filter
+* **Columns are chosen.** `columns.js` holds all fifteen (CALLSIGN,
+  TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, CAT, AGE, LAT, LON;
+  DESC and OPER until 2026-11-14), each with its title, its text, its sort value and its filter
   kind; the table and the radar's data box both read an aircraft through
   it, so a value reads the same in each. A figure not reported sorts
   below every real one. The table shows `track_cols` in that order,
@@ -488,7 +500,7 @@ object with a `t`. Server to page:
 | `message` | `z` (Zulu, `1955Z`), `text` | a line added to the log |
 | `prefs` | every setting: `palette`, `glow`, `display` (phase C) and, since 2026-11-12, the eleven more listed under Themes; since 2026-11-13 the fifty-four of `kcgx.prefs.SCHEMA`, `map` whole | any page changed one; every tab follows |
 | `error` | `text` | this page sent something the protocol does not have |
-| `aircraft` | `ok`, `error`, `age` (seconds since the last good poll), `refresh`, `range`, and `ac`: per aircraft `hex`, `label`, `type`, `lat`, `lon`, `alt` (feet or `GND`), `gs`, `trk`, `sq`, `age`, `dist`, `brg`; since 2026-11-13 also `reg`, `desc`, `oper`, `vs`, `cat` and `still` | each poll, success or refusal, and on an airport change (empty); the snapshot carries the latest as `radar` (phase D) |
+| `aircraft` | `ok`, `error`, `age` (seconds since the last good poll), `refresh`, `range`, and `ac`: per aircraft `hex`, `label`, `type`, `lat`, `lon`, `alt` (feet or `GND`), `gs`, `trk`, `sq`, `age`, `dist`, `brg`; since 2026-11-13 also `reg`, `vs`, `cat` and `still` (and `desc` and `oper` until 2026-11-14) | each poll, success or refusal, and on an airport change (empty); the snapshot carries the latest as `radar` (phase D) |
 
 Page to server: `mute`, `solo`, `ambient` and `open_feed`, each with an
 `ident`; `volume` with a `value`, clamped to 0..1; `input`, the "you
@@ -1045,7 +1057,7 @@ key it lists but `glow`; the new keys, by the CONFIG tab that holds them:
 | `ground_alt` | number | 0 to 5000 (ft), step 100 | 0 | BELOW ALTITUDE |
 | `ground_min` | number | 0 to 30 (min) | 2 | AFTER |
 | `ground_alpha` | number | 0 to 100 (%) | 25 | FADE TO |
-| `track_cols` | subset | CALLSIGN, TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, DESC, OPER, CAT, AGE, LAT, LON | CALLSIGN, TYPE, ALT, GS, TRK, DIST, SQWK | COLUMNS |
+| `track_cols` | subset | CALLSIGN, TYPE, REG, ALT, VS, GS, TRK, DIST, BRG, SQWK, HEX, CAT, AGE, LAT, LON | CALLSIGN, TYPE, ALT, GS, TRK, DIST, SQWK | COLUMNS |
 | `track_sort` | choice | the same names | DIST | SORT BY |
 | `track_desc` | flag | | false | DESCENDING |
 | `sort_floor` | number | 0 to 100 (%) | 40 | DIMMEST (RADAR) |
@@ -1340,9 +1352,8 @@ screen is wider than its row's line is a filled quadrilateral that wide,
 and never narrower than the line. The width is OurAirports' `width_ft`,
 which `tools/build_geodata.py` keeps as a runway's fifth element since
 2026-11-13 and `geodata` passes on, or 150 ft where the map has none.
-**The map that ships has none:** `geo.json.gz` has not been rebuilt with
-widths (the rebuild needs the network), so every runway is drawn 150 ft
-wide until it is. A map with widths and one without both draw.
+The map was rebuilt with widths on 2026-11-14 (5,987 of 5,989 runways
+have one). A map with widths and one without both draw.
 
 **How a label box is painted and placed** (2026-11-12; the setting is
 under Visual language). Both radar layers are light added to light, so
@@ -1561,10 +1572,13 @@ close zoom, which is the stills' base outlines put to honest use.
 
 Since 2026-11-13 (phase G Task 10) the build keeps OurAirports'
 `width_ft` as a runway's fifth element where the row has one, for the
-radar to draw runways at their true width close in. **The committed map
-has not been rebuilt with it**, since the rebuild fetches OurAirports
-and the lane could not; that is owed, and until it is done runways are
-drawn 150 ft wide. The old map loads and draws as it did.
+radar to draw runways at their true width close in. The lane could not
+fetch OurAirports, so the map was rebuilt with it on 2026-11-14: the
+Natural Earth and FAA layers came out identical (same release, same
+cycle), and OurAirports' nightly data moved the rest a little (18,848
+airports to 18,814, 4,166 airports with runways to 4,167). 5,987 of
+5,989 runways have a width; the other two are drawn 150 ft wide. A map
+without widths still loads and draws.
 
 ### Every action is a click
 
@@ -1996,7 +2010,7 @@ all of that code.
 | **D** | Radar: geodata build, vector renderer, poller, aircraft, table, palettes | geodata, radar and browser tests; manual check at a busy airport |
 | **E** | Launcher, `setup.sh`, README; remove tmux, adsb-tui and the Textual UI | launcher, self check and setup tests; a fresh `./setup.sh` and `kcgx` on the Mac |
 | **F** | The 11/12 tweaks (density, icons, every setting in CONFIG, range to 250 nm, zoom to 2.5, flight tags, label boxes); the page in WebKit; KCGX.app (2026-11-12) | prefs, page and window tests in Chromium and WebKit; by hand on the Mac, against real feeds and with the window open, **still owed** |
-| **G** | The second 11/12 list (2026-11-13): the boot animation; CONFIG full-screen in four tabs, the table kind and forty new settings; one feed at a time, a master mute, titles without the airport; the tracks table's columns, filters, sort, header, height and fold; map layers by setting, labels by zoom, 0.25 nm and runways, click to centre, follow and the data box, tags over everything, tails by time and speed, parked traffic, the sort's shading; the radar split in four on one frame clock, glow per colour on the map, culling, burn-in by time, the render scale | page and Python tests in Chromium and WebKit, six lanes merged one by one with the whole suite after each. **Still owed:** the map rebuilt with runway widths; adsb.lol's OpenAPI document read for the fields `/v2/point` promises; by hand on the Mac, real feeds at KORD (titles, picking while one is parked, the master mute), real traffic at KPDX (parked fading, follow at 10 nm, 0.25 nm on the runways), and the boot and UI zoom in KCGX.app |
+| **G** | The second 11/12 list (2026-11-13): the boot animation; CONFIG full-screen in four tabs, the table kind and forty new settings; one feed at a time, a master mute, titles without the airport; the tracks table's columns, filters, sort, header, height and fold; map layers by setting, labels by zoom, 0.25 nm and runways, click to centre, follow and the data box, tags over everything, tails by time and speed, parked traffic, the sort's shading; the radar split in four on one frame clock, glow per colour on the map, culling, burn-in by time, the render scale | page and Python tests in Chromium and WebKit, six lanes merged one by one with the whole suite after each. The map was rebuilt with runway widths and adsb.lol's document read (DESC and OPER dropped) on 2026-11-14. **Still owed:** by hand on the Mac, real feeds at KORD (titles, picking while one is parked, the master mute), real traffic at KPDX (parked fading, follow at 10 nm, 0.25 nm on the runways), and the boot and UI zoom in KCGX.app |
 
 A comes first because it is the only phase that touches working code, and it
 leaves the terminal cockpit intact. B through D add new files alongside the

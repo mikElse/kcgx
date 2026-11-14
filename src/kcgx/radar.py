@@ -132,12 +132,11 @@ class Track:
     track: float | None = None
     squawk: str = ""
     unk: int = 0
-    # Given by adsb.lol for most aircraft but not promised for any: None
-    # when the reply leaves them out. readsb's names: r, desc, ownOp,
-    # baro_rate (ft/min), category (A0 to D7).
+    # In adsb.lol's OpenAPI document but optional: None when the reply
+    # leaves them out. readsb's names: r, baro_rate (ft/min), category (A0
+    # to D7). Its desc and ownOp are in neither the document nor a live
+    # /v2/point reply (checked 2026-11-14), so they are not kept.
     reg: str | None = None
-    desc: str | None = None
-    oper: str | None = None
     vs: float | None = None
     cat: str | None = None
     still_since: float | None = None  # our clock, the poll it first qualified as parked
@@ -308,8 +307,6 @@ class Radar:
             track.track = _number(raw.get("track"))
             track.squawk = str(raw.get("squawk") or "").strip()
             track.reg = _text(raw.get("r"))
-            track.desc = _text(raw.get("desc"))
-            track.oper = _text(raw.get("ownOp"))
             track.vs = _number(raw.get("baro_rate"))
             track.cat = _text(raw.get("category"))
             if not self._parked(track):
@@ -373,8 +370,6 @@ class Radar:
                 "dist": round(distance, 1),
                 "brg": round(bearing),
                 "reg": track.reg,
-                "desc": track.desc,
-                "oper": track.oper,
                 "vs": None if track.vs is None else round(track.vs),
                 "cat": track.cat,
                 "still": 0 if track.still_since is None else round(now - track.still_since),

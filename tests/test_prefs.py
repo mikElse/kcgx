@@ -39,7 +39,7 @@ def stored(tmp_path, values):
 
 TRACK_COLS = (
     "CALLSIGN", "TYPE", "REG", "ALT", "VS", "GS", "TRK", "DIST", "BRG", "SQWK",
-    "HEX", "DESC", "OPER", "CAT", "AGE", "LAT", "LON",
+    "HEX", "CAT", "AGE", "LAT", "LON",
 )
 
 # The map table in the plan: a row has only the columns that mean something for it.

@@ -18,7 +18,7 @@ pytestmark = pytest.mark.browser
 NAMES = list(SCHEMA["track_cols"].names)
 TITLES = {
     "CALLSIGN": "CALLSIGN", "TYPE": "TYPE", "REG": "REG", "ALT": "ALT FT", "VS": "V/S FPM", "GS": "GS KT",
-    "TRK": "TRK", "DIST": "DIST NM", "BRG": "BRG", "SQWK": "SQWK", "HEX": "HEX", "DESC": "DESC", "OPER": "OPER",
+    "TRK": "TRK", "DIST": "DIST NM", "BRG": "BRG", "SQWK": "SQWK", "HEX": "HEX",
     "CAT": "CAT", "AGE": "AGE S", "LAT": "LAT", "LON": "LON",
 }
 
@@ -113,13 +113,13 @@ def test_the_columns_button_opens_a_checklist_that_round_trips_track_cols(page, 
     page.wait_for_selector("#tracks-columns button[data-key=REG][aria-pressed=true]")
     # The checklist stays open for the next, and a second tab shows the same.
     assert page.is_visible("#tracks-columns")
-    page.click("#tracks-columns button[data-key=OPER]")
-    pref_is(page, "track_cols", [name for name in NAMES if name in with_reg or name == "OPER"])
-    pref_is(other, "track_cols", [name for name in NAMES if name in with_reg or name == "OPER"])
-    other.wait_for_function("[...document.querySelectorAll('#tracks-head th')].some(th => th.textContent === 'OPER')")
+    page.click("#tracks-columns button[data-key=CAT]")
+    pref_is(page, "track_cols", [name for name in NAMES if name in with_reg or name == "CAT"])
+    pref_is(other, "track_cols", [name for name in NAMES if name in with_reg or name == "CAT"])
+    other.wait_for_function("[...document.querySelectorAll('#tracks-head th')].some(th => th.textContent === 'CAT')")
     assert "REG" in head(other)
     page.click("#tracks-columns button[data-key=REG]")
-    page.click("#tracks-columns button[data-key=OPER]")
+    page.click("#tracks-columns button[data-key=CAT]")
     pref_is(page, "track_cols", DEFAULTS["track_cols"])
     page.keyboard.press("Escape")
     page.wait_for_selector("#tracks-columns", state="hidden")
