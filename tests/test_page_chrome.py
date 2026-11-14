@@ -115,11 +115,11 @@ def test_a_click_on_a_chevron_focuses_it_under_ui_zoom(page, zoom):
     set_prefs(page, ui_zoom=zoom)
     wait_for_traffic(page)
     page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")
-    # Drawn at the zoomed size: the canvas's backing store matches its box.
-    page.wait_for_function(
-        """() => { const c = document.getElementById("radar"); const box = c.getBoundingClientRect();
-                   return c.width === Math.round(box.width * devicePixelRatio); }"""
-    )
+    # Drawn at the zoomed size: the canvas's backing store matches its size on
+    # the screen, which Playwright gives as painted in both engines (WebKit's
+    # getBoundingClientRect is unzoomed).
+    shown = page.locator("#radar").bounding_box()["width"] * page.evaluate("devicePixelRatio")
+    page.wait_for_function("w => Math.abs(document.getElementById('radar').width - w) <= 1", arg=shown)
     # Where a canvas pixel is on the screen, from the canvas's painted box.
     box = page.locator("#radar").bounding_box()
     width, height_ = page.eval_on_selector("#radar", "c => [c.width, c.height]")
