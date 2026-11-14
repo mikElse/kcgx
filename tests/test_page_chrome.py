@@ -111,13 +111,7 @@ def test_ui_zoom_scales_the_sheets_and_config_still_fills_the_window(page):
 
 
 @pytest.mark.parametrize("zoom", [75, 150])
-def test_a_click_on_a_chevron_focuses_it_under_ui_zoom(page, zoom, request):
-    if request.node.callspec.params["browser"] == "webkit":
-        request.applymarker(pytest.mark.xfail(
-            reason="WebKit gives getBoundingClientRect in unzoomed CSS px under CSS zoom while clientX/Y are the "
-            "viewport's: radar/view.js local() must divide clientX/clientY by ui_zoom/100 there (MAP's file)",
-            strict=True,
-        ))
+def test_a_click_on_a_chevron_focuses_it_under_ui_zoom(page, zoom):
     set_prefs(page, ui_zoom=zoom)
     wait_for_traffic(page)
     page.wait_for_function("document.querySelectorAll('#tracks-body tr').length >= 5")

@@ -1445,11 +1445,16 @@ def test_a_new_range_under_a_held_drag_leaves_the_drag_going_from_the_new_view(p
     page.mouse.move(x + 150, y + 80)
     page.mouse.up()
     per_nm = fit(page) / 120
-    ratio = page.evaluate("devicePixelRatio")
+    # The pointer's px in the canvas's on each side: its whole pixels over
+    # its size on the screen, which a pane sized in per cent leaves fractional.
+    kx, ky = page.evaluate(
+        """() => { const c = document.querySelector('#radar'), box = c.getBoundingClientRect();
+            return [c.width / box.width, c.height / box.height]; }"""
+    )
     view = radar_debug(page)["view"]
     assert view["nm"] == 120
-    assert view["panX"] == pytest.approx(-30 * ratio / per_nm)
-    assert view["panY"] == pytest.approx(-20 * ratio / per_nm)
+    assert view["panX"] == pytest.approx(-30 * kx / per_nm)
+    assert view["panY"] == pytest.approx(-20 * ky / per_nm)
     # and the press that ends it is still the end of a drag, not a click
     page.mouse.dblclick(x, y)
     assert radar_debug(page)["view"] == {"nm": 120, "panX": 0, "panY": 0}
@@ -2249,7 +2254,11 @@ def test_boxes_with_no_fill_and_no_border_leave_the_picture_as_it_was(page):
     )
     set_prefs(page, display="OFF", tag_fields=FIELDS)
     before = picture(page)
-    kept = [p["key"] for p in radar_debug(page)["placed"]]
+    shown = radar_debug(page)
+    kept = [p["key"] for p in shown["placed"]]
+    # The ring numbers, less any the airport's name is written across: what
+    # that takes depends on the radar's size, so it is read, not assumed.
+    numbered = [r["text"] for r in shown["rings"] if r["label"]]
     # Tags are not placed around one another, so a box reserves nothing for them.
     set_prefs(page, box_items=["AIRCRAFT", "HUD"], box_fill=0, box_border=0, box_pad=12, box_width=5)
     assert picture(page) == before
@@ -2259,7 +2268,8 @@ def test_boxes_with_no_fill_and_no_border_leave_the_picture_as_it_was(page):
     # label loses its place for that: the same labels, so the same picture.
     debug = draw(page, box_items=[i for i in ITEMS if i not in ("HOME", "RINGS")], box_pad=0, box_width=1)
     assert [p["key"] for p in debug["placed"]] == kept
-    assert all(p["boxed"] for p in debug["placed"][1:]) and all(r["label"] for r in debug["rings"])
+    assert all(p["boxed"] for p in debug["placed"][1:])
+    assert [r["text"] for r in debug["rings"] if r["label"]] == numbered
     assert picture(page) == before
     # The airport's name and the ring numbers too: the number that the name
     # is written across is left off, and nothing else changes place.
