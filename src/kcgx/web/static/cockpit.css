@@ -88,7 +88,8 @@ button, input, select { font: inherit; letter-spacing: inherit; color: inherit; 
    from a screen's frame to what is in it. */
 :root { --gap: 10px; --page-pad: 10px 12px 12px; --pad-x: 10px; --pad-y: 6px; }
 .page {
-  height: 100%; min-height: 640px; padding: var(--page-pad);
+  /* 640 of the window's px at any UI zoom: the zoom scales the page's own. */
+  height: 100%; min-height: calc(64000px / var(--ui-zoom)); padding: var(--page-pad);
   display: grid; column-gap: var(--gap);
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   grid-template-rows: auto auto min-content minmax(48px, 1fr) auto var(--tracks-row, minmax(160px, 24vh));

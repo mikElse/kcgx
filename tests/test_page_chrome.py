@@ -100,6 +100,18 @@ def test_ui_zoom_scales_the_page(page):
     assert height(page, "#icao") == pytest.approx(before * 0.75, abs=1)
 
 
+@pytest.mark.parametrize("zoom", [150, 200])
+def test_ui_zoom_keeps_the_page_in_the_window(page, zoom):
+    """The page's least height is 640 of the window's px, not of its own:
+    zoomed, its own 640 ran 60 px past a 900 px window at 150 and 380 at 200,
+    and scrolled the header away."""
+    set_prefs(page, ui_zoom=zoom)
+    page.wait_for_selector("#tracks-body tr")
+    assert page.evaluate("document.documentElement.scrollHeight") <= 900
+    assert page.locator(".bar").bounding_box()["y"] >= 0
+    assert page.locator("#tracks-body tr").first.bounding_box()["y"] < 900
+
+
 def test_ui_zoom_scales_the_sheets_and_config_still_fills_the_window(page):
     config_tab(page, "ui_zoom")
     before = height(page, "#config-title")

@@ -84,7 +84,8 @@ export function fontFamilies(choice) {
 
 // How many backing-store pixels a canvas gives each device pixel, by the
 // anti-aliasing setting (phase G decision 6): OFF half, ON the display's
-// own, SUPER twice. Nothing applies it yet; each lane does for its canvases.
+// own, SUPER twice. radar/index.js's size() applies it to every radar
+// canvas (and caps each at 8 megapixels).
 const RENDER_SCALE = { OFF: 0.5, ON: 1, SUPER: 2 };
 export function renderScale() {
   return RENDER_SCALE[setting("aa")] ?? 1;

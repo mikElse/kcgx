@@ -8,6 +8,7 @@
 //   moving.js  the moving layer: aircraft and trails; and the tags' layer
 //   view.js    the view in nm, the pointer: pan, zoom, recentre, hit tests
 //   draw.js    what the two layers share: the font, label boxes
+//   info.js    the focused aircraft's data box, a page element over the radar
 //
 // The static layer is drawn into an offscreen canvas when it changes and
 // copied each frame. The moving one is drawn every frame. With display

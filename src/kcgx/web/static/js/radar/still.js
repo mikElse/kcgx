@@ -17,8 +17,8 @@
 // what is on the screen. It is drawn anew SETTLE_MS after the view stops,
 // at once when a drag is let go, at once when anything else it is drawn
 // from changes, and, while the view moves on, once the moved drawing would
-// be scaled past SCALED (a quarter-size picture with black all round, or
-// one blown up 4x) or moved to leave more than BARE of the screen's
+// be scaled past SCALED (under 0.8, which leaves black round the edge, or
+// over 1.5, which blurs it) or moved to leave more than BARE of the screen's
 // shorter side uncovered: then that drawing is the one moved.
 //
 // How each part is drawn is a row of the `map` table (prefs.map, phase G
