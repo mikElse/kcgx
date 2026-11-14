@@ -1873,8 +1873,9 @@ def test_a_chevron_under_another_aircrafts_tag_is_the_one_a_click_on_it_focuses(
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a2"]')
     # The rest of the tag is still its own aircraft's, where following a2
     # (Task 12) has moved it.
+    # By its hex: hits are topmost first, and the focused a2 is on top now.
     frames(page)
-    first = radar_debug(page)["hits"][0]
+    first = next(h for h in radar_debug(page)["hits"] if h["hex"] == "a1")
     page.mouse.click(*on_screen(page, first["tag"]["x"] + first["tag"]["w"] / 2, first["tag"]["y"] + first["tag"]["h"] / 2))
     page.wait_for_selector('#tracks-body tr.focused[data-hex="a1"]')
 
