@@ -2,7 +2,8 @@
    framed screens with their names along the bottom, lamps between them.
    Everything visual hangs off attributes on <html>, set from the server's
    prefs: data-palette, data-display, data-lamps, data-teletype and
-   data-box-hud, and custom properties for the numbers (glow, zoom, fonts,
+   data-box-hud (and data-config, while the config panel is open), and
+   custom properties for the numbers (glow, zoom, fonts,
    scanlines, boxes), which main.js writes. */
 
 @font-face { font-family: "Share Tech Mono"; src: url("fonts/share-tech-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
@@ -326,46 +327,147 @@ label.field-row { flex-wrap: nowrap; }
 .segments { display: flex; flex-wrap: wrap; gap: 4px; }
 .seg { min-height: 26px; padding: 0 8px; font-size: 12px; }
 
-/* Config is the window less a 16 px margin, centred, over a nearly black
-   backdrop (phase G decision 2). 100%, not 100vw and 100vh: the sheet is
-   fixed, so 100% is the window without its scrollbar and without a phone's
-   address bar. The head and the tab bar stay; the panel under them scrolls. */
-#config-sheet { inset: 0; margin: auto; width: calc(100% - 32px); height: calc(100% - 32px);
-  max-width: none; max-height: none; overflow: hidden; }
-#config-sheet[open] { display: flex; flex-direction: column; }
-#config-sheet::backdrop { background: rgb(0 0 0 / 0.85); }
-#config-sheet .sheet-head, .tabs { flex: 0 0 auto; }
-/* One line of tabs: on a phone they close up, and scroll across if they must. */
-.tabs { display: flex; gap: 4px; padding: 2px 2px 8px; overflow-x: auto; border-bottom: 1px solid var(--rule); }
-.tabs .seg { flex: 0 0 auto; }
-@media (max-width: 480px) {
-  .tabs .seg { padding: 0 6px; letter-spacing: 0.04em; }
-  .field-row > span:first-child { min-width: 120px; }
+/* -- the config panel ----------------------------------------------------------- */
+
+/* CONFIG is a panel down the right of the window, 480 px of it, and not a
+   sheet over the cockpit: open (<html data-config="ON">, which sheets.js
+   sets) it pushes the page to the left, and the radar, the tracks and the
+   frequencies lay themselves out in what is left. The panel and the page
+   are zoomed alike (UI zoom), so the panel's width is the page's margin at
+   any zoom. Where the page is one column (1100 px and under) there is
+   nothing to push it into, and the panel lies over it, the whole width of
+   a phone. A <dialog> that is not modal: no backdrop, and the page in use.
+   The head, the tabs and the foot stay; the panel between them scrolls. */
+:root { --config-w: 480px; --config-ms: 260ms; }
+.page { transition: margin-right var(--config-ms) ease-out; }
+@media (min-width: 1101px) {
+  [data-config="ON"] .page { margin-right: var(--config-w); }
 }
-.btn[aria-selected="true"] { border-color: var(--pink); color: var(--pink); }
-/* A panel is groups of rows side by side, as many as fit at 440 px or more;
-   a wide group (the map's grid) takes the whole width. */
-.tab-panel { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 4px 4px 2px;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 0 28px; align-content: start; }
-.tab-panel[hidden] { display: none; }
-.group { min-width: 0; }
-.group-wide { grid-column: 1 / -1; }
-/* The map's grid: a row per layer, a column per style, a cell only where the
-   layer has that style. It scrolls across inside itself on a narrow window. */
-.field-row.field-table { flex-direction: column; align-items: stretch; }
-.field-table > span:first-child { color: var(--muted); font-size: 12px; letter-spacing: 0.14em; margin: 12px 0 0; }
-/* inline-size containment: the grid's least width stays inside, and does not widen the panel. */
-.grid-scroll { overflow-x: auto; padding: 2px; contain: inline-size; }
-.grid { border-collapse: collapse; min-width: 860px; width: 100%; }
-.grid th { padding: 3px 8px 3px 0; font-weight: 400; text-align: left; white-space: nowrap; }
-.grid thead th { color: var(--muted); font-size: 12px; letter-spacing: 0.14em; }
-.grid tbody th { color: var(--text); }
-.grid td { padding: 3px 12px 3px 0; border-top: 1px solid var(--rule); white-space: nowrap; }
-.grid tbody th { border-top: 1px solid var(--rule); }
-.grid td[data-column] { display: table-cell; }
-.grid td .segments { flex-wrap: nowrap; }
-.grid td input[type="range"] { width: 110px; vertical-align: middle; }
-.grid td .num { display: inline-block; min-width: 64px; margin-left: 6px; text-align: right; vertical-align: middle; }
+#config-sheet {
+  /* Three lines of the panel's own, each a shade of the palette. */
+  --edge: color-mix(in srgb, var(--muted) 48%, #000);
+  --edge-soft: color-mix(in srgb, var(--muted) 33%, #000);
+  --line: color-mix(in srgb, var(--rule) 70%, #000);
+  position: fixed; inset: 0 0 0 auto; margin: 0; padding: 0;
+  width: min(var(--config-w), 100%); height: 100%; max-width: none; max-height: none; overflow: hidden;
+  border: 0; border-left: 1px solid var(--frame);
+  box-shadow: -10px 0 36px rgb(0 0 0 / 0.7), var(--frame-glow);
+  font-size: 13px;
+  /* It slides in from the right, and out: display waits for the slide. */
+  transform: translateX(100%);
+  transition: transform var(--config-ms) ease-out, display var(--config-ms) allow-discrete;
+}
+#config-sheet[open] { display: flex; flex-direction: column; transform: none; }
+@starting-style { #config-sheet[open] { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .page, #config-sheet { transition: none; }
+}
+/* The gear is lit while the panel is open. */
+.icon-btn[aria-expanded="true"] { border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--pink), 0 0 10px color-mix(in srgb, var(--pink) 50%, transparent); }
+
+#config-sheet .sheet-head { flex: 0 0 auto; margin: 0; padding: 12px 6px 6px 18px; }
+#config-sheet h2 { font-size: 24px; letter-spacing: 0.3em; }
+#config-sheet .sheet-head .icon-btn { width: 44px; height: 44px; }
+
+.tabs { flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--frame) 33%, #000); }
+.tab { height: 42px; margin-bottom: -1px; padding: 0; background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--muted); font: 15px var(--font-display); letter-spacing: 0.16em; cursor: pointer; }
+.tab:hover { color: var(--white); }
+.tab:focus-visible, .reset:focus-visible { outline: 2px solid var(--pink); outline-offset: -2px; }
+.tab[aria-selected="true"] { color: var(--white); border-bottom-color: var(--cyan);
+  text-shadow: 0 0 7px color-mix(in srgb, var(--cyan) 70%, transparent); }
+
+.tab-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 18px 18px;
+  scrollbar-width: thin; scrollbar-color: var(--dim) #000; }
+.group { padding-top: 20px; }
+.group-head { display: flex; align-items: center; gap: 10px; min-height: 24px; margin-bottom: 2px; }
+#config-sheet h3 { margin: 0; font: 16px var(--font-display); letter-spacing: 0.24em; white-space: nowrap;
+  color: var(--cyan); text-shadow: 0 0 6px color-mix(in srgb, var(--cyan) 50%, transparent); }
+.group-rule { flex: 1; height: 1px; background: color-mix(in srgb, var(--dim) 40%, #000); }
+.reset { padding: 4px 0 4px 6px; background: none; border: 0; cursor: pointer;
+  color: var(--amber); font-size: 11px; letter-spacing: 0.16em; }
+.reset:hover { color: var(--white); text-decoration: underline; }
+
+/* A row: its name, and a line under it saying what it does, on the left;
+   its control on the right, or beneath when the row is stacked. */
+#config-sheet .field-row { flex-wrap: nowrap; justify-content: space-between; gap: 14px; min-height: 44px;
+  margin: 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
+#config-sheet .field-row.stacked { flex-direction: column; align-items: stretch; gap: 9px; padding: 10px 0 12px; }
+#config-sheet .field-row.off { opacity: 0.36; }
+#config-sheet .lab { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+#config-sheet .name { display: flex; align-items: center; gap: 8px; font-size: var(--font-px); letter-spacing: 0.1em;
+  color: color-mix(in srgb, var(--text) 50%, var(--white)); }
+.hint { color: var(--muted); font-size: 11px; letter-spacing: 0.03em; line-height: 1.4; }
+/* Said only while the row does nothing (the scanlines, unless the screen is CRT). */
+.hint.when-off { display: none; }
+.field-row.off .hint.when-off { display: block; }
+/* A setting that is not the default. */
+.dot { flex: 0 0 auto; width: 6px; height: 6px; background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+
+/* One of a few: buttons in one frame, the chosen one filled. */
+#config-sheet .segments { flex: 0 0 auto; flex-wrap: nowrap; gap: 0; border: 1px solid var(--edge); }
+#config-sheet .seg { min-width: 38px; min-height: 0; height: 30px; padding: 0 9px; border: 0; border-left: 1px solid var(--edge);
+  font-size: 12px; letter-spacing: 0.1em; white-space: nowrap; }
+#config-sheet .seg:first-child { border-left: 0; }
+#config-sheet .seg:hover:enabled { background: color-mix(in srgb, var(--cyan) 12%, #000); color: var(--white); }
+#config-sheet .seg[aria-pressed="true"] { background: var(--cyan); color: #000;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cyan) 45%, transparent); }
+#config-sheet .segments.wide { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+#config-sheet .segments.small .seg { height: 26px; min-width: 0; padding: 0 7px; font-size: 11px; letter-spacing: 0.08em; }
+#config-sheet .btn:disabled { cursor: not-allowed; }
+
+/* On or off: a lamp and the word. */
+.toggle { flex: 0 0 auto; }
+.tog { display: flex; align-items: center; gap: 9px; height: 30px; min-width: 74px; padding: 0 11px 0 9px;
+  border-color: var(--edge); color: var(--muted); font-size: 12px; letter-spacing: 0.14em; }
+.tog i { width: 22px; height: 10px; border: 1px solid var(--muted); }
+.tog:hover:enabled { border-color: var(--muted); color: var(--text); }
+.tog[aria-pressed="true"] { border-color: var(--cyan); color: var(--white); }
+.tog[aria-pressed="true"] i, .chip[aria-pressed="true"] i, .layer-show[aria-pressed="true"] i {
+  background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+
+/* Any of a few: a chip each, with a box that fills. */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px;
+  border-color: var(--edge-soft); color: var(--muted); font-size: 12px; letter-spacing: 0.1em; }
+.chip i { width: 8px; height: 8px; border: 1px solid currentColor; }
+.chip:hover:enabled { border-color: var(--edge); color: var(--text); }
+.chip[aria-pressed="true"] { border-color: var(--cyan); color: var(--white); }
+
+/* The themes: each a button with three bars in its own colours on its own
+   wall, which it has from the palette rules by its data-palette. */
+.swatches { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.swatch { display: flex; flex-direction: column; align-items: stretch; gap: 7px; padding: 6px;
+  border-color: var(--edge-soft); color: var(--muted); font-size: 11px; letter-spacing: 0.14em; }
+.swatch:hover { border-color: var(--edge); color: var(--text); }
+.swatch[aria-pressed="true"] { border-color: var(--cyan); color: var(--white);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cyan) 35%, transparent); }
+.swatch-art { height: 38px; display: flex; align-items: flex-end; gap: 4px; padding: 6px;
+  background: var(--wall); border: 1px solid var(--rule); }
+.swatch-art span { flex: 1; height: 55%; background: var(--cyan); }
+.swatch-art span:nth-child(2) { height: 100%; background: var(--pink); }
+.swatch-art span:nth-child(3) { height: 35%; background: var(--amber); }
+
+#config-sheet .field-row select { flex: 0 0 auto; height: 30px; min-width: 188px; padding: 0 30px 0 10px;
+  border-color: var(--edge); font-size: 12px; letter-spacing: 0.1em;
+  background-position: right 15px center, right 10px center; }
+
+/* The map's layers: a box to show each, its name, and how heavily it is drawn. */
+.layers-head { display: flex; justify-content: space-between; padding: 8px 0 2px;
+  color: var(--muted); font-size: 10px; letter-spacing: 0.18em; }
+.layer { display: flex; align-items: center; gap: 8px; min-height: 38px; border-bottom: 1px solid var(--line); }
+.layer .name { flex: 1 1 auto; }
+.layer-show { display: grid; place-items: center; width: 30px; height: 30px; min-height: 0; padding: 0; margin-left: -8px; border: 0; }
+.layer-show i { width: 14px; height: 14px; border: 1px solid var(--muted); }
+#config-sheet .layer.off .name { color: var(--muted); }
+.layer.off .segments { opacity: 0.28; }
+
+.sheet-foot { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 18px; border-top: 1px solid color-mix(in srgb, var(--frame) 33%, #000);
+  color: var(--muted); font-size: 11px; letter-spacing: 0.12em; }
+.sheet-foot .btn { font-size: 12px; letter-spacing: 0.14em; }
 
 /* The airport picker is one size whatever it finds (phase G decision 20):
    the results scroll inside it, under the search. */
@@ -533,9 +635,6 @@ label.field-row { flex-wrap: nowrap; }
 .clocks .half { font-size: 0.6em; letter-spacing: 0.04em; }
 .status-top { flex-wrap: wrap; column-gap: 8px; }
 .status-top .clocks { margin-left: auto; }
-/* Config fills the window less 16 px at any UI zoom: the margin is the
-   window's px, not the zoomed sheet's. */
-#config-sheet { width: calc(100% - 3200px / var(--ui-zoom)); height: calc(100% - 3200px / var(--ui-zoom)); }
 /* The window's height in %, not vh: under a CSS zoom Chromium zooms vh and
    WebKit does not, where a % of the window is the window in both. (The
    page's own height is 100% for the same reason.) */

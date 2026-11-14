@@ -227,6 +227,9 @@ export function createStore() {
 
   return {
     state,
+    // kcgx.prefs.DEFAULTS, as above: what the config panel's RESETs go back
+    // to, and what it marks a setting as changed from.
+    defaults: structuredClone(state.prefs),
     apply,
     historyFor,
     setConnected(value) { state.connected = value; emit("connection"); },

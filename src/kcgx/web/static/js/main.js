@@ -108,7 +108,9 @@ mountTracks({
 const airportSheet = mountAirportSheet(
   { sheet: $("airport-sheet"), query: $("airport-query"), results: $("airport-results") }, store, log,
 );
-const configSheet = mountConfigSheet({ sheet: $("config-sheet") }, store, send);
+const configSheet = mountConfigSheet(
+  { sheet: $("config-sheet"), opener: $("open-config"), resetAll: $("config-reset-all") }, store, send,
+);
 const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, () => {
   store.setShutdown();
   link.stop();
@@ -119,7 +121,7 @@ const shutdownSheet = mountShutdownSheet({ sheet: $("shutdown-sheet") }, store, 
 }, log);
 
 $("open-airport").addEventListener("click", () => airportSheet.open());
-$("open-config").addEventListener("click", () => configSheet.open());
+$("open-config").addEventListener("click", () => configSheet.toggle());
 $("open-shutdown").addEventListener("click", () => shutdownSheet.open());
 
 // `kcgx go` with no airport, or one that names several, opens the page at

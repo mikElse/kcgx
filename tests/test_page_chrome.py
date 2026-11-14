@@ -112,14 +112,17 @@ def test_ui_zoom_keeps_the_page_in_the_window(page, zoom):
     assert page.locator("#tracks-body tr").first.bounding_box()["y"] < 900
 
 
-def test_ui_zoom_scales_the_sheets_and_config_still_fills_the_window(page):
+def test_ui_zoom_scales_the_config_panel_and_the_page_is_still_pushed_to_its_edge(page):
     config_tab(page, "ui_zoom")
     before = height(page, "#config-title")
     set_prefs(page, ui_zoom=150)
+    page.wait_for_function("document.getAnimations().every(a => a.playState !== 'running' || !a.transitionProperty)")
     assert height(page, "#config-title") == pytest.approx(before * 1.5, abs=1)
-    sheet = page.locator("#config-sheet").bounding_box()
-    assert sheet["x"] == pytest.approx(16, abs=1) and sheet["y"] == pytest.approx(16, abs=1)
-    assert sheet["width"] == pytest.approx(1440 - 32, abs=1) and sheet["height"] == pytest.approx(900 - 32, abs=1)
+    panel = page.locator("#config-sheet").bounding_box()
+    assert panel["width"] == pytest.approx(480 * 1.5, abs=1) and panel["height"] == pytest.approx(900, abs=1)
+    assert panel["x"] + panel["width"] == pytest.approx(1440, abs=1) and panel["y"] == pytest.approx(0, abs=1)
+    cockpit = page.locator(".page").bounding_box()
+    assert cockpit["x"] + cockpit["width"] == pytest.approx(panel["x"], abs=1)
 
 
 @pytest.mark.parametrize("zoom", [75, 150])

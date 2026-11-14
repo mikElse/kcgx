@@ -51,7 +51,7 @@ __all__ = [
     "config_tab",
     "pref_is",
     "pressed",
-    "readout",
+    "press",
     "pixel",
     "css_colour",
     "spy_on_sends",
@@ -243,12 +243,12 @@ def parts(page):
 
 
 def config_tab(page, key=None, tab=None):
-    """Open the config sheet, if it is not open, on the tab that holds `key`'s
+    """Open the config panel, if it is not open, on the tab that holds `key`'s
     control (or on `tab`), and wait until that tab shows."""
     if not page.evaluate("document.getElementById('config-sheet').open"):
         page.click("#open-config")
         page.wait_for_selector("#config-sheet[open]")
-    name = tab or TAB_OF[key]
+    name = tab or TAB_OF[key.split()[0]]
     page.click(f"#config-sheet [role=tab]:text-is('{name}')")
     page.wait_for_selector(f"#config-sheet [role=tab][aria-selected=true]:text-is('{name}')")
 
@@ -262,14 +262,16 @@ def pref_is(tab, key, value):
 
 
 def pressed(tab, key):
-    """The lit buttons of a segment group, as the page has them."""
+    """The lit buttons of a control, as the page has them: a choice's or a
+    preset's one, a subset's chips, and a switch's ON (none when it is off)."""
     return tab.eval_on_selector_all(
-        f"#config-sheet [data-pref={key}] button[aria-pressed=true]", "bs => bs.map(b => b.textContent)"
+        f"#config-sheet [data-pref='{key}'] button[aria-pressed=true]", "bs => bs.map(b => b.textContent)"
     )
 
 
-def readout(tab, key):
-    return tab.text_content(f"#config-sheet .field-row:has([data-pref={key}]) [data-unit]")
+def press(tab, key, label):
+    """Press the button of a control in the config panel that says `label`."""
+    tab.click(f"#config-sheet [data-pref='{key}'] button:text-is('{label}')")
 
 
 # -- pixels and boxes -----------------------------------------------------------
