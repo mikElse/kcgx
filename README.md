@@ -2,10 +2,20 @@
 
 ![The boot animation: a runway and the Chicago skyline drawn in vector lines, a takeoff and a turn, the control tower with KCGX on its face and its lights coming on, then the fade](.github/boot.gif)
 
-A cockpit for watching and listening to air traffic, in a window of its
-own on a Mac or in your browser, named for Meigs Field — the Chicago
-lakefront strip that a generation of flight-sim pilots took off from,
-bulldozed in the middle of the night in 2003.
+**Meigs Field** (KCGX) was a single-runway airport on Northerly Island, a
+strip of made land in Lake Michigan a mile from downtown Chicago, with
+the skyline on one side of the runway and open water on the other. It
+opened in 1948, named for Merrill C. Meigs, the newspaper publisher who
+campaigned for it, and for fifty-five years it put business jets,
+commuter turboprops, light singles and twins, air ambulances and the
+occasional president minutes from the Loop. It was famous well beyond
+the people who flew there: Microsoft Flight Simulator started you on its
+runway from the first version in 1982 into the 2000s, so a generation of
+pilots took their first takeoff, on a screen, over that skyline. On the
+night of March 30, 2003, with no notice to the FAA or to the pilots whose
+aircraft were parked there, city crews drove onto the field and
+bulldozed great X's into the runway. The mayor cited security. By
+morning Meigs was closed, and it never reopened.
 
 ![The kcgx cockpit at Chicago O'Hare (KORD), sped up: aircraft moving on the radar at 40 nm with their tails, the tracks table updating, and the frequencies' traces and percentages changing](.github/kord.gif)
 
@@ -13,10 +23,16 @@ bulldozed in the middle of the night in 2003.
 synthetic traffic and feeds, the cockpit's own radar, tracks table and
 frequencies.</sub>
 
+**kcgx** is a cockpit for watching and listening to air traffic, in a
+window of its own on a Mac or in your browser, and a love letter to
+Meigs Field: it carries the field's identifier, and it boots by drawing
+that runway and that skyline. Its look is the NORAD war room in
+*WarGames* (1983): vector lines glowing on black, the map, the traffic
+and the type all drawn the way those big screens drew the world.
+
 It opens **every** ATC feed an airport publishes, one metered row each,
 and plays the one you pick, beside its own vector radar of the traffic
-around the field, on a page drawn like the NORAD wall in *WarGames*.
-Everything runs on your own machine: a small local server plays the audio
+around the field. Everything runs on your own machine: a small local server plays the audio
 and polls the radar, and the page at `http://127.0.0.1:8473/` is the
 display and the controls.
 
