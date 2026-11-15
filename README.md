@@ -8,7 +8,9 @@ the skyline on one side of the runway and open water on the other. It
 opened in 1948, named for Merrill C. Meigs, the newspaper publisher who
 campaigned for it, and for fifty-five years it put business jets,
 commuter turboprops, light singles and twins, air ambulances and the
-occasional president minutes from the Loop. It was famous well beyond
+occasional president minutes from the Loop. 
+
+It was famous well beyond
 the people who flew there: Microsoft Flight Simulator started you on its
 runway from the first version in 1982 into the 2000s, so a generation of
 pilots took their first takeoff, on a screen, over that skyline. On the
