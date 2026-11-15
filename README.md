@@ -1,6 +1,6 @@
 # kcgx
 
-![The boot animation: a runway and the Chicago skyline drawn in vector lines, a takeoff and a turn, the control tower with KCGX on its face and its lights coming on, then the fade into the cockpit](.github/boot.gif)
+![The boot animation: a runway and the Chicago skyline drawn in vector lines, a takeoff and a turn, the control tower with KCGX on its face and its lights coming on, then the fade](.github/boot.gif)
 
 A cockpit for watching and listening to air traffic, in a window of its
 own on a Mac or in your browser, named for Meigs Field — the Chicago
@@ -11,6 +11,10 @@ bulldozed in the middle of the night in 2003.
 
 <sub>`kcgx --demo` at KPDX, the radar at 60 nm: synthetic traffic and
 feeds, the cockpit's own radar, tracks table and frequencies.</sub>
+
+![The kcgx cockpit at Chicago O'Hare (KORD), sped up: aircraft moving on the radar at 40 nm with their tails, the tracks table updating, and the frequencies' traces and percentages changing](.github/kord.gif)
+
+<sub>`kcgx --demo` at KORD, four minutes at fifteen times speed.</sub>
 
 It opens **every** ATC feed an airport publishes, one metered row each,
 and plays the one you pick, beside its own vector radar of the traffic
