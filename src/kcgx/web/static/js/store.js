@@ -109,11 +109,15 @@ export function createStore() {
     // whatever prefs.tail_secs says (the radar draws those within it), so a
     // longer tail shows its history at once.
     trails: new Map(),
-    // Where each aircraft stands in the tracks table's sort, filters not
+    // Where each aircraft the tracks table shows stands in its sort, filters
     // applied: hex -> 0 for the first to 1 for the last (phase G, Task 8).
     // tracks.js fills it and emits "rank"; the radar shades by it (Task 13).
     // Empty until then, and an aircraft missing from it is ranked first.
     rank: new Map(),
+    // The hexes the tracks table's filters hide (never the focused one):
+    // the radar leaves them out too. tracks.js fills it, changed in place,
+    // and emits "hidden" when it changes. Empty with no filter typed.
+    hidden: new Set(),
     // Whether the last snapshot said to play the boot animation: true only
     // in the first page's first one since the server started (kcgx.hub).
     boot: false,

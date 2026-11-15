@@ -470,9 +470,11 @@ def tags(page):
     return {hit["hex"]: hit["tag"] for hit in radar_debug(page)["hits"]}
 
 
-def hold_traffic(page, *aircraft):
+def hold_traffic(page, *aircraft, drawn=None):
     """Put these aircraft on the radar, and no others, for the rest of the
-    test: the demo's own polls are dropped from here on. Returns their tags."""
+    test: the demo's own polls are dropped from here on. Waits until the
+    radar draws them, or only the hexes `drawn` where the tracks table's
+    filters hide the rest. Returns their tags."""
     page.evaluate(
         """planes => {
             const store = window.kcgx.store;
@@ -490,7 +492,7 @@ def hold_traffic(page, *aircraft):
     page.wait_for_function(
         # The hits are topmost first, not in the frame's order.
         "hexes => window.kcgx.radar.debug().hits.map(h => h.hex).sort().join() === hexes.join()",
-        arg=sorted(a["hex"] for a in aircraft),
+        arg=sorted(drawn if drawn is not None else (a["hex"] for a in aircraft)),
     )
     return tags(page)
 

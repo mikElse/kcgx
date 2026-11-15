@@ -444,13 +444,16 @@ filters: a text column matches any part of what you type, in any case; a
 number column takes a MIN and a MAX, either left empty (ALT reads `GND`
 as 0, and an aircraft that does not report a figure is left out once a
 bound is set). CLEAR empties them. Filters are this tab's alone and go
-with a reload; they hide rows and never touch the radar.
+with a reload. **What they hide goes from the radar too** (since
+2026-11-15): its chevron, tail and tag, and the HUD's count of tracks, so
+the radar shows only the traffic the table lists; the focused aircraft
+stays on both whatever the filters say.
 
 Click a header to sort by it, and again to reverse it. The sort is a
 setting, so every tab sorts alike, and it **shades the radar**: the
 table's first row is drawn at full strength and on top, the last at
 40 % (SHADE BY SORT's SOME; `sort_floor` in the file), and the rest in between, in
-the order of the whole sort, filtered rows included. Sorted by a column
+the order of the rows the table shows. Sorted by a column
 that is not shown, the title bar says so (`SORT GS KT ▼`). The header and the
 filter row stay put while the table scrolls.
 
@@ -993,8 +996,7 @@ measurement and fails if the capacity goes back under a burst.
 - Parked traffic is judged by an altitude above sea level, as the
   airport list has no field elevations: at a high field keep BELOW
   ALTITUDE at 0, where only `GND` counts.
-- The tracks table's filters do not reach the radar, and are forgotten
-  on a reload.
+- The tracks table's filters are forgotten on a reload.
 - Nothing in the round of 2026-11-13 (the boot, one feed at a time, the
   tracks table's new parts, the radar's new behaviour) has yet been
   looked at by a person against real feeds and real traffic, or in

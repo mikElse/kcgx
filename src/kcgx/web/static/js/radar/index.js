@@ -207,8 +207,8 @@ export function mountRadar(canvas, store, { hud = {} } = {}) {
   }
   onFrame(frame);
 
-  // `drawn` the aircraft on the radar: those ground_mode HIDE leaves out
-  // are not counted.
+  // `drawn` the aircraft on the radar: those ground_mode HIDE or the
+  // tracks table's filters leave out are not counted.
   function drawHud(drawn) {
     const polled = store.state.radar;
     if (hud.tracks) hud.tracks.textContent = `${drawn} TRACK${drawn === 1 ? "" : "S"}`;

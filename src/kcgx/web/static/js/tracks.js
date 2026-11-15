@@ -3,15 +3,18 @@
 // checklist in the pane's title bar; its order is prefs.track_sort and
 // track_desc, set by clicking a header, so every tab sorts alike. A row of
 // filters under the header hides rows in this tab alone, until a reload:
-// they are the page's, not settings (phase G decision 4).
+// they are the page's, not settings (phase G decision 4). What they hide
+// is left off this tab's radar too: store.state.hidden, the hexes, and a
+// "hidden" event when it changes.
 //
 // The first cell of a row is a button that focuses the aircraft, exactly as
 // clicking it on the radar does; the focused row is pink, outlined, set
 // larger, leads the table whatever the filters say, and the rest dim.
 //
-// The sort, with no filter applied and the focus first, also ranks every
-// aircraft for the radar: store.state.rank, hex -> 0 for the first to 1 for
-// the last, and a "rank" event when it changes (decision 5, Task 13).
+// The sort, with the filters applied and the focus first, also ranks every
+// row for the radar: store.state.rank, hex -> 0 for the first to 1 for the
+// last, and a "rank" event when it changes (decision 5, Task 13), so the
+// radar shades what it shows as the table orders it.
 //
 // The pane itself is dragged taller or shorter by its top edge and folds to
 // its title bar (Task 9): mountPane, at the end.
@@ -319,12 +322,25 @@ export function mountTracks({ head, filters, body, empty, columns, openColumns, 
     store.emit("rank");
   }
 
+  // What the filters hide, for the radar: changed in place, and told only
+  // when it changed.
+  function publishHidden(ordered, list) {
+    const { hidden } = state;
+    const shownHere = new Set(list.map((ac) => ac.hex));
+    const now = ordered.filter((ac) => !shownHere.has(ac.hex)).map((ac) => ac.hex);
+    if (now.length === hidden.size && now.every((hex) => hidden.has(hex))) return;
+    hidden.clear();
+    for (const hex of now) hidden.add(hex);
+    store.emit("hidden");
+  }
+
   function render() {
     const ordered = sorted();
-    publishRank(ordered);
     const focused = focus.hex;
     const pass = tests();
     const list = pass.length ? ordered.filter((ac) => ac.hex === focused || pass.every((t) => t(ac))) : ordered;
+    publishRank(list);
+    publishHidden(ordered, list);
     const rowsMade = list.map((ac) => {
       const tr = document.createElement("tr");
       tr.dataset.hex = ac.hex;

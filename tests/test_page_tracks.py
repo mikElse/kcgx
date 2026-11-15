@@ -1,6 +1,7 @@
 """The tracks table, phase G Task 8: the columns chosen from the title bar,
-a row of filters under the header, the sort as a setting every tab shares,
-the rank the radar shades by, and a header that stays as the table scrolls.
+a row of filters under the header that the radar follows too, the sort as a
+setting every tab shares, the rank the radar shades by, and a header that
+stays as the table scrolls.
 
 Browser tests against the demo server, in Chromium and then WebKit.
 """
@@ -11,7 +12,10 @@ import pytest
 
 from kcgx.prefs import DEFAULTS, SCHEMA
 from page_fixtures import *  # noqa: F403  (fixtures and helpers)
-from page_fixtures import box_of, hold_traffic, pixel, plane, pref_is, radar_debug, rows, set_prefs, spy_on_sends
+from page_fixtures import (
+    box_of, frames, hold_traffic, on_screen, pixel, plane, pref_is, radar_debug, rows, set_prefs, spy_on_sends,
+    wait_for_traffic,
+)
 
 pytestmark = pytest.mark.browser
 
@@ -250,11 +254,21 @@ def test_a_columns_change_from_another_tab_keeps_the_box_being_typed_in(page, ot
     assert page.evaluate("[document.activeElement.dataset.key, document.activeElement.dataset.bound]") == ["ALT", "max"]
 
 
-def test_a_text_filter_matches_a_substring_in_any_case_and_hides_rows_only(page):
+def on_the_radar(tab):
+    return sorted(hit["hex"] for hit in radar_debug(tab)["hits"])
+
+
+def wait_for_radar(tab, expected):
+    tab.wait_for_function(
+        "want => window.kcgx.radar.debug().hits.map(h => h.hex).sort().join() === want.join()",
+        arg=sorted(expected),
+    )
+
+
+def test_a_text_filter_matches_a_substring_in_any_case(page):
     hold_traffic(page, *THREE)
     page.fill(text_filter("CALLSIGN"), "dal")
     wait_for_hexes(page, ["r1", "r3"])
-    assert sorted(hit["hex"] for hit in radar_debug(page)["hits"]) == ["r1", "r2", "r3"]
     page.fill(text_filter("TYPE"), "a3")
     wait_for_hexes(page, ["r1"])
     page.fill(text_filter("CALLSIGN"), "")
@@ -317,6 +331,82 @@ def test_filters_are_the_pages_own_and_gone_on_a_reload(page):
     assert values and all(value == "" for value in values)
 
 
+# -- the filters on the radar ------------------------------------------------------
+
+
+def hidden(tab):
+    return sorted(tab.evaluate("[...window.kcgx.store.state.hidden]"))
+
+
+def test_what_the_filters_hide_is_left_off_the_radar_and_cannot_be_clicked(page):
+    wait_for_traffic(page)
+    hold_traffic(page, *THREE)
+    wait_for_radar(page, ["r1", "r2", "r3"])
+    assert hidden(page) == []
+    where = next(hit for hit in radar_debug(page)["hits"] if hit["hex"] == "r2")
+    page.evaluate(
+        """() => { window.hid = 0;
+                   window.kcgx.store.subscribe(kind => { if (kind === "hidden") window.hid += 1; }); }"""
+    )
+    page.fill(text_filter("CALLSIGN"), "dal")
+    wait_for_hexes(page, ["r1", "r3"])
+    wait_for_radar(page, ["r1", "r3"])
+    assert hidden(page) == ["r2"]
+    assert page.evaluate("window.hid") == 1
+    debug = radar_debug(page)
+    assert "r2" not in debug["tag_order"] and "r2" not in debug["line_order"]
+    page.wait_for_function("document.getElementById('radar-tracks').textContent === '2 TRACKS'")
+    # Where it was is a place now: a click there focuses nothing.
+    page.mouse.click(*on_screen(page, where["x"], where["y"]))
+    frames(page)
+    assert page.evaluate("import('/static/js/focus.js').then(({ focus }) => focus.hex)") is None
+    # A filter that matches nothing leaves the radar empty.
+    page.fill(text_filter("TYPE"), "zzz")
+    wait_for_radar(page, [])
+    assert hidden(page) == ["r1", "r2", "r3"]
+    # CLEAR puts every one back.
+    page.click("#tracks-clear")
+    wait_for_radar(page, ["r1", "r2", "r3"])
+    assert hidden(page) == []
+    page.wait_for_function("document.getElementById('radar-tracks').textContent === '3 TRACKS'")
+
+
+def test_a_number_filter_hides_on_the_radar_as_in_the_table(page):
+    hold_traffic(page, *THREE)
+    page.fill(number_filter("ALT", "max"), "5000")
+    wait_for_hexes(page, ["r1", "r3"])
+    wait_for_radar(page, ["r1", "r3"])
+    # Traffic that arrives later is judged by the same filters.
+    hold_traffic(page, *THREE, plane("r4", 0, -30, label="LOW1", dist=30.0, alt=2000), plane("r5", 0, 30, alt=30000),
+                 drawn=["r1", "r3", "r4"])
+    wait_for_hexes(page, ["r1", "r3", "r4"])
+    wait_for_radar(page, ["r1", "r3", "r4"])
+    assert hidden(page) == ["r2", "r5"]
+
+
+def test_the_focused_aircraft_stays_on_the_radar_whatever_the_filters(page):
+    hold_traffic(page, *THREE)
+    page.click('#tracks-body tr[data-hex="r2"] .callsign')
+    page.wait_for_selector('#tracks-body tr.focused[data-hex="r2"]')
+    page.fill(text_filter("CALLSIGN"), "dal")
+    wait_for_hexes(page, ["r2", "r1", "r3"])
+    wait_for_radar(page, ["r1", "r2", "r3"])
+    assert hidden(page) == []
+    # Unfocused, it is filtered like the rest.
+    page.click('#tracks-body tr[data-hex="r2"] .callsign')
+    wait_for_hexes(page, ["r1", "r3"])
+    wait_for_radar(page, ["r1", "r3"])
+
+
+def test_the_filters_are_this_tabs_radar_alone(page, other):
+    hold_traffic(page, *THREE)
+    hold_traffic(other, *THREE)
+    page.fill(text_filter("CALLSIGN"), "dal")
+    wait_for_radar(page, ["r1", "r3"])
+    wait_for_radar(other, ["r1", "r2", "r3"])
+    assert hidden(other) == []
+
+
 def test_the_focused_aircraft_leads_and_passes_every_filter(page):
     hold_traffic(page, *THREE)
     page.click('#tracks-body tr[data-hex="r3"] .callsign')
@@ -375,7 +465,7 @@ def test_a_sort_by_a_hidden_column_is_named_in_the_title_bar(page):
 # -- the rank -------------------------------------------------------------------------
 
 
-def test_the_rank_follows_the_sort_unfiltered_with_the_focus_first(page):
+def test_the_rank_follows_the_sort_of_the_rows_shown_with_the_focus_first(page):
     page.evaluate(
         """() => { window.rankMap = window.kcgx.store.state.rank; window.ranked = 0;
                    window.kcgx.store.subscribe(kind => { if (kind === "rank") window.ranked += 1; }); }"""
@@ -387,13 +477,18 @@ def test_the_rank_follows_the_sort_unfiltered_with_the_focus_first(page):
     set_prefs(page, track_desc=True)
     page.wait_for_function("window.kcgx.store.state.rank.get('r3') === 0")
     assert ranks(page) == {"r3": 0, "r2": 0.5, "r1": 1}
-    # Filters hide rows, not rank.
+    # Filtered, the rows shown are ranked among themselves, so the radar
+    # shades what it shows from first to last.
     page.fill(text_filter("CALLSIGN"), "dal")
     wait_for_hexes(page, ["r3", "r1"])
-    assert ranks(page) == {"r3": 0, "r2": 0.5, "r1": 1}
+    page.wait_for_function("window.kcgx.store.state.rank.size === 2")
+    assert ranks(page) == {"r3": 0, "r1": 1}
     # The focus is first.
     page.click('#tracks-body tr[data-hex="r1"] .callsign')
     page.wait_for_function("window.kcgx.store.state.rank.get('r1') === 0")
+    assert ranks(page) == {"r1": 0, "r3": 1}
+    page.click("#tracks-clear")
+    page.wait_for_function("window.kcgx.store.state.rank.size === 3")
     assert ranks(page) == {"r1": 0, "r3": 0.5, "r2": 1}
     # The same Map all along, changed in place.
     assert page.evaluate("window.rankMap === window.kcgx.store.state.rank")

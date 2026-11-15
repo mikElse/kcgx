@@ -52,8 +52,8 @@
 //   whereNow(radar, hex)  [x, y], canvas px: where the aircraft was drawn
 //                    this frame, reckoned (GLIDE) or as polled (STEP), with
 //                    the view the frame was drawn with. Also for one left
-//                    off the screen or hidden (ground_mode HIDE): where it
-//                    would have been. null for one not in the picture.
+//                    off the screen or hidden (ground_mode HIDE, or the
+//                    tracks table's filters): where it would have been. null for one not in the picture.
 //   radar.hits[]     { hex, x, y, tag, trail, alpha, tail } an aircraft
 //                    on the radar (one wholly off the screen too, not
 //                    drawn and with no tag): its chevron at (x, y), canvas
@@ -65,7 +65,9 @@
 //                    then the alarm colour's, then cyan's, each the sort's
 //                    first first; a hit test taking the first chevron it
 //                    finds takes the one drawn over the others there.
-//                    Parked traffic hidden (ground_mode HIDE) is not here.
+//                    Parked traffic hidden (ground_mode HIDE) is not here,
+//                    nor what the tracks table's filters hide
+//                    (store.state.hidden).
 //   hits[].tag       null when it has no tag or its tag is off the
 //                    screen, else { lines, x, y, w, h, boxed, box }: x..h
 //                    is all it claims (text and, when boxed, box); `boxed`
@@ -368,7 +370,8 @@ function tailsOnScreen(radar, s, width, height) {
 
 // Draws the aircraft's lines onto `ctx` (the moving layer) and their tags
 // onto `radar.tags`, and returns the aircraft (`list`) and how many of them
-// were drawn (`drawn`: ground_mode HIDE leaves some out). Leaves
+// were drawn (`drawn`: ground_mode HIDE and the tracks table's filters
+// leave some out). Leaves
 // `radar.now` holding them as drawn, `radar.hits` saying what is where, for
 // the pointer, and `radar.tagOrder` the order the tags went down in.
 export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
@@ -393,6 +396,8 @@ export function drawMoving(radar, ctx, width, height, ratio, s, c, prefs) {
     const isFocus = ac.hex === focused;
     const isParked = !isFocus && parked(ac, prefs);
     if (isParked && prefs.ground_mode === "HIDE") continue;
+    // The table's filters hide it here too; the focus passes them all.
+    if (!isFocus && store.state.hidden.has(ac.hex)) continue;
     const colour = isFocus ? c.pink : EMERGENCY.has(ac.sq) ? c.alarm : c.cyan;
     const rank = rankOf(radar, ac, isFocus);
     const stale = Math.max(0, Math.min(1, (ac.age - STALE_FADE_FROM) / 30));
