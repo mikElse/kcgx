@@ -289,6 +289,8 @@ turns it off, and reduced motion in your system settings skips it. Until
 the server's settings arrive (1.5 s at most) the page is black, rather
 than drawn in the default theme first.
 
+![The boot animation: a runway and the Chicago skyline drawn in vector lines, a takeoff and a turn, the control tower with KCGX on its face and its lights coming on, then the fade into the cockpit](.github/boot.gif)
+
 The page is a wall of framed screens with their names along the bottom:
 
 | Screen | Shows |
