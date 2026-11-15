@@ -5,10 +5,10 @@ own on a Mac or in your browser, named for Meigs Field — the Chicago
 lakefront strip that a generation of flight-sim pilots took off from,
 bulldozed in the middle of the night in 2003.
 
-![The kcgx cockpit at Portland (KPDX): the vector radar with four tracks, the tracks table below it, and the airport's frequencies with TOWER playing](.github/screenshot.png)
+![The kcgx cockpit at Portland (KPDX): the vector radar at 60 nm with thirteen tracks over the Oregon coast and the Columbia, the tracks table below it, and the airport's frequencies with TOWER playing](.github/screenshot.png)
 
-<sub>`kcgx --demo` at KPDX: synthetic traffic and feeds, the cockpit's own
-radar, tracks table and frequencies.</sub>
+<sub>`kcgx --demo` at KPDX, the radar at 60 nm: synthetic traffic and
+feeds, the cockpit's own radar, tracks table and frequencies.</sub>
 
 It opens **every** ATC feed an airport publishes, one metered row each,
 and plays the one you pick, beside its own vector radar of the traffic
