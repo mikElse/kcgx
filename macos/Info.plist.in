@@ -11,6 +11,8 @@
     <string>KCGX</string>
     <key>CFBundleExecutable</key>
     <string>KCGX</string>
+    <key>CFBundleIconFile</key>
+    <string>KCGX</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key>

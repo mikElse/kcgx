@@ -31,7 +31,7 @@ BUILD = REPO / "macos" / "build.sh"
 TEMPLATE = REPO / "macos" / "Info.plist.in"
 
 # Everything build.sh itself runs, beside swiftc and codesign.
-TOOLS = ("bash", "env", "dirname", "basename", "mkdir", "rm", "mv", "sed", "grep", "uname")
+TOOLS = ("bash", "env", "dirname", "basename", "mkdir", "cp", "rm", "mv", "sed", "grep", "uname")
 
 # Writes the "binary" where -o says, and records how it was asked.
 FAKE_SWIFTC = """#!/bin/sh
@@ -153,7 +153,7 @@ def test_a_rebuild_replaces_the_whole_bundle(tmp_path):
     path = tools(tmp_path, swiftc=FAKE_SWIFTC, codesign=FAKE_CODESIGN)
     assert build(tmp_path, str(app), path=path).returncode == 0
     stale = app / "Contents" / "Resources" / "old.txt"
-    stale.parent.mkdir()
+    stale.parent.mkdir(exist_ok=True)  # the icon's folder, since it has one
     stale.write_text("from the build before")
     result = build(tmp_path, str(app), path=path)
     assert result.returncode == 0, result.stderr
@@ -293,6 +293,13 @@ def test_the_real_bundle_is_signed_and_whole(app):
     info = plist(app)
     assert info["KCGXRepo"] == str(REPO)
     assert (app / "Contents" / "MacOS" / info["CFBundleExecutable"]).is_file()
+
+
+def test_the_real_bundle_carries_the_radar_scope_icon(app):
+    """The Dock and Finder show CFBundleIconFile from Resources: without
+    it, the generic app icon."""
+    icon = app / "Contents" / "Resources" / f"{plist(app)['CFBundleIconFile']}.icns"
+    assert icon.read_bytes() == (REPO / "macos" / "KCGX.icns").read_bytes()
 
 
 @pytest.mark.parametrize("link, page", [

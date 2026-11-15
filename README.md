@@ -1,5 +1,7 @@
 # kcgx
 
+![The boot animation: a runway and the Chicago skyline drawn in vector lines, a takeoff and a turn, the control tower with KCGX on its face and its lights coming on, then the fade into the cockpit](.github/boot.gif)
+
 A cockpit for watching and listening to air traffic, in a window of its
 own on a Mac or in your browser, named for Meigs Field — the Chicago
 lakefront strip that a generation of flight-sim pilots took off from,
@@ -287,9 +289,8 @@ cockpit already live. It plays once a launch: a reload, a second tab or
 the window reopened does not play it again. BOOT ANIMATION in CONFIG
 turns it off, and reduced motion in your system settings skips it. Until
 the server's settings arrive (1.5 s at most) the page is black, rather
-than drawn in the default theme first.
-
-![The boot animation: a runway and the Chicago skyline drawn in vector lines, a takeoff and a turn, the control tower with KCGX on its face and its lights coming on, then the fade into the cockpit](.github/boot.gif)
+than drawn in the default theme first. It is the animation at the top of
+this page.
 
 The page is a wall of framed screens with their names along the bottom:
 
@@ -930,7 +931,7 @@ measurement and fails if the capacity goes back under a burst.
   tracks table's new parts, the radar's new behaviour) has yet been
   looked at by a person against real feeds and real traffic, or in
   KCGX.app.
-- The window is macOS only, and KCGX.app has the generic icon.
+- The window is macOS only.
 - All feeds share one output device.
 - Ranking is by level, not speech detection: a feed with a noisy carrier
   ranks above a quiet but busy one.

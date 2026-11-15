@@ -56,7 +56,10 @@ fill() {
 STAGE="$(dirname "$APP")/.kcgx-building.$$"
 NEW="$STAGE/$(basename "$APP")"
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$NEW/Contents/MacOS"
+mkdir -p "$NEW/Contents/MacOS" "$NEW/Contents/Resources"
+# The radar scope icon (macos/icon/: the SVG it is drawn from and the
+# iconset KCGX.icns is built from). CFBundleIconFile in Info.plist.in names it.
+cp "$REPO/macos/KCGX.icns" "$NEW/Contents/Resources/KCGX.icns"
 
 # Built for macOS 12 and later, whatever this Mac runs. The source guards
 # the one newer call it makes with #available, and built for this Mac alone

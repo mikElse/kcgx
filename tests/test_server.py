@@ -208,6 +208,14 @@ def test_the_cockpit_page_is_served():
     assert response.headers["cache-control"] == "no-cache"
 
 
+def test_the_page_names_its_icons():
+    asgi, _ = app()
+    with client(asgi) as http:
+        page = http.get("/").text
+    assert '<link rel="icon" href="/static/favicon.ico"' in page
+    assert '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png"' in page
+
+
 def test_the_debug_page_is_served():
     asgi, _ = app()
     with client(asgi) as http:
@@ -223,6 +231,8 @@ def test_the_debug_page_is_served():
         ("/static/cockpit.css", "text/css"),
         ("/static/js/main.js", "javascript"),
         ("/static/fonts/share-tech-mono-latin-400-normal.woff2", "font/woff2"),
+        ("/static/favicon.ico", "image/"),
+        ("/static/apple-touch-icon.png", "image/png"),
     ],
 )
 def test_static_files_are_served_uncached(path, kind):
