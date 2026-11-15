@@ -345,6 +345,11 @@ The airport search (CHANGE AIRPORT) is 840 px wide, or the window less
 32 px, and keeps its height whatever it finds; the results scroll inside
 it.
 
+![Changing airport from Chicago O'Hare to Midway: the search icon opens CHANGE AIRPORT, KMDW is typed and chosen, and the radar redraws around Midway, its coastline drawing itself on, while the new feeds fill in](.github/change-airport.gif)
+
+<sub>From KORD to KMDW in the demo: the new map draws itself on over two
+seconds while the new airport's feeds fill in.</sub>
+
 The page was tightened on 2026-11-12: less padding round everything, and
 two parts that are shown only when asked for, both under PANES in CONFIG's SYSTEM tab.
 
@@ -515,6 +520,11 @@ range fits the shorter side of the screen; the longer side shows more map.
   again and the view goes back to where it was before (unless you have
   dragged it, or centred a place, since). Where a tag with a filled box lies over another
   aircraft's chevron, the click is the tag's: you click what you see.
+
+  ![Clicking ASA412 on the radar at O'Hare: it turns pink with its data box, its row leads the tracks table, and the radar zooms to it and follows it in on its approach while the map slides beneath; a second click goes back to the wide view](.github/follow.gif)
+
+  <sub>Following ASA412 in to O'Hare in the demo, at eight times speed
+  while it follows.</sub>
 - **The data box** sits beside the focused aircraft, to its left, or to
   its right and below it when the left would leave the radar: one line
   for each column the tracks table shows, in the table's order, name and
@@ -534,6 +544,11 @@ range fits the shorter side of the screen; the longer side shows more map.
   at SMOOTH; OFF jumps. The title strip shows the pointer's bearing and
   distance from the field. (There was a RECENTRE button until
   2026-11-12.)
+
+  ![Scrolling in on Chicago O'Hare from 40 nm until its runways fill the radar at 2 nm, then back out](.github/zoom.gif)
+
+  <sub>Scrolling in on O'Hare in the demo until its runways fill the
+  radar, and back out.</sub>
 - **Range rings** follow the view: every 0.05, 0.1, 0.2, 0.5, 1, 2, 5,
   10, 20 or 50 nm, whichever puts no more than five between the centre
   and the nearer edge, out to the range, each numbered where its number
