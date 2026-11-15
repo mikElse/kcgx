@@ -60,11 +60,13 @@ think something went wrong — ends where the first did.
 | [`uv`](https://docs.astral.sh/uv/) | runs everything, and supplies Python 3.14 itself | yes |
 | [`ffmpeg`](https://ffmpeg.org/) | decodes each feed to PCM | yes |
 | **PortAudio** | what `sounddevice` plays through | on Linux |
+| `curl` | installs uv, and setup's network checks | yes |
 | a web browser | the cockpit is a page | yes |
-| `swiftc` | builds KCGX.app, the cockpit's own window | no; macOS only |
+| `swiftc`, `codesign` | build KCGX.app, the cockpit's own window (macOS 12 or later) | no; macOS only |
 
-`setup.sh` installs the first three: Homebrew on macOS, `apt`/`dnf`/`pacman`
-on Linux. It never installs a package manager — if there is none it stops
+`setup.sh` installs `ffmpeg` (and on Linux PortAudio, and `curl` if it is
+missing) with Homebrew on macOS or `apt`/`dnf`/`pacman` on Linux, and uv
+with uv's own installer. It never installs a package manager — if there is none it stops
 and prints the packages instead. `swiftc` comes with the Xcode command line
 tools (`xcode-select --install`), which Homebrew already needs; setup does
 not install it, and without it the cockpit opens in your browser.
@@ -123,9 +125,9 @@ fatal: the feed list is a week-long cache, not a dependency.
 imports `numpy`, `sounddevice`, `starlette`, `uvicorn` and `websockets`
 through the project's own interpreter, starts the real server (as the
 demo, on a free port) and asks it for its health, the page and the
-WebSocket's first frame, counts audio output devices, and asks LiveATC and
-adsb.lol for the exact thing the cockpit asks them for, insisting on a
-`200` — "something answered" is not the same claim, and a `403` answers.
+WebSocket's first frame, counts audio output devices, and asks LiveATC for
+a `/play/` playlist and adsb.lol for a point query with the radar's own
+User-Agent, insisting on a `200` — "something answered" is not the same claim, and a `403` answers.
 On a Mac it also has a `window` row: `ok` when KCGX.app is there and
 `codesign --verify` passes, `none` when there is no app (not a warning:
 the cockpit opens in your browser), and a warning when an app is there and
@@ -179,6 +181,19 @@ macos/build.sh   # macOS, optional: ~/Applications/KCGX.app, the cockpit's own w
 `~/.bash_profile` *and* `~/.profile` without asking. Link `bin/kcgx`
 rather than copying it: it finds the repo through the symlink.
 `./setup.sh --verify` checks a hand-built install and changes nothing.
+
+### Uninstalling
+
+```bash
+kcgx stop
+rm ~/.local/bin/kcgx
+rm -rf ~/.local/state/kcgx ~/.cache/squelch ~/Applications/KCGX.app
+rm -rf <repo>   # the clone, .venv/ with it
+```
+
+If setup added the `PATH` line to your profile, delete the line marked
+`# added by kcgx setup.sh` (and the `.kcgx-backup` beside it, if you
+like). `~/.config/squelch/squelch.toml` exists only if you made it.
 
 ### A note on `python`
 
@@ -255,19 +270,22 @@ another. It writes where it is to `~/.local/state/kcgx/server.json` and
 logs to `server.log` beside it. "Running" means its health check answers,
 never that the file exists, so a file left by a crash or a reboot is
 replaced. The port is `8473` (`KCGX_PORT` changes it); if something that is
-not kcgx has it, the server takes a free one and records that.
+not kcgx has it, `kcgx` starts the server on a free one instead and
+records that.
 
 **Stopping**: `kcgx stop`, the power icon on the page (it asks first), or
 Quit in the window. Each stops every feed and the server; the page says
 COCKPIT SHUT DOWN.
 
 **The demo** (`kcgx --demo`, or `kcgx-web --demo`) runs synthetic feeds that
-meter, chatter, reconnect and park like real ones, a dozen aircraft on
+meter, chatter, reconnect and park like real ones, eleven aircraft on
 fixed paths around whatever airport is open (fewer of them at a short
 range), one of which squawks 7600 for a minute in every five, and two
 more parked at the field from the start. No network, no `ffmpeg`, no
 audio, and nothing is remembered. It is what the tests run against, and
-a way to look at the page anywhere.
+a way to look at the page anywhere. Only one cockpit runs at a time:
+`kcgx --demo` while the real one is running shows the real one, so
+`kcgx stop` first, and the same the other way round.
 
 **`kcgx-web`** is the server itself, in the foreground: `kcgx-web [--port
 8473] [--icao KPDX] [--demo]`, Ctrl-C to stop. `kcgx-web --refresh-feeds
@@ -337,6 +355,9 @@ cockpit down after asking. Each has a tooltip and a name for a screen
 reader. FEEDS and PALETTE left the header on 2026-11-12: every feed an
 airport publishes opens at launch already, and the palette is THEME in
 CONFIG. Tab, Enter, Space and Escape work as they do on any page.
+KCGX.app has the usual Mac menu keys (⌘W hides the window, ⌘Q quits),
+and ⌘R reloads the page, or starts the cockpit again when none is
+showing.
 
 **The feed stack plays one feed at a time** (since 2026-11-13). Every feed
 the airport publishes is a row, and you hear one of them, like the
@@ -346,7 +367,8 @@ to right, over an oscilloscope trace of its level 60 px tall. Every other
 feed is one compact line, and a click anywhere on it picks it: it becomes
 the one you hear, and the one you heard goes quiet. A click on the feed
 already playing does nothing. The M and S buttons, and the word CHATTER,
-went on 2026-11-13. Every feed meters whether or not you hear it.
+went on 2026-11-13. Every streaming feed meters whether or not you hear
+it.
 
 **The master mute and volume** are at the top of the pane, where the line
 counting feeds used to be: a speaker button, crossed when muted, then
@@ -361,7 +383,8 @@ every tab shows alike. The volume starts at `master_volume` in
 `Tower (Both)` and `Approach (10R/28C)`. The airport's city and the start
 of its name (`Chicago O'Hare`, `Seattle–Tacoma`) go in any case, and its
 ICAO and IATA codes in capitals only, since many codes are words (`LAS`,
-`SAN`); each only as whole words, wherever it is in the title. A centre
+`SAN`); each only as whole words, the city and codes wherever they are
+in the title, the airport's name only where it starts it. A centre
 named for another city keeps it (`ZSE Seattle Center` at KPDX), and a
 title that would be left empty stays whole. SHORT FEED NAMES, under
 SYSTEM in CONFIG, turns it off.
@@ -566,7 +589,7 @@ being reachable is what adsb.lol is asking for. (This was
 `api.airplanes.live` until 2026-08-13, when it began refusing every
 unauthenticated client.)
 
-**The map is committed**, in `src/kcgx/data/geo.json.gz` (4.7 MB), so it
+**The map is committed**, in `src/kcgx/data/geo.json.gz` (4.8 MB), so it
 needs no network. The server sends each page the 320 nm around its airport
 (200 until 2026-11-12), which leaves room to pan at the widest range.
 All of it is public domain:
@@ -625,7 +648,7 @@ and lights none of the buttons.
 | | SCREEN | OFF, VECTOR, CRT | CRT | `display` |
 | | SCANLINES (with CRT) | LIGHT 18, MED 34, HEAVY 55 % | MED | `scan_opacity`, 0 to 100 |
 | | GLOW | OFF 0, LOW 33, MED 54, HIGH 75, all three alike | LOW | `glow_map`, `glow_traffic`, `glow_text`, 0 to 100 each |
-| DISPLAY: TEXT | FONT | CLASSIC, B612 MONO, SHARE TECH MONO, IBM PLEX MONO, JETBRAINS MONO, VT323, SYSTEM | CLASSIC | `font` |
+| DISPLAY: TEXT | FONT | CLASSIC, B612 MONO, SHARE TECH MONO, IBM PLEX MONO, JETBRAINS MONO, VT323, SYSTEM | CLASSIC | `font`: `CLASSIC`, `B612`, `SHARETECH`, `PLEX`, `JETBRAINS`, `VT323`, `SYSTEM` |
 | | TEXT SIZE | S 11, M 13, L 15, XL 17 px | M | `font_px`, 10 to 20 |
 | | PAGE ZOOM | 90, 100, 110, 125, 150 % | 100 | `ui_zoom`, 50 to 200 in fives |
 | DISPLAY: START | BOOT ANIMATION | OFF, ON | ON | `boot_anim` |
@@ -700,13 +723,14 @@ lights none, and its section's RESET puts the whole row back.
 Some of the rest, explained:
 
 - **PAGE ZOOM** scales the whole page, CONFIG included, as a browser's zoom
-  would; the radar stays as sharp. KCGX.app has a zoom of its own, which
-  is not used. **TEXT SIZE** is the base size of the small text (the
+  would; the radar stays as sharp. KCGX.app has no zoom of its own, so
+  this is the zoom there too. **TEXT SIZE** is the base size of the small text (the
   tracks table, the buttons, the airport's name); titles, big figures and
   the radar's labels keep theirs. **FONT** CLASSIC is the pair the
   cockpit always had, B612 Mono for text and Share Tech Mono for titles
   and the radar; each of the others is used for everything. All of them
-  are monospaced, OFL, and served from the cockpit itself, never fetched.
+  are monospaced. All but SYSTEM (your OS's own monospace) are OFL and
+  served from the cockpit itself, never fetched.
 - **GLOW** is three numbers in the file since 2026-11-13, for the map,
   the traffic (aircraft, tails, tags and the feeds' traces) and the
   page's text, which the panel sets alike; 33 is the old LOW and 75 the
@@ -752,7 +776,7 @@ stops the server with a message naming the file and the key.
 | Key | Default | Meaning |
 |---|---|---|
 | `icao` | `"KPDX"` | The airport to open when none has been chosen yet |
-| `feed` | `"kpdx3_twr"` | The one feed heard at start |
+| `feed` | `"kpdx3_twr"` | The feed heard at start, where the airport publishes it; elsewhere its first Tower feed, or its first feed |
 | `activity_threshold_dbfs` | `-40.0` | Level above which a feed counts as busy for the five-minute ranking. A decimal (`-40.0`, not `-40`). |
 | `master_volume` | `1.0` | Output gain at start, 0.0 to 1.0; the slider at the top of FREQUENCIES changes it while running |
 | `buffer_seconds` | `4.0` | How far behind live a feed may fall before it drops audio; see [Buffering](#buffering) |
@@ -760,19 +784,20 @@ stops the server with a message naming the file and the key.
 | `radar_stale_secs` | `60` | An aircraft not heard from for this long drops off |
 
 **`radar_range_nm` was retired on 2026-11-12.** The range is CONFIG's
-RANGE now, changed while running and remembered with the other settings.
+OPENING RANGE (RADAR tab) now, changed while running and remembered with the other settings.
 A file that still sets the key loads as before; the key is ignored, as any
 unknown key is.
 
 **`radar_refresh_secs` was retired on 2026-11-13.** The poll interval is
-the `poll_secs` setting now, CONFIG > GENERAL > RADAR POLL, changed while
+the `poll_secs` setting now, CONFIG > SYSTEM > RADAR UPDATES, changed while
 running and remembered with the other settings. A file that still sets the
 key loads as before; the key is ignored.
 
 The airport you choose is remembered in `~/.local/state/kcgx/airport`, and
-the cockpit reopens there; `icao` is only the fallback. `ambient_enabled`
-and `ambient_gain_db` are still read, for the mixer's ambient bus, which
-the page has no control for.
+the cockpit reopens there; `icao` is only the fallback (`kcgx-web --icao`
+opens an airport without remembering it). `ambient_enabled` still reaches
+the mixer's ambient bus, which the page has no control for;
+`ambient_gain_db` is accepted but has no effect.
 
 ## Feed discovery and LiveATC's bot protection
 
@@ -833,8 +858,8 @@ empty stack with a message rather than Portland tower under a KORD header.
 
 ## What it does, and does not, do
 
-- Opens every feed the airport publishes, each with its own `ffmpeg`
-  process and ring buffer, into one stereo output.
+- Opens every feed the airport publishes, each with its own ring buffer
+  and, while it streams, its own `ffmpeg` process, into one stereo output.
 - Starts with everything muted except the configured feed, and keeps it
   to one: you see the whole field at once, but hear one frequency, the
   one you last picked.
@@ -846,13 +871,13 @@ empty stack with a message rather than Portland tower under a KORD header.
 
 ## Cost
 
-One `ffmpeg` process, one ring buffer, and one thread per feed — twelve of
-each at KPDX, seven of them streaming — feeding **one** stereo output
-stream. Bandwidth is roughly 16–32 kbps per feed; the CPU is mostly
+One ring buffer per feed (twelve at KPDX), and one `ffmpeg` process and
+one thread per streaming feed (seven at most), feeding **one** stereo
+output stream. Bandwidth is roughly 16–32 kbps per feed; the CPU is mostly
 `ffmpeg` decode plus one mixing callback every 16 ms. The server adds a
-radar poll every 15 s (or RADAR POLL's interval) and about 15 KB/s of
-levels to each open tab. The page draws at MAX FRAME RATE, 60 a second
-unless you change it. Its radar redraws only what moves, and leaves out
+radar poll every 15 s (or RADAR UPDATES' interval) and about 15 KB/s of
+levels to each open tab. The page draws at FRAME RATE, 60 a second unless
+you change it. Its radar redraws only what moves, and leaves out
 aircraft, tails and tags that are off the screen; the map is drawn when
 the airport, a setting or the window changes, and while you pan, zoom or
 follow an aircraft the last drawing is moved, and drawn afresh once the
@@ -913,8 +938,6 @@ measurement and fails if the capacity goes back under a burst.
 - Flight tags are not placed around one another. Where aircraft are close
   their tags overlap, more so with every field chosen, and a boxed tag
   hides the one under it. At 250 nm a busy picture will be crowded.
-- STATES under LABEL BOXES has nothing to box: the map that ships names
-  no states.
 - adsb.lol's API document (read 2026-11-14) gives a quota for the
   `/v2/` paths: 500 requests a day for an address with no key, 1,000
   with a free key and 7,200 for a feeder. Polling every 15 s is 5,760 a
@@ -1013,9 +1036,10 @@ draws on keeps its own terms:
 
 - **Fonts** in `src/kcgx/web/static/fonts/` are under the SIL Open Font
   License; each family's licence sits beside it (`OFL-*.txt`).
-- **The map** (`src/kcgx/data/geo.json.gz`) and **the airport list**
-  (`src/kcgx/data/airports.csv`) are built from public domain sources:
-  Natural Earth, OurAirports and the FAA.
+- **The map** (`src/kcgx/data/geo.json.gz`) is built from public domain
+  sources: Natural Earth, OurAirports and the FAA. **The airport list**
+  (`src/kcgx/data/airports.csv`) is built from OurAirports, also public
+  domain.
 - **Audio feeds** are LiveATC.net's: kcgx plays them locally and never
   records or redistributes them, and LiveATC.net's own terms of use apply.
   **Traffic** comes from [adsb.lol](https://adsb.lol/), under its own terms.

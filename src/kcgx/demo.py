@@ -193,7 +193,7 @@ class DemoMixer:
 
 # -- demo traffic ------------------------------------------------------------
 #
-# A dozen aircraft on fixed paths around whatever airport is open, shaped
+# Eleven aircraft on fixed paths around whatever airport is open, shaped
 # like adsb.lol's reply so the real poller handles them. Each flies a
 # straight leg (start bearing and distance from the field, heading, length)
 # at constant speed, climbing or descending linearly, and starts again when
