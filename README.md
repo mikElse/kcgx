@@ -23,6 +23,19 @@ morning Meigs was closed, and it never reopened.
 synthetic traffic and feeds, the cockpit's own radar, tracks table and
 frequencies.</sub>
 
+![Scrolling in on Chicago O'Hare from 40 nm until its runways fill the radar at 2 nm, then back out](.github/zoom.gif)
+
+<sub>Scroll in on the field until its runways fill the radar.</sub>
+
+![Clicking ASA412 on the radar at O'Hare: it turns pink with its data box, its row leads the tracks table, and the radar zooms to it and follows it in on its approach while the map slides beneath; a second click goes back to the wide view](.github/follow.gif)
+
+<sub>Click a flight to follow it (eight times speed while it follows).</sub>
+
+![Changing airport from Chicago O'Hare to Midway: the search icon opens CHANGE AIRPORT, KMDW is typed and chosen, and the radar redraws around Midway, its coastline drawing itself on, while the new feeds fill in](.github/change-airport.gif)
+
+<sub>Search for an airport, and the map draws itself on as its feeds fill
+in.</sub>
+
 **kcgx** is a cockpit for watching and listening to air traffic, in a
 window of its own on a Mac or in your browser, and a love letter to
 Meigs Field: it carries the field's identifier, and it boots by drawing
