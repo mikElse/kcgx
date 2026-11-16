@@ -382,11 +382,16 @@ sync_project() {
     say "  uvicorn      what runs it"
     say "  websockets   the page's live connection"
     say ""
-    say "Nothing is installed outside this directory."
+    say "Nothing is installed outside this directory, and nothing only the"
+    say "tests use: pytest and Playwright are left out (see Development in"
+    say "the README to add them)."
     say ""
     confirm "Run uv sync now?" y || die "The Python dependencies are required; stopping here."
 
-    uv sync --project "$REPO" || die "uv sync failed; nothing was wired up."
+    # --no-dev: uv installs the dev group by default, and pytest and its
+    # helpers have no part in running the cockpit. A later plain `uv sync`
+    # (the Development section's) adds them back.
+    uv sync --project "$REPO" --no-dev || die "uv sync failed; nothing was wired up."
 }
 
 # -- step 5 -----------------------------------------------------------------
@@ -611,9 +616,9 @@ verify() {
     local version devices check
     step 7 "Checking it works"
 
-    say "Running each moving part rather than checking that a file exists --"
-    say "an install that reports success and then opens a broken page has"
-    say "not succeeded."
+    say "A smoke check of a few seconds, not the test suite: each moving part"
+    say "is run rather than checking that a file exists -- an install that"
+    say "reports success and then opens a broken page has not succeeded."
     say ""
 
     version="$(version_of ffmpeg || true)"

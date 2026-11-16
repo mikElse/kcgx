@@ -204,7 +204,7 @@ curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh   # i
 
 git clone https://github.com/mikElse/kcgx.git
 cd kcgx
-uv sync
+uv sync --no-dev   # the app's dependencies only; Development adds the tests'
 mkdir -p ~/.local/bin && ln -s "$PWD/bin/kcgx" ~/.local/bin/kcgx
 macos/build.sh   # macOS, optional: ~/Applications/KCGX.app, the cockpit's own window
 ```
@@ -1016,9 +1016,9 @@ measurement and fails if the capacity goes back under a burst.
 ## Development
 
 ```bash
-uv run pytest -q                                   # the suite
-uv sync --group dev --group browser                # once, for the page's own tests
+uv sync --group dev --group browser                # once: setup installs neither group
 uv run playwright install chromium webkit          # once
+uv run pytest -q                                   # the suite
 ```
 
 `tests/test_page.py` drives the page in a real browser, and runs each of

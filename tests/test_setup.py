@@ -1399,3 +1399,32 @@ def test_nothing_left_in_setup_mentions_what_phase_e_removed():
     for gone in ("tmux", "adsb-tui", "ads-b-tui", "squelch", "Ctrl-b"):
         offending = [line for line in code if gone in line]
         assert not offending, f"setup.sh still uses {gone!r}: {offending}"
+
+
+UV_RECORDER = """#!/bin/sh
+echo "$@" >> "$UV_LOG"
+case "$*" in
+    *kcgx.selfcheck*) echo "selfcheck ok"; exit 0 ;;
+esac
+echo 2
+exit 0
+"""
+
+
+def test_sync_leaves_the_test_dependencies_out(tmp_path):
+    """uv sync installs the dev group by default; an install has no use for
+    pytest, so step 4 must ask for the app's dependencies alone."""
+    log = tmp_path / "uv.log"
+    path_dir = complete_env(tmp_path, uv=UV_RECORDER)
+    result = run_setup(tmp_path, path_dir, "--yes", UV_LOG=str(log))
+    assert result.returncode == 0, result.stdout + result.stderr
+    syncs = [l for l in log.read_text().splitlines() if l.startswith("sync")]
+    assert syncs, "step 4 never ran uv sync"
+    assert all("--no-dev" in l for l in syncs), syncs
+    assert all("--group" not in l for l in syncs), syncs
+
+
+def test_step_7_says_it_is_not_the_test_suite(tmp_path):
+    path_dir = complete_env(tmp_path)
+    result = run_setup(tmp_path, path_dir, "--verify")
+    assert "not the test suite" in result.stdout
